@@ -1,0 +1,155 @@
+# Roadmap — EdgeStore
+
+**7 phases** | **34 requirements mapped** | All v1 requirements covered ✓
+
+| # | Phase | Goal | Requirements | Success Criteria |
+|---|-------|------|--------------|-----------------|
+| 1 | Core KV Engine | Durable, crash-safe local KV store | CORE-01–08 | 5 |
+| 2 | Segment Store | Immutable sorted segments on disk | STORE-01–07 | 4 |
+| 3 | Deathtime Compaction | Cohort-based GC, range scans, snapshots | COMPACT-01–07 | 5 |
+| 4 | Replication + S3 | Merkle delta sync, S3 archive | REPL-01–06 | 5 |
+| 5 | Vector Search | Flat SIMD ANN search on top of KV | VECTOR-01–05 | 4 |
+| 6 | SSD Optimization + HNSW | FDP hints, HNSW index, async wrapper | SSD-01–05 | 4 |
+| 7 | Full-Text Search (v2) | Embedded Algolia-like search | SEARCH-01–04 | 3 |
+
+---
+
+### Phase 1: Core KV Engine
+
+**Goal:** Ship a durable, crash-safe local KV store with WAL, memtable, single-writer transactions, and deterministic recovery. This is the foundation every other phase builds on — format decisions made here are permanent.
+
+**Requirements:** CORE-01, CORE-02, CORE-03, CORE-04, CORE-05, CORE-06, CORE-07, CORE-08
+
+**Success Criteria:**
+1. `put` → `get` round-trips correctly across namespaces with prefix isolation
+2. Process kill mid-write → recovery replays WAL → no acknowledged write lost
+3. `tx.begin()` → multiple puts → `tx.commit()` → group commit batches fsync
+4. WAL rotates at configured size/time thresholds, new file starts cleanly
+5. Format tests pass: WAL encode/decode, corruption detection, truncation handling
+
+**Key risks:**
+- WAL format decisions are permanent — get checksums, versioning, and record schema right before any other phase
+- Group commit implementation must handle concurrent reader access without blocking
+
+---
+
+### Phase 2: Segment Store
+
+**Goal:** Flush memtable to immutable sorted segment files with xor filters, sparse indexes, BLAKE3 content addressing, and a live manifest. Point lookups and range scans work across in-memory and on-disk data.
+
+**Requirements:** STORE-01, STORE-02, STORE-03, STORE-04, STORE-05, STORE-06, STORE-07
+
+**Success Criteria:**
+1. Memtable flush produces `.dat` + `.idx` + `.xf` + `.meta` files; BLAKE3 hash matches content
+2. Point lookup hits xor filter → skips segment if key absent; no false negatives
+3. Sparse index seek lands within N keys of target; no full segment scan needed
+4. Segment metadata includes `cohort_bucket` and `death_time` fields (required by Phase 3)
+5. Format tests: segment encode/decode, manifest parsing, backward compat, corruption detection
+
+**Key risks:**
+- 4 KiB block alignment + ZSTD compression must not create arbitrary-offset reads
+- Xor filter construction (`xorf`) requires all keys known at build time — flush must be atomic
+
+---
+
+### Phase 3: Deathtime-Cohort Compaction
+
+**Goal:** Implement TTL-aware deathtime-cohort compaction. Expired cohorts compact to zero live-data relocation. Range scans merge overlapping segments. Snapshots pin segments.
+
+**Requirements:** COMPACT-01, COMPACT-02, COMPACT-03, COMPACT-04, COMPACT-05, COMPACT-06, COMPACT-07
+
+**Success Criteria:**
+1. `put_with_ttl(key, val, 3600)` → after TTL expires, cohort compacts with zero live relocations
+2. Range scan across 3+ overlapping segments returns correct latest-wins merged result
+3. Snapshot holds segment pins → compaction runs → snapshot data still readable
+4. Compaction is incremental: never exceeds configured write budget per cycle
+5. Merkle roots on output segments match recomputed values after compaction
+
+**Key risks:**
+- Deathtime-cohort correctness: no-TTL records must still cluster by write-time cohort, not scatter
+- Snapshot pinning must not leak segment references on snapshot drop
+
+---
+
+### Phase 4: Replication + S3
+
+**Goal:** Implement Merkle-based delta sync and S3 integration. Two nodes can compare manifests, identify divergent ranges, and exchange only missing segments. S3 used as replication mailbox and cold archive.
+
+**Requirements:** REPL-01, REPL-02, REPL-03, REPL-04, REPL-05, REPL-06
+
+**Success Criteria:**
+1. Two nodes with identical data → `compare_merkle` returns no diff
+2. Node A writes 100 keys → Node B syncs → only changed segments transferred (not full copy)
+3. Node killed → segments restored from S3 → DB opens cleanly with full data
+4. LWW: same key written on two nodes at different timestamps → higher timestamp wins on sync
+5. Interrupted sync resumes from last `Ack(lsn)` without re-transferring acknowledged segments
+
+**Key risks:**
+- Range-level Merkle bucket granularity affects sync efficiency — too coarse = over-transfer, too fine = metadata overhead
+- S3 eventual consistency: segment upload must complete before manifest update references it
+
+---
+
+### Phase 5: Vector Search
+
+**Goal:** Vector API on top of pure KV. Typed header encoding, flat SIMD ANN search for collections up to ~500K vectors, three distance metrics.
+
+**Requirements:** VECTOR-01, VECTOR-02, VECTOR-03, VECTOR-04, VECTOR-05
+
+**Success Criteria:**
+1. `vector_put` with mismatched dims → error; correct dims → round-trips via `vector_get`
+2. `vector_search(query, k=10, cosine)` returns same top-10 as brute-force reference implementation
+3. SIMD path and scalar path return identical results on same dataset
+4. 100K f32 vectors → search latency p99 < 50ms on modern hardware
+5. KV layer unchanged: removing vector crate compiles and all KV tests still pass
+
+**Key risks:**
+- SIMD portability: x86 AVX2/AVX-512 vs ARM NEON — must compile on both without unsafe divergence
+- f16/i8 dtype support requires careful widening/narrowing in distance computation
+
+---
+
+### Phase 6: SSD Optimization + HNSW
+
+**Goal:** Add `StorageBackend` trait for FDP/ZNS hardware hints, HNSW index for large vector collections, and `edgestore-tokio` async wrapper. Validate device WAF with benchmark suite.
+
+**Requirements:** SSD-01, SSD-02, SSD-03, SSD-04, SSD-05
+
+**Success Criteria:**
+1. `StorageBackend` trait compiles with both default (pread/pwrite) and FDP stub impl; compaction logic untouched
+2. FDP placement hint emitted per segment write on supported hardware (verified via mock backend)
+3. HNSW search on 1M vectors returns same top-10 as flat scan reference within ANN recall threshold (>0.95)
+4. `edgestore-tokio::Db::put()` async resolves correctly; no deadlock under concurrent async callers
+5. Benchmark: write amplification factor measured; device WAF approaches 1.0 on NVMe with deathtime-cohort enabled
+
+**Key risks:**
+- HNSW graph serialization must survive DB open/close without full graph rebuild
+- FDP is NVMe 2.0 — needs conditional compilation guard for unsupported hardware
+
+---
+
+### Phase 7: Full-Text Search (v2)
+
+**Goal:** Embedded Algolia-like search: tokenization, BM25 relevance, faceting. Inverted index stored in segments, merged during compaction. No server process.
+
+**Requirements:** SEARCH-01, SEARCH-02, SEARCH-03, SEARCH-04
+
+**Success Criteria:**
+1. `index_text(ns, key, text)` → `search(ns, "query")` returns BM25-ranked results
+2. Per-segment posting lists merge correctly during compaction; no stale entries
+3. Typo-tolerant search returns expected results for 1-edit-distance queries
+4. Search throughput: >1000 QPS on 100K indexed documents, single-threaded
+
+**Key risks:**
+- Posting list compaction semantics differ from KV tombstones — must not use same path
+- Tokenizer/stemmer internationalization is a long tail — English-first, documented
+
+---
+
+## Milestone Structure
+
+**Milestone 1 (v0.1):** Phases 1–3 — local durable KV with deathtime-cohort compaction
+**Milestone 2 (v0.2):** Phase 4 — replication and S3 integration
+**Milestone 3 (v0.3):** Phase 5 — vector search
+**Milestone 4 (v1.0):** Phase 6 — SSD optimization, HNSW, production-ready
+**Milestone 5 (v2.0):** Phase 7 — full-text search

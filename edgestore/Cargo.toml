@@ -1,0 +1,22 @@
+[package]
+name = "edgestore"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "edgestore"
+path = "src/lib.rs"
+
+[dependencies]
+lz4_flex = "*"
+zstd = "*"
+crc32c = "*"
+byteorder = "*"
+blake3 = "*"
+fs2 = "*"
+xorf = { version = "*", features = ["serde"] }
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+
+[dev-dependencies]
+tempfile = "*"

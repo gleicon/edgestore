@@ -20,6 +20,17 @@
 
 **Requirements:** CORE-01, CORE-02, CORE-03, CORE-04, CORE-05, CORE-06, CORE-07, CORE-08
 
+**Plans:** 7 plans
+
+Plans:
+- [x] 01-01-PLAN.md — Cargo workspace scaffold + core types + error types
+- [x] 01-02-PLAN.md — WAL append, LZ4 compression, CRC32C, versioned file header, rotation
+- [x] 01-03-PLAN.md — MemTable trait + BTreeMap implementation
+- [x] 01-04-PLAN.md — KV Engine single-writer lock, group commit, KV API
+- [x] 01-05-PLAN.md — Transaction API begin/commit/rollback/LSN, group commit fsync
+- [x] 01-06-PLAN.md — Crash recovery WAL replay, deterministic memtable rebuild
+- [x] 01-07-PLAN.md — Integration tests: WAL format, crash recovery, namespace isolation, round-trip
+
 **Success Criteria:**
 1. `put` → `get` round-trips correctly across namespaces with prefix isolation
 2. Process kill mid-write → recovery replays WAL → no acknowledged write lost
@@ -38,6 +49,16 @@
 **Goal:** Flush memtable to immutable sorted segment files with xor filters, sparse indexes, BLAKE3 content addressing, and a live manifest. Point lookups and range scans work across in-memory and on-disk data.
 
 **Requirements:** STORE-01, STORE-02, STORE-03, STORE-04, STORE-05, STORE-06, STORE-07
+
+**Plans:** 6 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Segment types, error variants, Cargo.toml dependencies
+- [ ] 02-02-PLAN.md — Segment writer: ZSTD blocks, sparse index, xor filter, BLAKE3, .meta
+- [ ] 02-03-PLAN.md — Segment reader: xor filter check, sparse index seek, block scan
+- [ ] 02-04-PLAN.md — Manifest: append-only, CRC32C checksummed, live segment tracking
+- [ ] 02-05-PLAN.md — SegmentStore + Engine integration: flush, read-through, segment-backed gets
+- [ ] 02-06-PLAN.md — Integration tests: all 5 Phase 2 success criteria
 
 **Success Criteria:**
 1. Memtable flush produces `.dat` + `.idx` + `.xf` + `.meta` files; BLAKE3 hash matches content

@@ -401,6 +401,21 @@ impl Engine {
     pub fn rollback_transaction(&mut self, mut tx: crate::transaction::Transaction) {
         tx.rollback_self();
     }
+
+    /// Return a point-in-time snapshot pinning the current set of segments.
+    ///
+    /// The returned `Snapshot` holds a reference to the `SnapshotRegistry` and
+    /// releases its pins automatically when dropped.
+    pub fn snapshot(&self) -> Result<crate::snapshot::Snapshot, EdgestoreError> {
+        let ids = self.segment_store.segment_ids();
+        let sid = self.snapshot_registry.register(&ids);
+        Ok(crate::snapshot::Snapshot::new(
+            sid,
+            self.snapshot_registry.clone(),
+            ids,
+            self.config.path.clone(),
+        ))
+    }
 }
 
 #[cfg(test)]

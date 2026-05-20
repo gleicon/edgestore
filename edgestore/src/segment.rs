@@ -522,6 +522,11 @@ impl SegmentStore {
         Ok(meta)
     }
 
+    /// Return the segment IDs of all segments currently loaded in this store.
+    pub fn segment_ids(&self) -> Vec<crate::types::SegmentId> {
+        self.readers.iter().map(|r| r.segment_id).collect()
+    }
+
     pub fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
         for reader in self.readers.iter().rev() {
             if let Some(entry) = reader.get(key)? {

@@ -32,7 +32,7 @@
 | 03-04 | 3 | Engine integration | COMPACT-04, COMPACT-06 |
 | 03-05 | 4 | Integration tests | COMPACT-01–07 |
 
-## Completed Plan: 03-01
+## Completed Plans: 03-01, 03-03
 
 Plan 03-01 (Compactor + Snapshot scaffold) completed 2026-05-19.
 - EdgestoreConfig.compaction_write_budget_bytes = 256 MB default
@@ -42,9 +42,15 @@ Plan 03-01 (Compactor + Snapshot scaffold) completed 2026-05-19.
 - All modules declared and re-exported in lib.rs
 - cargo build --workspace and cargo clippy -D warnings clean
 
+Plan 03-03 (Snapshot implementation) completed 2026-05-19.
+- SnapshotRegistry: register/release/is_pinned/pinned_ids (COMPACT-06)
+- Snapshot::new, Drop (RAII pin release), get (LWW by LSN), range (LWW merge + decode)
+- 5 unit tests pass; clippy -D warnings clean
+- Commit: 0bdb1aa
+
 ## Next Step
 
-Execute Plan 03-02 (Compactor core algorithm).
+Execute Plan 03-02 (Compactor core algorithm) and Plan 03-04 (Engine integration).
 
 ## Phase 2 Plans
 

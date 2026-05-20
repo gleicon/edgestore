@@ -1,6 +1,7 @@
 pub mod compactor;
 pub mod config;
 pub mod error;
+pub mod snapshot;
 pub mod types;
 
 pub mod engine; // TODO

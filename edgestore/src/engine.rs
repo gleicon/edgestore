@@ -402,6 +402,33 @@ impl Engine {
         tx.rollback_self();
     }
 
+    /// Run one bounded compaction cycle.
+    ///
+    /// Uses wall-clock time to determine which cohorts are expired.
+    /// Respects the write budget from `EdgestoreConfig::compaction_write_budget_bytes`.
+    /// Pinned segments (held by live snapshots) are never removed or rewritten.
+    ///
+    /// After compaction, the segment store is reloaded from disk so subsequent
+    /// reads see the updated segment list.
+    pub fn compact_once(&mut self) -> Result<crate::compactor::CompactionStats, EdgestoreError> {
+        let now_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as i64;
+        let pinned = self.snapshot_registry.pinned_ids();
+        let compactor = crate::compactor::Compactor::new(
+            self.config.path.clone(),
+            self.config.compaction_write_budget_bytes,
+            self.config.cohort_window_secs,
+        );
+        let mut manifest = crate::manifest::Manifest::open(&self.config.path.join("manifest.mf"))?;
+        let stats = compactor.compact_cycle(&mut manifest, now_nanos, &pinned)?;
+        // Reload segment_store so Engine sees the updated segment list after compaction.
+        self.segment_store =
+            crate::segment::SegmentStore::open(self.config.path.clone(), self.config.cohort_window_secs)?;
+        Ok(stats)
+    }
+
     /// Return a point-in-time snapshot pinning the current set of segments.
     ///
     /// The returned `Snapshot` holds a reference to the `SnapshotRegistry` and

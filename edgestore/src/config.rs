@@ -11,6 +11,7 @@ pub struct EdgestoreConfig {
     pub compression_wal: Compression,
     pub compression_segments: Compression,
     pub xor_filter_fpr: f64,
+    pub compaction_write_budget_bytes: u64,
     pub memtable_factory: Box<dyn Fn() -> Box<dyn MemTable> + Send + Sync>,
 }
 
@@ -25,6 +26,7 @@ impl std::fmt::Debug for EdgestoreConfig {
             .field("compression_wal", &self.compression_wal)
             .field("compression_segments", &self.compression_segments)
             .field("xor_filter_fpr", &self.xor_filter_fpr)
+            .field("compaction_write_budget_bytes", &self.compaction_write_budget_bytes)
             .field("memtable_factory", &"<fn>")
             .finish()
     }
@@ -41,6 +43,7 @@ impl EdgestoreConfig {
             compression_wal: Compression::Lz4,
             compression_segments: Compression::Zstd(1),
             xor_filter_fpr: 0.01,
+            compaction_write_budget_bytes: 256 * 1024 * 1024,
             memtable_factory: Box::new(|| Box::new(BTreeMemTable::new())),
         }
     }

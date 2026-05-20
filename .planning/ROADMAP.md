@@ -53,12 +53,12 @@ Plans:
 **Plans:** 6 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Segment types, error variants, Cargo.toml dependencies
-- [ ] 02-02-PLAN.md — Segment writer: ZSTD blocks, sparse index, xor filter, BLAKE3, .meta
-- [ ] 02-03-PLAN.md — Segment reader: xor filter check, sparse index seek, block scan
-- [ ] 02-04-PLAN.md — Manifest: append-only, CRC32C checksummed, live segment tracking
-- [ ] 02-05-PLAN.md — SegmentStore + Engine integration: flush, read-through, segment-backed gets
-- [ ] 02-06-PLAN.md — Integration tests: all 5 Phase 2 success criteria
+- [x] 02-01-PLAN.md — Segment types, error variants, Cargo.toml dependencies
+- [x] 02-02-PLAN.md — Segment writer: ZSTD blocks, sparse index, xor filter, BLAKE3, .meta
+- [x] 02-03-PLAN.md — Segment reader: xor filter check, sparse index seek, block scan
+- [x] 02-04-PLAN.md — Manifest: append-only, CRC32C checksummed, live segment tracking
+- [x] 02-05-PLAN.md — SegmentStore + Engine integration: flush, read-through, segment-backed gets
+- [x] 02-06-PLAN.md — Integration tests: all 5 Phase 2 success criteria
 
 **Success Criteria:**
 1. Memtable flush produces `.dat` + `.idx` + `.xf` + `.meta` files; BLAKE3 hash matches content
@@ -73,22 +73,31 @@ Plans:
 
 ---
 
-### Phase 3: Deathtime-Cohort Compaction
+### Phase 3: Deathtime-Cohort Compaction ✓ COMPLETE
 
 **Goal:** Implement TTL-aware deathtime-cohort compaction. Expired cohorts compact to zero live-data relocation. Range scans merge overlapping segments. Snapshots pin segments.
 
 **Requirements:** COMPACT-01, COMPACT-02, COMPACT-03, COMPACT-04, COMPACT-05, COMPACT-06, COMPACT-07
 
-**Success Criteria:**
-1. `put_with_ttl(key, val, 3600)` → after TTL expires, cohort compacts with zero live relocations
-2. Range scan across 3+ overlapping segments returns correct latest-wins merged result
-3. Snapshot holds segment pins → compaction runs → snapshot data still readable
-4. Compaction is incremental: never exceeds configured write budget per cycle
-5. Merkle roots on output segments match recomputed values after compaction
+**Plans:** 5 plans — all complete
 
-**Key risks:**
-- Deathtime-cohort correctness: no-TTL records must still cluster by write-time cohort, not scatter
-- Snapshot pinning must not leak segment references on snapshot drop
+Plans:
+- [x] 03-01-PLAN.md — Compactor + Snapshot scaffold, config, error
+- [x] 03-02-PLAN.md — Compactor core algorithm (identify/collect/compact/cycle)
+- [x] 03-03-PLAN.md — Snapshot implementation (SnapshotRegistry, Snapshot RAII)
+- [x] 03-04-PLAN.md — Engine integration (compact_once, snapshot wired to Engine)
+- [x] 03-05-PLAN.md — Integration tests: all 5 Phase 3 success criteria
+
+**Success Criteria:** All 5 verified by integration tests (2026-05-20)
+1. `put_with_ttl(key, val, 1)` → sleep 2s → compact_once → live_records_relocated == 0 ✓
+2. Range scan across 3+ overlapping segments returns correct latest-wins merged result ✓
+3. Snapshot holds segment pins → compaction runs → snapshot data still readable ✓
+4. Compaction is incremental: write_budget_bytes=1 stops after first partial cohort ✓
+5. Merkle roots on output segments match recomputed values after compaction ✓
+
+**Key risks resolved:**
+- Deathtime-cohort correctness: no-TTL records cluster by write-time cohort (cohort_bucket_for)
+- Snapshot pinning uses RAII Drop on Snapshot; SnapshotRegistry releases on drop
 
 ---
 

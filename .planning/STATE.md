@@ -3,7 +3,7 @@
 ## Current Status
 
 **Phase:** 3 — Deathtime Compaction
-**Current Phase:** In Progress (Wave 3 complete — Wave 4 next)
+**Current Phase:** Phase 3 Complete — All 5 plans executed, all 7 COMPACT requirements verified
 **Milestone:** Milestone 1 (v0.1)
 
 ## Phase Progress
@@ -12,7 +12,7 @@
 |-------|--------|---------|-----------|
 | 1 — Core KV Engine | Complete | 2026-05-18 | 2026-05-18 |
 | 2 — Segment Store | Complete | 2026-05-18 | 2026-05-18 |
-| 3 — Deathtime Compaction | In Progress | 2026-05-19 | — |
+| 3 — Deathtime Compaction | Complete | 2026-05-19 | 2026-05-20 |
 | 4 — Replication + S3 | Not started | — | — |
 | 5 — Vector Search | Not started | — | — |
 | 6 — SSD Optimization + HNSW | Not started | — | — |
@@ -32,7 +32,17 @@
 | 03-04 | 3 | Engine integration | COMPACT-04, COMPACT-06 |
 | 03-05 | 4 | Integration tests | COMPACT-01–07 |
 
-## Completed Plans: 03-01, 03-02, 03-03, 03-04
+## Completed Plans: 03-01, 03-02, 03-03, 03-04, 03-05
+
+Plan 03-05 (Integration tests) completed 2026-05-20.
+- 5 integration tests in edgestore/tests/integration_compaction.rs; all pass
+- SC1 (COMPACT-04): TTL expiry → compact_once → live_records_relocated == 0
+- SC2 (COMPACT-05): range scan across 3+ overlapping segments returns correct LWW value
+- SC3 (COMPACT-06): snapshot pins survive compaction; readable after compact; drop releases pins
+- SC4 (COMPACT-04): write_budget_bytes=1 stops compaction after first partial cohort
+- SC5 (COMPACT-07): output segment merkle_root matches recomputed blake3 hash of sorted key hashes
+- 100 tests pass workspace-wide; cargo clippy -D warnings clean
+- Commit: 888c15a
 
 Plan 03-04 (Engine integration) completed 2026-05-20.
 - Engine.snapshot_registry: SnapshotRegistry field added (COMPACT-06 wiring)
@@ -67,7 +77,7 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 
 ## Next Step
 
-Execute Plan 03-05 (Integration tests) to validate the full compaction + snapshot pipeline end-to-end.
+Phase 3 complete. Run `/gsd:plan-phase 4` to plan Phase 4 (Replication + S3 tiering).
 
 ## Phase 2 Plans
 

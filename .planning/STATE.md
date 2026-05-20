@@ -3,7 +3,7 @@
 ## Current Status
 
 **Phase:** 3 — Deathtime Compaction
-**Current Phase:** Not started
+**Current Phase:** In Progress (Wave 1)
 **Milestone:** Milestone 1 (v0.1)
 
 ## Phase Progress
@@ -12,7 +12,7 @@
 |-------|--------|---------|-----------|
 | 1 — Core KV Engine | Complete | 2026-05-18 | 2026-05-18 |
 | 2 — Segment Store | Complete | 2026-05-18 | 2026-05-18 |
-| 3 — Deathtime Compaction | Not started | — | — |
+| 3 — Deathtime Compaction | In Progress | 2026-05-19 | — |
 | 4 — Replication + S3 | Not started | — | — |
 | 5 — Vector Search | Not started | — | — |
 | 6 — SSD Optimization + HNSW | Not started | — | — |
@@ -22,9 +22,29 @@
 
 34 requirements total — 0 validated, 34 active, 0 blocked
 
+## Phase 3 Plans
+
+| Plan | Wave | Title | Requirements |
+|------|------|-------|--------------|
+| 03-01 | 1 | Compactor + Snapshot scaffold, config, error | COMPACT-03, COMPACT-04, COMPACT-06 |
+| 03-02 | 2 | Compactor core algorithm | COMPACT-04, COMPACT-07 |
+| 03-03 | 2 | Snapshot implementation | COMPACT-06 |
+| 03-04 | 3 | Engine integration | COMPACT-04, COMPACT-06 |
+| 03-05 | 4 | Integration tests | COMPACT-01–07 |
+
+## Completed Plan: 03-01
+
+Plan 03-01 (Compactor + Snapshot scaffold) completed 2026-05-19.
+- EdgestoreConfig.compaction_write_budget_bytes = 256 MB default
+- EdgestoreError.CompactionError(String) variant
+- compactor.rs: Compactor, CohortInfo, CompactionStats
+- snapshot.rs: Snapshot, SnapshotRegistry with Drop pin-release
+- All modules declared and re-exported in lib.rs
+- cargo build --workspace and cargo clippy -D warnings clean
+
 ## Next Step
 
-Run `/gsd:plan-phase 3` to plan Phase 3 (Deathtime Compaction).
+Execute Plan 03-02 (Compactor core algorithm).
 
 ## Phase 2 Plans
 

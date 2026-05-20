@@ -3,7 +3,7 @@
 ## Current Status
 
 **Phase:** 3 — Deathtime Compaction
-**Current Phase:** In Progress (Wave 1)
+**Current Phase:** In Progress (Wave 3 complete — Wave 4 next)
 **Milestone:** Milestone 1 (v0.1)
 
 ## Phase Progress
@@ -32,7 +32,15 @@
 | 03-04 | 3 | Engine integration | COMPACT-04, COMPACT-06 |
 | 03-05 | 4 | Integration tests | COMPACT-01–07 |
 
-## Completed Plans: 03-01, 03-02, 03-03
+## Completed Plans: 03-01, 03-02, 03-03, 03-04
+
+Plan 03-04 (Engine integration) completed 2026-05-20.
+- Engine.snapshot_registry: SnapshotRegistry field added (COMPACT-06 wiring)
+- SegmentStore.segment_ids() helper added (readers field is private)
+- Engine::compact_once: wall-clock now_nanos, pinned_ids, Compactor, manifest.mf reload (COMPACT-04)
+- Engine::snapshot: register current segments, return Snapshot with RAII pin release (COMPACT-06)
+- 95 tests pass workspace-wide; cargo clippy -D warnings clean
+- Commits: fe60746, 5a8011b, fc14138
 
 Plan 03-01 (Compactor + Snapshot scaffold) completed 2026-05-19.
 - EdgestoreConfig.compaction_write_budget_bytes = 256 MB default
@@ -59,7 +67,7 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 
 ## Next Step
 
-Execute Plan 03-04 (Engine integration) to wire Compactor and SnapshotRegistry into Engine.
+Execute Plan 03-05 (Integration tests) to validate the full compaction + snapshot pipeline end-to-end.
 
 ## Phase 2 Plans
 

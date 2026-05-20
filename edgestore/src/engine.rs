@@ -41,6 +41,7 @@ pub struct Engine {
     #[allow(dead_code)]
     lockfile: std::fs::File,
     pub(crate) segment_store: crate::segment::SegmentStore,
+    pub(crate) snapshot_registry: crate::snapshot::SnapshotRegistry,
 }
 
 impl Engine {
@@ -104,6 +105,7 @@ impl Engine {
             txid_counter,
             lockfile,
             segment_store,
+            snapshot_registry: crate::snapshot::SnapshotRegistry::new(),
         })
     }
 

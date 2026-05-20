@@ -12,7 +12,9 @@ pub mod segment;
 pub mod transaction; // TODO
 pub mod wal; // TODO
 
+pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
 pub use engine::Engine;
 pub use error::EdgestoreError;
+pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use transaction::Transaction;

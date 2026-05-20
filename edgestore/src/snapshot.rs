@@ -99,6 +99,7 @@ impl Snapshot {
     /// Returns a sorted vec of `(key, value)` pairs.
     ///
     /// Stub: always returns `Ok(vec![])` until Plan 03-04 wires segment reads.
+    #[allow(clippy::type_complexity)]
     pub fn range(
         &self,
         _ns: &[u8],

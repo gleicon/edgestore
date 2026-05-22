@@ -2,9 +2,9 @@
 
 ## Current Status
 
-**Phase:** 3 — Deathtime Compaction
-**Current Phase:** Phase 3 Complete — All 5 plans executed, all 7 COMPACT requirements verified
-**Milestone:** Milestone 1 (v0.1)
+**Phase:** 4 — Replication + S3
+**Current Phase:** Phase 4.1 Complete — ready for Phase 4 replication work
+**Milestone:** Milestone 2 (v0.2)
 
 ## Phase Progress
 
@@ -13,7 +13,8 @@
 | 1 — Core KV Engine | Complete | 2026-05-18 | 2026-05-18 |
 | 2 — Segment Store | Complete | 2026-05-18 | 2026-05-18 |
 | 3 — Deathtime Compaction | Complete | 2026-05-19 | 2026-05-20 |
-| 4 — Replication + S3 | Not started | — | — |
+| 4 — Replication + S3 | Planned | 2026-05-20 | — |
+| 4.1 — Engine Correctness & Edge Cases | Complete | 2026-05-21 | 2026-05-21 |
 | 5 — Vector Search | Not started | — | — |
 | 6 — SSD Optimization + HNSW | Not started | — | — |
 | 7 — Full-Text Search (v2) | Not started | — | — |
@@ -75,9 +76,28 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 - 5 unit tests pass; clippy -D warnings clean
 - Commit: 0bdb1aa
 
+## Phase 4 Plans
+
+| Plan | Wave | Title | Requirements |
+|------|------|-------|--------------|
+| 04-01 | 1 | Range-level Merkle + Replication types | REPL-01, REPL-02, REPL-03 |
+| 04-02 | 2 | Engine replication public API | REPL-05, REPL-06 |
+| 04-03 | 3 | edgestore-repl: HTTP client + server | REPL-03 |
+| 04-04 | 4 | edgestore-repl: S3 backend | REPL-04 |
+| 04-05 | 5 | Integration tests: all 5 success criteria | REPL-01–06 |
+
+## Phase 4.1 Plans
+
+| Plan | Wave | Title | Requirements |
+|------|------|-------|--------------|
+| 04.1-01 | 1 | WAL in-write rotation | CORE-02 |
+| 04.1-02 | 2 | TTL lazy-expiry contract: document and test | CORE-05 |
+| 04.1-03 | 1 | Fix SegmentReader::range_scan end-inclusive bug | CORE-05 |
+| 04.1-04 | 2 | Snapshot::get LWW ordering — multi-segment divergence test | CORE-04 |
+
 ## Next Step
 
-Phase 3 complete. Run `/gsd:plan-phase 4` to plan Phase 4 (Replication + S3 tiering).
+Phase 4.1 planned (4 plans). Run `/gsd:execute-phase 4.1` to execute correctness fixes before Phase 4 replication work.
 
 ## Phase 2 Plans
 
@@ -101,6 +121,10 @@ Phase 3 complete. Run `/gsd:plan-phase 4` to plan Phase 4 (Replication + S3 tier
 | 01-05 | 4 | Transaction API | CORE-04, CORE-06 |
 | 01-06 | 5 | Crash recovery | CORE-01, CORE-02, CORE-07 |
 | 01-07 | 6 | Integration tests | CORE-01–08 |
+
+## Roadmap Evolution
+
+- Phase 4.1 inserted after Phase 4 (2026-05-21): Engine Correctness & Edge Cases — WAL in-write rotation, TTL lazy-expiry contract, range_scan end-inclusive fix, Snapshot::get LWW ordering fix. Discovered during Phase 3 test coverage review.
 
 ## Notes
 

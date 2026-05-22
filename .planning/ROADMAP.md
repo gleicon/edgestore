@@ -1,6 +1,6 @@
 # Roadmap — EdgeStore
 
-**7 phases** | **34 requirements mapped** | All v1 requirements covered ✓
+**8 phases** | **34 requirements mapped** | All v1 requirements covered ✓
 
 | # | Phase | Goal | Requirements | Success Criteria |
 |---|-------|------|--------------|-----------------|
@@ -8,6 +8,7 @@
 | 2 | Segment Store | Immutable sorted segments on disk | STORE-01–07 | 4 |
 | 3 | Deathtime Compaction | Cohort-based GC, range scans, snapshots | COMPACT-01–07 | 5 |
 | 4 | Replication + S3 | Merkle delta sync, S3 archive | REPL-01–06 | 5 |
+| 4.1 | Engine Correctness & Edge Cases (INSERTED) | Fix API contract bugs and semantic divergences discovered during Phase 3 review | CORE-02, CORE-04, CORE-05 | 4 |
 | 5 | Vector Search | Flat SIMD ANN search on top of KV | VECTOR-01–05 | 4 |
 | 6 | SSD Optimization + HNSW | FDP hints, HNSW index, async wrapper | SSD-01–05 | 4 |
 | 7 | Full-Text Search (v2) | Embedded Algolia-like search | SEARCH-01–04 | 3 |
@@ -107,6 +108,20 @@ Plans:
 
 **Requirements:** REPL-01, REPL-02, REPL-03, REPL-04, REPL-05, REPL-06
 
+**Plans:** 5 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Range-level Merkle tree + replication protocol types and trait (Wave 1)
+- [ ] 04-02-PLAN.md — Engine public API: export_manifest, import_segment, compare_merkle (Wave 2)
+- [ ] 04-03-PLAN.md — edgestore-repl crate: HTTP transport client + server (Wave 3)
+- [ ] 04-04-PLAN.md — edgestore-repl: S3 backend with SigV4 signing (Wave 4)
+- [ ] 04-05-PLAN.md — Integration tests: all 5 success criteria (Wave 5)
+
+**Cross-cutting constraints:**
+- No async in edgestore crate; edgestore-repl owns HTTP/S3 transport
+- LWW via WAL record timestamp (unix nanoseconds) — applied in import_segment (REPL-05)
+- S3 endpoint overridable via EDGESTORE_S3_ENDPOINT_URL for localstack integration tests
+
 **Success Criteria:**
 1. Two nodes with identical data → `compare_merkle` returns no diff
 2. Node A writes 100 keys → Node B syncs → only changed segments transferred (not full copy)
@@ -117,6 +132,32 @@ Plans:
 **Key risks:**
 - Range-level Merkle bucket granularity affects sync efficiency — too coarse = over-transfer, too fine = metadata overhead
 - S3 eventual consistency: segment upload must complete before manifest update references it
+
+---
+
+### Phase 4.1: Engine Correctness & Edge Cases (INSERTED)
+
+**Goal:** Fix four semantic bugs and contract violations discovered during Phase 3 test review. No new features — correctness only. All four items are load-bearing for Phases 5–7.
+
+**Requirements:** CORE-02 (WAL durability), CORE-04 (single-writer KV API), CORE-05 (range scan semantics)
+
+**Plans:** 4 plans
+
+Plans:
+- [ ] 04.1-01-PLAN.md — WAL in-write rotation: check `needs_rotation` after each `append`; rotate inline without requiring Engine reopen
+- [ ] 04.1-02-PLAN.md — TTL lazy-expiry contract: document and test that `get`/`range`/`prefix` return expired records until compaction; add assertion test pinning this behavior
+- [ ] 04.1-03-PLAN.md — Fix `SegmentReader::range_scan` end-inclusive bug: change `k > end` → `k >= end`; audit `Engine::range`, `prefix_upper_bound`, and all range tests for correctness
+- [ ] 04.1-04-PLAN.md — Fix `Snapshot::get` LWW ordering: replace first-found with highest-LSN across all pinned segments; add multi-segment divergence test
+
+**Success Criteria:**
+1. Long-running engine writes N batches without reopen → WAL rotates at `wal_max_bytes` boundary; recovery replays all files
+2. `put_with_ttl(key, val, 1)` without compaction → `get` returns `Some(val)` immediately after TTL expires (lazy-expiry contract is explicit and tested)
+3. `engine.range(ns, b"a", b"b")` excludes key `b` (exclusive end); all range/prefix tests updated and passing
+4. `Snapshot::get` returns highest-LSN value when same key exists in multiple pinned segments regardless of segment ID ordering
+
+**Key risks:**
+- In-write WAL rotation must not lose records written between `needs_rotation` check and new file creation
+- Changing `range_scan` end semantics is a breaking change in the internal API — all callers must be audited before merge
 
 ---
 

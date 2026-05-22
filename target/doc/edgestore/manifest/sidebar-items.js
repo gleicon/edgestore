@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MANIFEST_MAGIC","MANIFEST_VERSION"],"enum":["ManifestEntryType"],"struct":["Manifest","ManifestEntry"]};

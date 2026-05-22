@@ -185,4 +185,120 @@ mod tests {
         assert_eq!(result.max_txid, 0);
         assert_eq!(result.wal_files_read, 0);
     }
+
+    #[test]
+    fn test_recover_delete_tombstone() {
+        // A delete tombstone must survive replay — the memtable entry must have op=Delete
+        // so that Engine::get returns None for that key even before compaction.
+        let dir = TempDir::new().unwrap();
+        let config = make_config(&dir);
+        let wal_path = dir.path().join("wal-0000000000000001.log");
+        let mut writer = WalWriter::create(&wal_path, &config).unwrap();
+
+        // Write key, then delete it
+        writer.append(&make_record(1, 0)).unwrap();
+        writer.append(&WalRecord {
+            txid: 0,
+            lsn: 2,
+            timestamp: 1,
+            ttl: 0,
+            ns_len: 2,
+            ns_bytes: b"ns".to_vec(),
+            key_bytes: b"key1".to_vec(),
+            op: Operation::Delete,
+            value_hash: blake3::hash(b"").into(),
+            value_bytes: vec![],
+        }).unwrap();
+        writer.fsync().unwrap();
+        drop(writer);
+
+        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
+        assert_eq!(result.records_replayed, 2);
+        assert_eq!(result.max_lsn, 2);
+
+        // The final state for key1 must be a Delete tombstone
+        let encoded = encode_key(b"ns", b"key1");
+        let entry = memtable.get(&encoded).expect("key1 should be in memtable after replay");
+        assert_eq!(entry.op, Operation::Delete, "tombstone must survive WAL replay");
+        assert!(entry.value.is_none(), "delete entry must have no value");
+    }
+
+    #[test]
+    fn test_recover_lww_same_key_two_wal_files() {
+        // Same key written in WAL file 1 and overwritten in WAL file 2.
+        // Recovery must replay in ascending file order, so WAL file 2's value wins.
+        let dir = TempDir::new().unwrap();
+        let config = make_config(&dir);
+
+        let wal1_path = dir.path().join("wal-0000000000000001.log");
+        let mut w1 = WalWriter::create(&wal1_path, &config).unwrap();
+        w1.append(&WalRecord {
+            txid: 0,
+            lsn: 1,
+            timestamp: 0,
+            ttl: 0,
+            ns_len: 2,
+            ns_bytes: b"ns".to_vec(),
+            key_bytes: b"shared".to_vec(),
+            op: Operation::Put,
+            value_hash: blake3::hash(b"old_val").into(),
+            value_bytes: b"old_val".to_vec(),
+        }).unwrap();
+        w1.fsync().unwrap();
+        drop(w1);
+
+        let wal2_path = dir.path().join("wal-0000000000000002.log");
+        let mut w2 = WalWriter::create(&wal2_path, &config).unwrap();
+        w2.append(&WalRecord {
+            txid: 0,
+            lsn: 2,
+            timestamp: 1,
+            ttl: 0,
+            ns_len: 2,
+            ns_bytes: b"ns".to_vec(),
+            key_bytes: b"shared".to_vec(),
+            op: Operation::Put,
+            value_hash: blake3::hash(b"new_val").into(),
+            value_bytes: b"new_val".to_vec(),
+        }).unwrap();
+        w2.fsync().unwrap();
+        drop(w2);
+
+        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        recover_from_wal(dir.path(), &mut memtable).unwrap();
+
+        let encoded = encode_key(b"ns", b"shared");
+        let entry = memtable.get(&encoded).expect("shared key must be in memtable");
+        assert_eq!(entry.value, Some(b"new_val".to_vec()), "WAL file 2 must win (LWW by file order)");
+        assert_eq!(entry.lsn, 2);
+    }
+
+    #[test]
+    fn test_recover_max_txid_tracked() {
+        let dir = TempDir::new().unwrap();
+        let config = make_config(&dir);
+        let wal_path = dir.path().join("wal-0000000000000001.log");
+        let mut writer = WalWriter::create(&wal_path, &config).unwrap();
+        for (lsn, txid) in [(1u64, 10u64), (2, 20), (3, 5)] {
+            writer.append(&WalRecord {
+                txid,
+                lsn,
+                timestamp: 0,
+                ttl: 0,
+                ns_len: 2,
+                ns_bytes: b"ns".to_vec(),
+                key_bytes: format!("k{}", lsn).into_bytes(),
+                op: Operation::Put,
+                value_hash: blake3::hash(b"v").into(),
+                value_bytes: b"v".to_vec(),
+            }).unwrap();
+        }
+        writer.fsync().unwrap();
+        drop(writer);
+
+        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
+        assert_eq!(result.max_txid, 20, "max_txid must be the highest txid seen");
+    }
 }

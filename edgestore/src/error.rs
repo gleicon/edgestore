@@ -50,3 +50,36 @@ impl From<std::io::Error> for EdgestoreError {
         EdgestoreError::Io(e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_variants() {
+        let cases: &[(&str, EdgestoreError)] = &[
+            ("corrupt WAL record: bad data", EdgestoreError::CorruptRecord("bad data".to_string())),
+            ("corrupt key encoding", EdgestoreError::CorruptKey),
+            ("WAL rotation threshold reached", EdgestoreError::WalFull),
+            ("another writer holds the database lock", EdgestoreError::WriterBusy),
+            ("invalid operation: not active", EdgestoreError::InvalidOperation("not active".to_string())),
+            ("namespace length 70000 exceeds maximum 65535", EdgestoreError::NamespaceTooLong { len: 70000, max: 65535 }),
+            ("key not found", EdgestoreError::KeyNotFound),
+            ("WAL format version mismatch: expected 1, got 2", EdgestoreError::FormatVersion { expected: 1, got: 2 }),
+            ("segment corrupt: bad block", EdgestoreError::SegmentCorrupt("bad block".to_string())),
+            ("manifest corrupt: truncated", EdgestoreError::ManifestCorrupt("truncated".to_string())),
+            ("compaction error: oops", EdgestoreError::CompactionError("oops".to_string())),
+        ];
+
+        for (expected, err) in cases {
+            assert_eq!(format!("{}", err), *expected, "Display mismatch for {:?}", err);
+        }
+    }
+
+    #[test]
+    fn test_io_from_conversion() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file gone");
+        let edge_err = EdgestoreError::from(io_err);
+        assert!(matches!(edge_err, EdgestoreError::Io(_)));
+    }
+}

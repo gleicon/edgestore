@@ -48,3 +48,32 @@ impl EdgestoreConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_defaults() {
+        let cfg = EdgestoreConfig::new("/tmp/test_db");
+        assert_eq!(cfg.wal_max_bytes, 64 * 1024 * 1024);
+        assert_eq!(cfg.wal_max_age_secs, 60);
+        assert_eq!(cfg.segment_size_bytes, 16 * 1024 * 1024);
+        assert_eq!(cfg.cohort_window_secs, 3600);
+        assert_eq!(cfg.xor_filter_fpr, 0.01);
+        assert_eq!(cfg.compaction_write_budget_bytes, 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_path_stored() {
+        let cfg = EdgestoreConfig::new("/some/path");
+        assert_eq!(cfg.path, std::path::PathBuf::from("/some/path"));
+    }
+
+    #[test]
+    fn test_memtable_factory_produces_empty_memtable() {
+        let cfg = EdgestoreConfig::new("/tmp");
+        let mt = (cfg.memtable_factory)();
+        assert!(mt.is_empty());
+    }
+}

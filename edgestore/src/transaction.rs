@@ -144,4 +144,52 @@ mod tests {
         let result = tx.take_pending();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_delete_appends_delete_record() {
+        let mut tx = Transaction::new(42);
+        tx.put(b"ns", b"k1", b"v1", 1, 0).unwrap();
+        tx.delete(b"ns", b"k1", 2, 0).unwrap();
+        assert_eq!(tx.pending.len(), 2);
+        let del = &tx.pending[1];
+        assert_eq!(del.op, Operation::Delete);
+        assert_eq!(del.key_bytes, b"k1");
+        assert!(del.value_bytes.is_empty());
+        assert_eq!(del.txid, 42);
+    }
+
+    #[test]
+    fn test_delete_on_inactive_tx_returns_err() {
+        let mut tx = Transaction::new(1);
+        tx.rollback_self();
+        let result = tx.delete(b"ns", b"k", 1, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_put_with_ttl_sets_ttl_field() {
+        let mut tx = Transaction::new(5);
+        tx.put_with_ttl(b"ns", b"key", b"val", 3600, 1, 0).unwrap();
+        assert_eq!(tx.pending.len(), 1);
+        assert_eq!(tx.pending[0].ttl, 3600);
+        assert_eq!(tx.pending[0].op, Operation::Put);
+        assert_eq!(tx.pending[0].value_bytes, b"val");
+    }
+
+    #[test]
+    fn test_put_with_ttl_on_inactive_tx_returns_err() {
+        let mut tx = Transaction::new(1);
+        tx.rollback_self();
+        let result = tx.put_with_ttl(b"ns", b"k", b"v", 60, 1, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_take_pending_after_rollback_returns_err() {
+        let mut tx = Transaction::new(1);
+        tx.put(b"ns", b"k", b"v", 1, 0).unwrap();
+        tx.rollback_self();
+        let result = tx.take_pending();
+        assert!(result.is_err());
+    }
 }

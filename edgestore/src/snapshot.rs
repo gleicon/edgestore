@@ -356,4 +356,68 @@ mod tests {
         assert!(ids.contains(&4));
         assert!(!ids.contains(&5));
     }
+
+    /// Regression test: `Snapshot::get` must return the highest-LSN value when
+    /// the same key exists in multiple pinned segments, regardless of the order
+    /// in which segment IDs are listed.
+    #[test]
+    fn test_snapshot_get_highest_lsn_across_segments() {
+        let dir = TempDir::new().unwrap();
+        let ns = b"ns";
+        let enc = encode_key(ns, b"shared_key");
+
+        // Segment 0 — old value, lsn=1.
+        let old_entry = MemEntry {
+            key: enc.clone(),
+            value: Some(b"old_value".to_vec()),
+            op: Operation::Put,
+            lsn: 1,
+            timestamp: 3_600_000_000_000,
+            ttl: 0,
+        };
+        let mut entries0 = vec![(enc.clone(), old_entry)];
+        entries0.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let mut writer0 = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        writer0.flush(&entries0).unwrap();
+
+        // Segment 1 — new value, lsn=5 (higher LSN wins).
+        let new_entry = MemEntry {
+            key: enc.clone(),
+            value: Some(b"new_value".to_vec()),
+            op: Operation::Put,
+            lsn: 5,
+            timestamp: 3_600_000_000_001,
+            ttl: 0,
+        };
+        let mut entries1 = vec![(enc.clone(), new_entry)];
+        entries1.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let mut writer1 = SegmentWriter::new(dir.path().to_path_buf(), 1, 3600);
+        writer1.flush(&entries1).unwrap();
+
+        // Case A — segment IDs listed in ascending order [0, 1].
+        {
+            let reg = SnapshotRegistry::new();
+            let snap_id = reg.register(&[0, 1]);
+            let snap = Snapshot::new(snap_id, reg, vec![0, 1], dir.path().to_path_buf());
+            let result = snap.get(ns, b"shared_key").unwrap();
+            assert_eq!(
+                result,
+                Some(b"new_value".to_vec()),
+                "Case A [0,1]: expected new_value (lsn=5)"
+            );
+        }
+
+        // Case B — segment IDs listed in descending order [1, 0].
+        {
+            let reg = SnapshotRegistry::new();
+            let snap_id = reg.register(&[1, 0]);
+            let snap2 = Snapshot::new(snap_id, reg, vec![1, 0], dir.path().to_path_buf());
+            let result = snap2.get(ns, b"shared_key").unwrap();
+            assert_eq!(
+                result,
+                Some(b"new_value".to_vec()),
+                "Case B [1,0]: expected new_value (lsn=5)"
+            );
+        }
+    }
 }

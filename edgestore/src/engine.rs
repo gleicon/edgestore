@@ -141,6 +141,7 @@ impl Engine {
             value_bytes: val.to_vec(),
         };
         self.wal.append(&record)?;
+        self.rotate_wal_if_needed()?;
 
         let encoded_key = encode_key(ns, key);
         let entry = MemEntry {
@@ -191,6 +192,7 @@ impl Engine {
             value_bytes: val.to_vec(),
         };
         self.wal.append(&record)?;
+        self.rotate_wal_if_needed()?;
 
         let encoded_key = encode_key(ns, key);
         let entry = MemEntry {
@@ -240,6 +242,7 @@ impl Engine {
             value_bytes: vec![],
         };
         self.wal.append(&record)?;
+        self.rotate_wal_if_needed()?;
 
         let encoded_key = encode_key(ns, key);
         let entry = MemEntry {
@@ -253,6 +256,24 @@ impl Engine {
         self.memtable.insert(encoded_key, entry);
 
         Ok(lsn)
+    }
+
+    /// Rotate the WAL if the current writer has exceeded `wal_max_bytes` or `wal_max_age_secs`.
+    ///
+    /// Called after every append so long-running sessions rotate inline without requiring
+    /// a close/reopen cycle.
+    fn rotate_wal_if_needed(&mut self) -> Result<(), EdgestoreError> {
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if !self.wal.needs_rotation(now_secs) {
+            return Ok(());
+        }
+        self.wal.fsync()?;
+        let new_path = next_wal_path(&self.config.path, self.lsn_counter);
+        self.wal = WalWriter::create(&new_path, &self.config)?;
+        Ok(())
     }
 
     pub fn range(
@@ -395,6 +416,7 @@ impl Engine {
         }
 
         self.wal.fsync()?;
+        self.rotate_wal_if_needed()?;
         Ok(last_lsn)
     }
 
@@ -633,5 +655,103 @@ mod tests {
         let path = next_wal_path(dir.path(), 50);
         let filename = path.file_name().unwrap().to_string_lossy();
         assert_eq!(filename, "wal-0000000000000032.log");
+    }
+
+    #[test]
+    fn test_namespace_too_long_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        let long_ns = vec![b'x'; u16::MAX as usize + 1];
+        let result = engine.put(&long_ns, b"k", b"v");
+        assert!(
+            matches!(result, Err(EdgestoreError::NamespaceTooLong { .. })),
+            "expected NamespaceTooLong, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_flush_to_segments_empty_memtable_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        let result = engine.flush_to_segments();
+        assert!(result.is_err(), "flush_to_segments on empty memtable must error");
+    }
+
+    #[test]
+    fn test_get_from_segment_after_flush() {
+        // Verifies the segment-read path in Engine::get (not just memtable).
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"seg_key", b"seg_val").unwrap();
+        engine.flush_to_segments().unwrap();
+        // memtable is now empty; value must come from segment
+        let val = engine.get(b"ns", b"seg_key").unwrap();
+        assert_eq!(val, Some(b"seg_val".to_vec()));
+    }
+
+    #[test]
+    fn test_delete_from_segment_via_memtable_tombstone() {
+        // Write, flush to segment, delete (tombstone in memtable) — get must return None.
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"key", b"val").unwrap();
+        engine.flush_to_segments().unwrap();
+        engine.delete(b"ns", b"key").unwrap();
+        let val = engine.get(b"ns", b"key").unwrap();
+        assert_eq!(val, None, "tombstone in memtable must shadow segment value");
+    }
+
+    #[test]
+    fn test_range_across_segment_and_memtable() {
+        // Writes in segment + writes in memtable both appear in range result.
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"a", b"va").unwrap();
+        engine.put(b"ns", b"b", b"vb").unwrap();
+        engine.flush_to_segments().unwrap();
+        // b is now in segment; add c in memtable
+        engine.put(b"ns", b"c", b"vc").unwrap();
+        let results = engine.range(b"ns", b"a", b"z").unwrap();
+        let keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
+        assert_eq!(keys, vec![b"a", b"b", b"c"]);
+    }
+
+    #[test]
+    fn test_prefix_from_segments() {
+        // After flushing to segments, prefix scan must read from the segment store.
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"pre_a", b"v1").unwrap();
+        engine.put(b"ns", b"pre_b", b"v2").unwrap();
+        engine.put(b"ns", b"other", b"v3").unwrap();
+        engine.flush_to_segments().unwrap();
+        let results = engine.prefix(b"ns", b"pre_").unwrap();
+        assert_eq!(results.len(), 2);
+        let keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
+        assert!(keys.contains(&b"pre_a".as_ref()));
+        assert!(keys.contains(&b"pre_b".as_ref()));
+    }
+
+    #[test]
+    fn test_range_memtable_delete_shadows_segment_value() {
+        // Key in segment, overwritten + deleted in memtable — must not appear in range.
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"x", b"old").unwrap();
+        engine.flush_to_segments().unwrap();
+        engine.delete(b"ns", b"x").unwrap();
+        let results = engine.range(b"ns", b"a", b"z").unwrap();
+        assert!(results.is_empty(), "deleted key must not appear in range");
+    }
+
+    #[test]
+    fn test_prefix_upper_bound_edge_cases() {
+        // All-0xFF prefix returns None (no upper bound possible).
+        assert_eq!(prefix_upper_bound(&[0xFF, 0xFF]), None);
+        // Normal prefix increments last non-0xFF byte.
+        assert_eq!(prefix_upper_bound(b"ab"), Some(b"ac".to_vec()));
+        // Trailing 0xFF: carry over to previous byte.
+        assert_eq!(prefix_upper_bound(&[0x01, 0xFF]), Some(vec![0x02]));
     }
 }

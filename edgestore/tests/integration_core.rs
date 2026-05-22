@@ -371,3 +371,49 @@ fn test_wal_file_seek_write_does_not_panic() {
         Some(b"new_val".to_vec())
     );
 }
+
+// ── Task 3: inline WAL rotation without reopen ────────────────────────────────
+
+#[test]
+fn test_wal_rotates_inline_without_reopen() {
+    let dir = TempDir::new().unwrap();
+
+    // Use a very small wal_max_bytes (300 bytes) so each write triggers rotation quickly.
+    let mut config = EdgestoreConfig::new(dir.path());
+    config.wal_max_bytes = 300;
+
+    let mut engine = Engine::open(config).unwrap();
+
+    // Write 10 puts — with 300-byte limit, multiple WAL files must be created inline.
+    for i in 0usize..10 {
+        let key = format!("k{:02}", i);
+        engine
+            .put(b"ns", key.as_bytes(), b"value_data_padding")
+            .unwrap();
+    }
+
+    engine.flush().unwrap();
+
+    // Rotation must have happened inline — at least 2 WAL files expected.
+    let wal_count = count_wal_files(dir.path());
+    assert!(
+        wal_count >= 2,
+        "expected >= 2 WAL files after inline rotation, got {}",
+        wal_count
+    );
+
+    drop(engine);
+
+    // Reopen with default config and verify all 10 keys are recoverable.
+    let engine2 = open_engine(&dir);
+    for i in 0usize..10 {
+        let key = format!("k{:02}", i);
+        let got = engine2.get(b"ns", key.as_bytes()).unwrap();
+        assert_eq!(
+            got,
+            Some(b"value_data_padding".to_vec()),
+            "key {} not found after inline rotation and reopen",
+            key
+        );
+    }
+}

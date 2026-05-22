@@ -375,6 +375,22 @@ fn test_wal_file_seek_write_does_not_panic() {
 // ── Task 3: inline WAL rotation without reopen ────────────────────────────────
 
 #[test]
+fn test_ttl_lazy_expiry_visible_before_compaction() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let config = EdgestoreConfig::new(dir.path());
+    let mut engine = Engine::open(config).unwrap();
+    engine.put_with_ttl(b"ns", b"expiring", b"still_here", 1).unwrap();
+    // Flush memtable to a segment so compaction can act on it.
+    engine.flush_to_segments().unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let val = engine.get(b"ns", b"expiring").unwrap();
+    assert_eq!(val, Some(b"still_here".to_vec()), "lazy expiry: value must be visible before compaction even after TTL expires");
+    engine.compact_once().unwrap();
+    let val_after = engine.get(b"ns", b"expiring").unwrap();
+    assert_eq!(val_after, None, "value must be gone after compaction removes expired cohort");
+}
+
+#[test]
 fn test_wal_rotates_inline_without_reopen() {
     let dir = TempDir::new().unwrap();
 

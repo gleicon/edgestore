@@ -208,6 +208,7 @@ impl Engine {
         Ok(lsn)
     }
 
+    /// Lazy expiry: records inserted with `put_with_ttl` are returned until `compact_once` removes their cohort.
     pub fn get(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
         let encoded_key = encode_key(ns, key);
         match self.memtable.get(&encoded_key) {
@@ -276,6 +277,7 @@ impl Engine {
         Ok(())
     }
 
+    /// Lazy expiry: TTL-expired records appear in range results until compaction removes their cohort.
     pub fn range(
         &self,
         ns: &[u8],
@@ -319,6 +321,7 @@ impl Engine {
         Ok(out)
     }
 
+    /// Lazy expiry: TTL-expired records appear in prefix results until compaction removes their cohort.
     pub fn prefix(
         &self,
         ns: &[u8],

@@ -291,3 +291,34 @@ fn test_segment_survives_engine_crash_recovery() {
         );
     }
 }
+
+#[test]
+fn test_range_exclusive_end() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    // Write keys a, b, c in namespace "ns".
+    engine.put(b"ns", b"a", b"va").unwrap();
+    engine.put(b"ns", b"b", b"vb").unwrap();
+    engine.put(b"ns", b"c", b"vc").unwrap();
+
+    // Memtable path: range [a, b) must return only key a.
+    let results = engine.range(b"ns", b"a", b"b").unwrap();
+    assert_eq!(results.len(), 1, "memtable: range [a, b) must exclude key b");
+    assert_eq!(results[0].0, b"a", "memtable: only key a must be returned");
+    assert!(
+        results.iter().all(|(k, _)| k.as_slice() != b"b"),
+        "memtable: key b must not appear"
+    );
+
+    // Flush to segments, then verify segment path also uses exclusive end.
+    engine.flush_to_segments().unwrap();
+
+    let results = engine.range(b"ns", b"a", b"b").unwrap();
+    assert_eq!(results.len(), 1, "segment: range [a, b) must exclude key b");
+    assert_eq!(results[0].0, b"a", "segment: only key a must be returned");
+    assert!(
+        results.iter().all(|(k, _)| k.as_slice() != b"b"),
+        "segment: key b must not appear"
+    );
+}

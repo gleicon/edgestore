@@ -452,7 +452,7 @@ impl SegmentReader {
             if entries.is_empty() || aligned_size == 0 { break; }
             let mut past_end = false;
             for (k, entry) in entries {
-                if k.as_slice() > end { past_end = true; break; }
+                if k.as_slice() >= end { past_end = true; break; }
                 if k.as_slice() >= start { results.push((k, entry)); }
             }
             if past_end { break; }
@@ -737,7 +737,7 @@ mod tests {
 
         let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
         let start = encode_key(b"ns", b"key-0100");
-        let end   = encode_key(b"ns", b"key-0199");
+        let end   = encode_key(b"ns", b"key-0200");
         let results = reader.range_scan(&start, &end).unwrap();
         assert_eq!(results.len(), 100);
     }

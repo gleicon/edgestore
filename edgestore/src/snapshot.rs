@@ -292,4 +292,68 @@ mod tests {
         let result = snapshot.get(ns, user_key).unwrap();
         assert_eq!(result, Some(value.to_vec()));
     }
+
+    #[test]
+    fn test_snapshot_range_returns_sorted_pairs() {
+        let dir = TempDir::new().unwrap();
+        let ns = b"ns";
+
+        // Write 10 entries into a single segment.
+        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10u64).map(|i| {
+            let enc = encode_key(ns, format!("key-{:04}", i).as_bytes());
+            let e = make_put_entry(&enc, format!("val-{}", i).as_bytes(), i + 1);
+            (enc, e)
+        }).collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        writer.flush(&entries).unwrap();
+
+        let reg = SnapshotRegistry::new();
+        let snap_id = reg.register(&[0]);
+        let snapshot = Snapshot::new(snap_id, reg, vec![0], dir.path().to_path_buf());
+
+        // SegmentReader::range_scan is [start, end) exclusive on the end key.
+        let results = snapshot.range(ns, b"key-0002", b"key-0007").unwrap();
+
+        // keys key-0002 through key-0006 (exclusive end key-0007) → 5 entries
+        assert_eq!(results.len(), 5, "range should return 5 entries");
+        let raw_keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
+        let mut sorted = raw_keys.clone();
+        sorted.sort();
+        assert_eq!(raw_keys, sorted, "range results must be sorted");
+        assert_eq!(&raw_keys[0], b"key-0002");
+        assert_eq!(&raw_keys[4], b"key-0006");
+    }
+
+    #[test]
+    fn test_snapshot_get_absent_key_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let ns = b"ns";
+        let enc = encode_key(ns, b"only-key");
+        let entry = make_put_entry(&enc, b"v", 1);
+        let mut entries = vec![(enc, entry)];
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        writer.flush(&entries).unwrap();
+
+        let reg = SnapshotRegistry::new();
+        let snap_id = reg.register(&[0]);
+        let snapshot = Snapshot::new(snap_id, reg, vec![0], dir.path().to_path_buf());
+        let result = snapshot.get(ns, b"not-present").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_registry_pinned_ids_flat_set() {
+        let reg = SnapshotRegistry::new();
+        reg.register(&[1, 2]);
+        reg.register(&[2, 3, 4]);
+        let ids = reg.pinned_ids();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&3));
+        assert!(ids.contains(&4));
+        assert!(!ids.contains(&5));
+    }
 }

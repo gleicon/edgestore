@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-22T00:00:00Z",
+  "phase": "4",
+  "phase_name": "Replication + S3",
+  "phase_dir": ".planning/phases/04-replication-s3",
+  "plan": 1,
+  "task": 1,
+  "total_tasks": 5,
+  "status": "paused",
+  "completed_tasks": [],
+  "remaining_tasks": [
+    {"id": 1, "name": "04-01: Range-level Merkle + Replication types", "status": "not_started"},
+    {"id": 2, "name": "04-02: Engine replication public API", "status": "not_started"},
+    {"id": 3, "name": "04-03: edgestore-repl HTTP client + server", "status": "not_started"},
+    {"id": 4, "name": "04-04: edgestore-repl S3 backend", "status": "not_started"},
+    {"id": 5, "name": "04-05: Integration tests (all 5 success criteria)", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {"decision": "Phase 4.1 inserted before Phase 4 to fix correctness issues", "rationale": "WAL inline rotation bug, range_scan inclusive-end bug, TTL lazy-expiry undocumented, Snapshot LWW test gap — all fixed", "phase": "4.1"},
+    {"decision": "TTL lazy-expiry is intentional design (not a bug)", "rationale": "Deathtime-cohort compaction; per-read TTL checks would pollute hot path. Value visible past TTL until compact_once.", "phase": "4.1"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Run `/gsd:execute-phase 4` to start replication + S3 phase. All 128 tests pass, codebase is clean.",
+  "context_notes": "Phase 4.1 (Engine Correctness & Edge Cases) just completed. 4 plans executed in 2 waves. All correctness fixes landed and tested. Phase 4 plans are ready — 04-01 through 04-05 exist in .planning/phases/04-replication-s3/."
+}

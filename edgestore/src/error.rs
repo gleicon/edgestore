@@ -15,6 +15,7 @@ pub enum EdgestoreError {
     SegmentCorrupt(String),
     ManifestCorrupt(String),
     CompactionError(String),
+    ReplicationError(String),
 }
 
 impl fmt::Display for EdgestoreError {
@@ -39,6 +40,7 @@ impl fmt::Display for EdgestoreError {
             EdgestoreError::SegmentCorrupt(msg) => write!(f, "segment corrupt: {}", msg),
             EdgestoreError::ManifestCorrupt(msg) => write!(f, "manifest corrupt: {}", msg),
             EdgestoreError::CompactionError(msg) => write!(f, "compaction error: {}", msg),
+            EdgestoreError::ReplicationError(msg) => write!(f, "replication error: {}", msg),
         }
     }
 }

@@ -344,3 +344,139 @@ fn test_sc3_lww_collision_local_wins() {
         val.as_deref().map(String::from_utf8_lossy)
     );
 }
+
+// ── C-01: Delete tombstones replicated correctly ─────────────────────────────
+
+/// Critical fix C-01: import_segment must apply Delete tombstones, not just Put.
+///
+/// Sequence:
+///   1. Engine A puts "del_me" = "val".
+///   2. Engine A deletes "del_me".
+///   3. Flush A to produce a segment containing both records.
+///   4. Engine B imports A's segment.
+///   5. B.get("del_me") must return None (tombstone applied).
+#[test]
+fn test_import_delete_tombstone_replicated() {
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+
+    let mut a = open_engine(&dir_a);
+    a.put(b"ns", b"del_me", b"val").unwrap();
+    a.delete(b"ns", b"del_me").unwrap();
+    a.flush_to_segments().unwrap();
+
+    let (hash_a, data_a) = read_first_segment(&a);
+
+    let mut b = open_engine(&dir_b);
+    let result = b.import_segment(&data_a, &hash_a).unwrap();
+    assert!(
+        matches!(result, ImportResult::Applied { .. }),
+        "C-01: import must be Applied"
+    );
+
+    // The delete tombstone must have been applied.
+    let val = b.get(b"ns", b"del_me").unwrap();
+    assert_eq!(
+        val, None,
+        "C-01: delete tombstone must be replicated; expected None, got {:?}",
+        val
+    );
+}
+
+// ── C-02: Imported segments readable after restart ───────────────────────────
+
+/// Critical fix C-02: xor filter must be built from decoded keys, not empty.
+///
+/// Sequence:
+///   1. Engine A puts "persist" = "after_restart", flushes to segment.
+///   2. Engine B imports the segment.
+///   3. Drop B (simulates process exit).
+///   4. Reopen B from disk.
+///   5. B.get("persist") must still return "after_restart".
+#[test]
+fn test_import_post_restart_get() {
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+
+    let mut a = open_engine(&dir_a);
+    a.put(b"ns", b"persist", b"after_restart").unwrap();
+    a.flush_to_segments().unwrap();
+
+    let (hash_a, data_a) = read_first_segment(&a);
+
+    {
+        let mut b = open_engine(&dir_b);
+        let result = b.import_segment(&data_a, &hash_a).unwrap();
+        assert!(
+            matches!(result, ImportResult::Applied { keys_written, .. } if keys_written >= 1),
+            "C-02: import must apply at least one key"
+        );
+        // Verify live before drop.
+        let val = b.get(b"ns", b"persist").unwrap();
+        assert_eq!(val, Some(b"after_restart".to_vec()));
+    } // B dropped here
+
+    // Reopen B — data must survive restart.
+    let b = open_engine(&dir_b);
+    let val = b.get(b"ns", b"persist").unwrap();
+    assert_eq!(
+        val,
+        Some(b"after_restart".to_vec()),
+        "C-02: imported data must be readable after engine restart"
+    );
+}
+
+// ── C-03: Range scans work on imported segments after restart ────────────────
+
+/// Critical fix C-03: imported SegmentMeta must have correct min_key/max_key.
+///
+/// Sequence:
+///   1. Engine A puts 3 keys, flushes to segment.
+///   2. Engine B imports the segment.
+///   3. Drop B.
+///   4. Reopen B.
+///   5. B.range(ns, "alpha", "gamma") must return the expected keys.
+#[test]
+fn test_import_post_restart_range() {
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+
+    let mut a = open_engine(&dir_a);
+    a.put(b"ns", b"alpha", b"1").unwrap();
+    a.put(b"ns", b"beta", b"2").unwrap();
+    a.put(b"ns", b"gamma", b"3").unwrap();
+    a.flush_to_segments().unwrap();
+
+    let (hash_a, data_a) = read_first_segment(&a);
+
+    {
+        let mut b = open_engine(&dir_b);
+        let result = b.import_segment(&data_a, &hash_a).unwrap();
+        assert!(matches!(result, ImportResult::Applied { .. }));
+    } // B dropped
+
+    // Reopen B and query via range.
+    let b = open_engine(&dir_b);
+    let results = b.range(b"ns", b"alpha", b"gamma").unwrap();
+
+    // Range is [start, end) — alpha and beta included, gamma excluded.
+    let keys: Vec<String> = results
+        .into_iter()
+        .map(|(k, _)| String::from_utf8_lossy(&k).to_string())
+        .collect();
+    assert_eq!(
+        keys,
+        vec!["alpha", "beta"],
+        "C-03: range scan must include imported keys after restart; got {:?}",
+        keys
+    );
+
+    // Prefix query should also work.
+    let prefix_results = b.prefix(b"ns", b"be").unwrap();
+    assert_eq!(
+        prefix_results.len(),
+        1,
+        "C-03: prefix query must return 'beta' after restart"
+    );
+    assert_eq!(prefix_results[0].0, b"beta");
+}

@@ -527,6 +527,39 @@ impl SegmentStore {
         self.readers.iter().map(|r| r.segment_id).collect()
     }
 
+    /// Return all SegmentMeta entries from the manifest (used by replication API).
+    pub fn list_segment_metas(&self) -> &[SegmentMeta] {
+        self.manifest.list_segments()
+    }
+
+    /// Return the next available segment ID and advance the counter.
+    pub(crate) fn alloc_segment_id(&mut self) -> SegmentId {
+        let id = self.next_segment_id;
+        self.next_segment_id += 1;
+        id
+    }
+
+    /// Add a pre-built SegmentMeta and SegmentReader to this store (used by import_segment).
+    pub(crate) fn add_imported_segment(
+        &mut self,
+        meta: SegmentMeta,
+        reader: SegmentReader,
+    ) -> Result<(), EdgestoreError> {
+        self.manifest.add_segment(meta)?;
+        self.readers.push(reader);
+        Ok(())
+    }
+
+    /// Return the base path of this segment store.
+    pub fn base_path(&self) -> &std::path::Path {
+        &self.base_path
+    }
+
+    /// Return the cohort_window_secs for this segment store.
+    pub fn cohort_window_secs(&self) -> u64 {
+        self.cohort_window_secs
+    }
+
     pub fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
         for reader in self.readers.iter().rev() {
             if let Some(entry) = reader.get(key)? {

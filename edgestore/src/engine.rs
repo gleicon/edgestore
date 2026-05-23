@@ -653,6 +653,11 @@ impl Engine {
         // Step 5: Parse segment records from raw bytes using segment::deserialize_entry.
         let mut keys_written: u64 = 0;
         let mut keys_skipped: u64 = 0;
+        let mut segment_keys: Vec<Vec<u8>> = Vec::new();
+        let mut min_key: Option<Vec<u8>> = None;
+        let mut max_key: Option<Vec<u8>> = None;
+        let mut min_lsn: Lsn = u64::MAX;
+        let mut max_lsn: Lsn = 0;
 
         // The raw bytes are a full .dat file with file header + blocks.
         // Skip the 8-byte file header (magic 4 bytes + version 1 byte + padding 3 bytes).
@@ -693,6 +698,25 @@ impl Engine {
             while pos < decompressed.len() {
                 match crate::segment::deserialize_entry(&decompressed, &mut pos) {
                     Ok((encoded_key, incoming)) => {
+                        // Track segment bounds and keys for sidecar files (C-02, C-03).
+                        segment_keys.push(encoded_key.clone());
+                        min_key = Some(match min_key {
+                            None => encoded_key.clone(),
+                            Some(ref mk) if encoded_key < *mk => encoded_key.clone(),
+                            Some(mk) => mk,
+                        });
+                        max_key = Some(match max_key {
+                            None => encoded_key.clone(),
+                            Some(ref mk) if encoded_key > *mk => encoded_key.clone(),
+                            Some(mk) => mk,
+                        });
+                        if incoming.lsn < min_lsn {
+                            min_lsn = incoming.lsn;
+                        }
+                        if incoming.lsn > max_lsn {
+                            max_lsn = incoming.lsn;
+                        }
+
                         // Look up local entry by encoded key.
                         let local_entry = self.memtable.get(&encoded_key).cloned().or_else(|| {
                             self.segment_store.get(&encoded_key).ok().flatten()
@@ -729,7 +753,13 @@ impl Engine {
                                             incoming.timestamp,
                                         )?;
                                         keys_written += 1;
+                                    } else {
+                                        // Malformed Put with no value — count as skipped.
+                                        keys_skipped += 1;
                                     }
+                                } else if incoming.op == crate::types::Operation::Delete {
+                                    self.delete_with_timestamp(&ns, &key, incoming.timestamp)?;
+                                    keys_written += 1;
                                 }
                             }
                         } else {
@@ -758,17 +788,16 @@ impl Engine {
         // Flush WAL to ensure LWW-applied records are durable.
         self.wal.fsync()?;
 
-        // Build SegmentMeta from the written data.
+        // Build SegmentMeta from the decoded data (C-02, C-03).
         let now_nanos = crate::engine::Engine::now_nanos();
         let segment_hash_vec: Vec<u8> = hash.to_vec();
-        // Use minimal meta — the reader will be rebuilt from the canonical path.
         let meta = crate::types::SegmentMeta {
             segment_id: new_segment_id,
             segment_hash: segment_hash_vec,
-            min_key: vec![],
-            max_key: vec![],
-            min_lsn: 0,
-            max_lsn: 0,
+            min_key: min_key.unwrap_or_default(),
+            max_key: max_key.unwrap_or_default(),
+            min_lsn: if min_lsn == u64::MAX { 0 } else { min_lsn },
+            max_lsn,
             record_count: keys_written + keys_skipped,
             compressed_bytes: data.len() as u64,
             uncompressed_bytes: data.len() as u64,
@@ -786,17 +815,17 @@ impl Engine {
         let idx_path = base.join(format!("segment-{:08}.idx", new_segment_id));
         crate::segment::write_idx_file(&[(vec![], 8u64)], &idx_path)?;
 
-        // Build an xf filter from nothing (empty — keys already in memtable).
+        // Build xor filter from decoded keys (C-02: was empty, breaking post-restart reads).
         let xf_path = base.join(format!("segment-{:08}.xf", new_segment_id));
-        let empty_keys: Vec<Vec<u8>> = vec![];
-        let filter = crate::segment::build_xor_filter(&empty_keys)?;
+        let filter = crate::segment::build_xor_filter(&segment_keys)?;
         crate::segment::write_xf_file(&filter, &xf_path)?;
 
-        // Write the .meta JSON file.
+        // Write the .meta JSON file and fsync (W-03: durability).
         let meta_path = base.join(format!("segment-{:08}.meta", new_segment_id));
-        let meta_file = std::fs::File::create(&meta_path)?;
-        serde_json::to_writer_pretty(meta_file, &meta)
+        let mut meta_file = std::fs::File::create(&meta_path)?;
+        serde_json::to_writer_pretty(&mut meta_file, &meta)
             .map_err(|e| EdgestoreError::SegmentCorrupt(format!("import meta serialize: {}", e)))?;
+        meta_file.sync_all()?;
 
         // Open reader and register with the segment store.
         let reader =
@@ -847,6 +876,48 @@ impl Engine {
             key: encoded_key.clone(),
             value: Some(val.to_vec()),
             op: crate::types::Operation::Put,
+            lsn,
+            timestamp,
+            ttl: 0,
+        };
+        self.memtable.insert(encoded_key, entry);
+
+        Ok(lsn)
+    }
+
+    /// Apply a delete tombstone with an explicit timestamp (used during LWW replication).
+    ///
+    /// Identical to `delete_inner` but substitutes the caller-supplied timestamp instead of
+    /// generating one from the wall clock.
+    fn delete_with_timestamp(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        timestamp: i64,
+    ) -> Result<Lsn, EdgestoreError> {
+        self.lsn_counter += 1;
+        let lsn = self.lsn_counter;
+
+        let record = crate::types::WalRecord {
+            txid: 0,
+            lsn,
+            timestamp,
+            ttl: 0,
+            ns_len: ns.len() as u16,
+            ns_bytes: ns.to_vec(),
+            key_bytes: key.to_vec(),
+            op: crate::types::Operation::Delete,
+            value_hash: blake3::hash(b"").into(),
+            value_bytes: vec![],
+        };
+        self.wal.append(&record)?;
+        self.rotate_wal_if_needed()?;
+
+        let encoded_key = crate::types::encode_key(ns, key);
+        let entry = MemEntry {
+            key: encoded_key.clone(),
+            value: None,
+            op: crate::types::Operation::Delete,
             lsn,
             timestamp,
             ttl: 0,

@@ -4,7 +4,7 @@ milestone: v0.1
 milestone_name: milestone
 current_phase: 04
 status: Executing Phase 04
-last_updated: "2026-05-23T02:23:15.565Z"
+last_updated: "2026-05-23T02:45:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 4
@@ -28,7 +28,7 @@ progress:
 | 1 — Core KV Engine | Complete | 2026-05-18 | 2026-05-18 |
 | 2 — Segment Store | Complete | 2026-05-18 | 2026-05-18 |
 | 3 — Deathtime Compaction | Complete | 2026-05-19 | 2026-05-20 |
-| 4 — Replication + S3 | Planned | 2026-05-20 | — |
+| 4 — Replication + S3 | Complete | 2026-05-20 | 2026-05-23 |
 | 4.1 — Engine Correctness & Edge Cases | Complete | 2026-05-21 | 2026-05-21 |
 | 5 — Vector Search | Not started | — | — |
 | 6 — SSD Optimization + HNSW | Not started | — | — |
@@ -117,7 +117,9 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 
 ## Next Step
 
-Phase 4.1 planned (4 plans). Run `/gsd:execute-phase 4.1` to execute correctness fixes before Phase 4 replication work.
+Phase 4 and Phase 4.1 both complete. Phase 5 (Vector Search) is the next unstarted phase.
+
+Run `/gsd:plan-phase 5` to plan Vector Search, or `/gsd:discuss-phase 5` to gather context first.
 
 ## Phase 2 Plans
 
@@ -152,3 +154,14 @@ Phase 4.1 planned (4 plans). Run `/gsd:execute-phase 4.1` to execute correctness
 - All 16 architectural decisions resolved via grill-me session before initialization
 - prod.md contains full design spec with references
 - No gsd-sdk installed — research subagents unavailable; roadmap generated inline
+
+### Phase 4 Verification Gap Fixes (2026-05-23)
+
+Three critical blockers in `import_segment` fixed post-execution:
+
+- **C-01**: Delete tombstones now replicated — added `delete_with_timestamp()` and Delete arm in LWW apply block
+- **C-02**: xor filter built from decoded keys — imported segments readable after engine restart
+- **C-03**: min_key/max_key tracked during LWW scan — range/prefix queries work on imported segments after restart
+- **W-03**: .meta file fsync added for durability
+
+All fixes committed. 147 tests pass workspace-wide. cargo clippy -D warnings clean.

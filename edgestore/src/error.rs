@@ -16,6 +16,8 @@ pub enum EdgestoreError {
     ManifestCorrupt(String),
     CompactionError(String),
     ReplicationError(String),
+    DimensionMismatch { expected: usize, actual: usize },
+    CorruptData(String),
 }
 
 impl fmt::Display for EdgestoreError {
@@ -41,6 +43,10 @@ impl fmt::Display for EdgestoreError {
             EdgestoreError::ManifestCorrupt(msg) => write!(f, "manifest corrupt: {}", msg),
             EdgestoreError::CompactionError(msg) => write!(f, "compaction error: {}", msg),
             EdgestoreError::ReplicationError(msg) => write!(f, "replication error: {}", msg),
+            EdgestoreError::DimensionMismatch { expected, actual } => {
+                write!(f, "dimension mismatch: expected {} bytes, got {}", expected, actual)
+            }
+            EdgestoreError::CorruptData(msg) => write!(f, "corrupt data: {}", msg),
         }
     }
 }

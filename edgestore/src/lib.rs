@@ -15,6 +15,7 @@ pub mod recovery;
 pub mod segment;
 pub mod transaction;
 pub mod wal;
+pub mod vector;
 
 pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
@@ -26,3 +27,4 @@ pub use remote_store::RemoteStore;
 pub use replication::{HostId, ReplicationProtocol, SegmentRef};
 pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use transaction::Transaction;
+pub use vector::types::{Dtype, VectorRecord};

@@ -6,9 +6,11 @@
 //! - `AntiEntropyLoop`       — background thread for pull-only sync with per-peer cursor (D08)
 
 pub mod anti_entropy;
+pub mod filesystem_remote_store;
 pub mod http_client;
 pub mod http_server;
 
 pub use anti_entropy::AntiEntropyLoop;
+pub use filesystem_remote_store::FilesystemRemoteStore;
 pub use http_client::HttpReplicationClient;
 pub use http_server::HttpReplicationServer;

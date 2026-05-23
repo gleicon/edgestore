@@ -38,7 +38,7 @@ impl EdgestoreConfig {
             path: path.into(),
             wal_max_bytes: 64 * 1024 * 1024,
             wal_max_age_secs: 60,
-            segment_size_bytes: 4 * 1024 * 1024,
+            segment_size_bytes: 16 * 1024 * 1024,
             cohort_window_secs: 3600,
             compression_wal: Compression::Lz4,
             compression_segments: Compression::Zstd(1),

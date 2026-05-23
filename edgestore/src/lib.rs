@@ -1,7 +1,10 @@
 pub mod compactor;
 pub mod config;
 pub mod error;
+pub mod merkle;
 pub mod metrics;
+pub mod remote_store;
+pub mod replication;
 pub mod snapshot;
 pub mod types;
 
@@ -17,6 +20,9 @@ pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
 pub use engine::Engine;
 pub use error::EdgestoreError;
+pub use merkle::RangeMerkleTree;
 pub use metrics::MetricsSnapshot;
+pub use remote_store::RemoteStore;
+pub use replication::{HostId, ReplicationProtocol, SegmentRef};
 pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use transaction::Transaction;

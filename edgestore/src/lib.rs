@@ -18,7 +18,7 @@ pub mod wal;
 
 pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
-pub use engine::Engine;
+pub use engine::{Engine, ImportResult};
 pub use error::EdgestoreError;
 pub use merkle::RangeMerkleTree;
 pub use metrics::MetricsSnapshot;

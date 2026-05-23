@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use fs2::FileExt;
@@ -5,7 +6,9 @@ use fs2::FileExt;
 use crate::config::EdgestoreConfig;
 use crate::error::EdgestoreError;
 use crate::memtable::MemTable;
+use crate::merkle::RangeMerkleTree;
 use crate::metrics::{EngineMetrics, MetricsSnapshot};
+use crate::replication::SegmentRef;
 use crate::types::{decode_key, encode_key, Lsn, MemEntry, Operation, WalRecord};
 use crate::wal::WalWriter;
 
@@ -31,6 +34,16 @@ fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
 }
 
 const AVG_ENTRY_SIZE_ESTIMATE: u64 = 256;
+
+/// Result of importing a remote segment via `Engine::import_segment`.
+pub enum ImportResult {
+    /// Segment applied. Record-level counts reflect LWW decisions.
+    Applied { keys_written: u64, keys_skipped: u64 },
+    /// Segment already present in local manifest — no-op.
+    Skipped,
+    /// BLAKE3 of provided data does not match claimed hash — segment rejected.
+    HashMismatch,
+}
 
 pub struct Engine {
     pub(crate) config: EdgestoreConfig,
@@ -547,6 +560,311 @@ impl Engine {
         self.segment_store =
             crate::segment::SegmentStore::open(self.config.path.clone(), self.config.cohort_window_secs)?;
         Ok(stats)
+    }
+
+    // ── Replication API ───────────────────────────────────────────────────────
+
+    /// Returns the local segment manifest as `Vec<SegmentRef>` for a remote peer to diff against.
+    pub fn export_manifest(&self) -> Result<Vec<SegmentRef>, EdgestoreError> {
+        let metas = self.segment_store.list_segment_metas();
+        let mut refs = Vec::with_capacity(metas.len());
+        for meta in metas {
+            // segment_hash is Vec<u8> (32 bytes). Convert to [u8; 32] for SegmentRef.
+            let mut hash = [0u8; 32];
+            let src = &meta.segment_hash;
+            let copy_len = src.len().min(32);
+            hash[..copy_len].copy_from_slice(&src[..copy_len]);
+            refs.push(SegmentRef {
+                segment_hash: hash,
+                segment_id: meta.segment_id,
+            });
+        }
+        Ok(refs)
+    }
+
+    /// Returns hashes the peer has that we do not (set diff: peer ∖ local).
+    ///
+    /// Pure computation, no I/O.
+    pub fn missing_segments(&self, peer_segments: &[SegmentRef]) -> Vec<[u8; 32]> {
+        let local_set: HashSet<Vec<u8>> = self
+            .segment_store
+            .list_segment_metas()
+            .iter()
+            .map(|m| m.segment_hash.clone())
+            .collect();
+        peer_segments
+            .iter()
+            .filter(|s| {
+                let hash_vec: Vec<u8> = s.segment_hash.to_vec();
+                !local_set.contains(&hash_vec)
+            })
+            .map(|s| s.segment_hash)
+            .collect()
+    }
+
+    /// Accept raw segment bytes from a peer, verify BLAKE3, write atomically, apply LWW per record.
+    ///
+    /// Returns:
+    /// - `Ok(ImportResult::Skipped)` if the segment is already present in the local manifest.
+    /// - `Ok(ImportResult::HashMismatch)` if BLAKE3(data) != claimed hash — segment rejected.
+    /// - `Ok(ImportResult::Applied { keys_written, keys_skipped })` on success.
+    ///
+    /// // LWW correctness requires NTP synchronization (D06). Clock skew > segment flush interval
+    /// // can cause incorrect merge outcomes.
+    pub fn import_segment(
+        &mut self,
+        data: &[u8],
+        hash: &[u8; 32],
+    ) -> Result<ImportResult, EdgestoreError> {
+        // Step 1: Check if already present.
+        let hash_vec: Vec<u8> = hash.to_vec();
+        let already_present = self
+            .segment_store
+            .list_segment_metas()
+            .iter()
+            .any(|m| m.segment_hash == hash_vec);
+        if already_present {
+            return Ok(ImportResult::Skipped);
+        }
+
+        // Step 2: Verify BLAKE3.
+        let computed: [u8; 32] = *blake3::hash(data).as_bytes();
+        if computed != *hash {
+            return Ok(ImportResult::HashMismatch);
+        }
+
+        // Step 3: Write to .tmp file.
+        let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let base = self.segment_store.base_path().to_path_buf();
+        let tmp_path = base.join(format!("{}.tmp", hash_hex));
+        let dat_path = base.join(format!("{}.dat", hash_hex));
+
+        std::fs::write(&tmp_path, data)?;
+
+        // Step 4: Rename to final path atomically.
+        std::fs::rename(&tmp_path, &dat_path)?;
+
+        // Step 5: Parse segment records from raw bytes using segment::deserialize_entry.
+        let mut keys_written: u64 = 0;
+        let mut keys_skipped: u64 = 0;
+
+        // The raw bytes are a full .dat file with file header + blocks.
+        // Skip the 8-byte file header (magic 4 bytes + version 1 byte + padding 3 bytes).
+        let mut offset = 8usize;
+        while offset < data.len() {
+            // Read block header: magic (4) + compressed_len (4).
+            if offset + 8 > data.len() {
+                break;
+            }
+            let magic = u32::from_le_bytes(
+                data[offset..offset + 4].try_into().unwrap(),
+            );
+            if magic != crate::segment::SEGMENT_BLOCK_MAGIC {
+                break; // hit padding or end
+            }
+            let compressed_len = u32::from_le_bytes(
+                data[offset + 4..offset + 8].try_into().unwrap(),
+            ) as usize;
+
+            let payload_size = 8 + compressed_len;
+            let aligned_size = if payload_size.is_multiple_of(crate::segment::SEGMENT_BLOCK_SIZE) {
+                payload_size
+            } else {
+                (payload_size / crate::segment::SEGMENT_BLOCK_SIZE + 1)
+                    * crate::segment::SEGMENT_BLOCK_SIZE
+            };
+
+            if offset + 8 + compressed_len > data.len() {
+                break;
+            }
+            let compressed = &data[offset + 8..offset + 8 + compressed_len];
+            let decompressed = zstd::decode_all(compressed).map_err(|e| {
+                EdgestoreError::SegmentCorrupt(format!("import_segment zstd decode: {}", e))
+            })?;
+
+            // Step 6: Apply LWW per record.
+            let mut pos = 0;
+            while pos < decompressed.len() {
+                match crate::segment::deserialize_entry(&decompressed, &mut pos) {
+                    Ok((encoded_key, incoming)) => {
+                        // Look up local entry by encoded key.
+                        let local_entry = self.memtable.get(&encoded_key).cloned().or_else(|| {
+                            self.segment_store.get(&encoded_key).ok().flatten()
+                        });
+
+                        let apply = match local_entry {
+                            None => true,
+                            Some(ref local) => {
+                                if local.timestamp > incoming.timestamp {
+                                    // Local wins — skip.
+                                    false
+                                } else if local.timestamp == incoming.timestamp {
+                                    // Timestamp tie: lower host_id wins.
+                                    // host_id is not stored in MemEntry in v1; favor local on tie.
+                                    false
+                                } else {
+                                    // incoming.timestamp > local.timestamp — incoming wins.
+                                    true
+                                }
+                            }
+                        };
+
+                        if apply {
+                            // Decode ns and key from encoded_key for put_with_timestamp.
+                            if let Ok((ns, key)) =
+                                crate::types::decode_key(&encoded_key)
+                            {
+                                if incoming.op == crate::types::Operation::Put {
+                                    if let Some(ref val) = incoming.value {
+                                        self.put_with_timestamp(
+                                            &ns,
+                                            &key,
+                                            val,
+                                            incoming.timestamp,
+                                        )?;
+                                        keys_written += 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            keys_skipped += 1;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            offset += aligned_size;
+        }
+
+        // Step 7: Build SegmentMeta for the imported segment and add to manifest.
+        // We need a new segment_id allocated from the store.
+        let new_segment_id = self.segment_store.alloc_segment_id();
+
+        // Read the hash_metas from the existing dat file to reconstruct SegmentMeta.
+        // Build a minimal meta from what we know (the data was already imported and LWW applied).
+        // Re-read the segment using SegmentReader::open after we register the dat file properly.
+        // The imported segment .dat is stored under hash_hex.dat, but SegmentReader expects
+        // segment-{id:08}.dat format. Rename to the canonical segment file path.
+        let canonical_dat = base.join(format!("segment-{:08}.dat", new_segment_id));
+        std::fs::rename(&dat_path, &canonical_dat)?;
+
+        // Flush WAL to ensure LWW-applied records are durable.
+        self.wal.fsync()?;
+
+        // Build SegmentMeta from the written data.
+        let now_nanos = crate::engine::Engine::now_nanos();
+        let segment_hash_vec: Vec<u8> = hash.to_vec();
+        // Use minimal meta — the reader will be rebuilt from the canonical path.
+        let meta = crate::types::SegmentMeta {
+            segment_id: new_segment_id,
+            segment_hash: segment_hash_vec,
+            min_key: vec![],
+            max_key: vec![],
+            min_lsn: 0,
+            max_lsn: 0,
+            record_count: keys_written + keys_skipped,
+            compressed_bytes: data.len() as u64,
+            uncompressed_bytes: data.len() as u64,
+            compression: "zstd:1".to_string(),
+            cohort_bucket: 0,
+            death_time: 0,
+            merkle_root: hash.to_vec(),
+            created_at: now_nanos,
+        };
+
+        // Write .idx, .xf, .meta files so SegmentReader::open can load it.
+        // Since we only applied records via LWW (not built a full sorted segment), the
+        // imported .dat file stays as-is. We need the sidecar files to open it.
+        // Write a trivial .idx file (single entry at offset 8 for the file header).
+        let idx_path = base.join(format!("segment-{:08}.idx", new_segment_id));
+        crate::segment::write_idx_file(&[(vec![], 8u64)], &idx_path)?;
+
+        // Build an xf filter from nothing (empty — keys already in memtable).
+        let xf_path = base.join(format!("segment-{:08}.xf", new_segment_id));
+        let empty_keys: Vec<Vec<u8>> = vec![];
+        let filter = crate::segment::build_xor_filter(&empty_keys)?;
+        crate::segment::write_xf_file(&filter, &xf_path)?;
+
+        // Write the .meta JSON file.
+        let meta_path = base.join(format!("segment-{:08}.meta", new_segment_id));
+        let meta_file = std::fs::File::create(&meta_path)?;
+        serde_json::to_writer_pretty(meta_file, &meta)
+            .map_err(|e| EdgestoreError::SegmentCorrupt(format!("import meta serialize: {}", e)))?;
+
+        // Open reader and register with the segment store.
+        let reader =
+            crate::segment::SegmentReader::open(base.clone(), new_segment_id)?;
+        self.segment_store.add_imported_segment(meta, reader)?;
+
+        Ok(ImportResult::Applied { keys_written, keys_skipped })
+    }
+
+    /// Apply a key-value record with an explicit timestamp (used during LWW replication).
+    ///
+    /// Identical to `put_inner` but substitutes the caller-supplied timestamp instead of
+    /// generating one from the wall clock.
+    fn put_with_timestamp(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        val: &[u8],
+        timestamp: i64,
+    ) -> Result<Lsn, EdgestoreError> {
+        if ns.len() > u16::MAX as usize {
+            return Err(EdgestoreError::NamespaceTooLong {
+                len: ns.len(),
+                max: u16::MAX as usize,
+            });
+        }
+
+        self.lsn_counter += 1;
+        let lsn = self.lsn_counter;
+
+        let record = crate::types::WalRecord {
+            txid: 0,
+            lsn,
+            timestamp,
+            ttl: 0,
+            ns_len: ns.len() as u16,
+            ns_bytes: ns.to_vec(),
+            key_bytes: key.to_vec(),
+            op: crate::types::Operation::Put,
+            value_hash: blake3::hash(val).into(),
+            value_bytes: val.to_vec(),
+        };
+        self.wal.append(&record)?;
+        self.rotate_wal_if_needed()?;
+
+        let encoded_key = crate::types::encode_key(ns, key);
+        let entry = MemEntry {
+            key: encoded_key.clone(),
+            value: Some(val.to_vec()),
+            op: crate::types::Operation::Put,
+            lsn,
+            timestamp,
+            ttl: 0,
+        };
+        self.memtable.insert(encoded_key, entry);
+
+        Ok(lsn)
+    }
+
+    /// Returns the local RangeMerkleTree root for anti-entropy probing (D02).
+    pub fn range_merkle_root(&self) -> Result<[u8; 32], EdgestoreError> {
+        let metas = self.segment_store.list_segment_metas();
+        let refs: Vec<&crate::types::SegmentMeta> = metas.iter().collect();
+        let tree = RangeMerkleTree::build(&refs);
+        Ok(tree.root())
+    }
+
+    /// Returns true if local Merkle root matches other_root (nodes are in sync).
+    ///
+    /// Returns false if diverged — caller should call export_manifest + missing_segments to
+    /// determine what to pull (D02).
+    pub fn compare_merkle(&self, other_root: &[u8; 32]) -> Result<bool, EdgestoreError> {
+        let local_root = self.range_merkle_root()?;
+        Ok(local_root == *other_root)
     }
 
     /// Rotate the WAL if the current writer has exceeded `wal_max_bytes` or `wal_max_age_secs`.

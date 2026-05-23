@@ -147,6 +147,7 @@ dependencies = [
  "crc32c",
  "fs2",
  "lz4_flex",
+ "rmp-serde",
  "serde",
  "serde_json",
  "tempfile",

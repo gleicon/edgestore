@@ -20,3 +20,4 @@ serde_json = "*"
 
 [dev-dependencies]
 tempfile = "*"
+rmp-serde = "1"

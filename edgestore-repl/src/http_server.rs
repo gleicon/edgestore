@@ -9,7 +9,6 @@
 //!
 //! Engine access is serialized via `Arc<Mutex<Engine>>` — correct for single-writer (D08).
 
-use std::io::Read;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -45,14 +44,25 @@ impl HttpReplicationServer {
 
     /// Bind to `bind_addr` and start the request loop in a background thread.
     ///
-    /// Returns the `JoinHandle` for the background thread. The server runs until the
-    /// process exits (the thread loops forever).
+    /// Returns `(JoinHandle, bound_port)`. The bound port is useful when `bind_addr`
+    /// uses port 0 (OS-assigned ephemeral port). The server runs until the process exits.
     pub fn start(
         &self,
         bind_addr: &str,
-    ) -> Result<std::thread::JoinHandle<()>, EdgestoreError> {
+    ) -> Result<(std::thread::JoinHandle<()>, u16), EdgestoreError> {
         let server = tiny_http::Server::http(bind_addr)
             .map_err(|e| EdgestoreError::ReplicationError(format!("bind error: {}", e)))?;
+
+        // Extract the bound port before moving `server` into the thread.
+        let bound_port = match server.server_addr() {
+            tiny_http::ListenAddr::IP(addr) => addr.port(),
+            #[cfg(unix)]
+            tiny_http::ListenAddr::Unix(_) => {
+                return Err(EdgestoreError::ReplicationError(
+                    "Unix socket bind not supported for replication server".into(),
+                ))
+            }
+        };
 
         let engine = Arc::clone(&self.engine);
 
@@ -62,7 +72,7 @@ impl HttpReplicationServer {
             }
         });
 
-        Ok(handle)
+        Ok((handle, bound_port))
     }
 }
 

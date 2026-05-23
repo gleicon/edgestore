@@ -81,6 +81,14 @@ impl AntiEntropyLoop {
         self
     }
 
+    /// Override the probe interval (default: 30 seconds).
+    ///
+    /// Useful in tests to reduce the time between anti-entropy cycles.
+    pub fn with_interval(mut self, secs: u64) -> Self {
+        self.interval_secs = secs;
+        self
+    }
+
     /// Spawn the anti-entropy loop in a background thread.
     ///
     /// Returns the `JoinHandle` for the background thread. The thread runs until the

@@ -6,7 +6,6 @@ use fs2::FileExt;
 use crate::config::EdgestoreConfig;
 use crate::error::EdgestoreError;
 use crate::memtable::MemTable;
-use crate::merkle::RangeMerkleTree;
 use crate::metrics::{EngineMetrics, MetricsSnapshot};
 use crate::replication::SegmentRef;
 use crate::types::{decode_key, encode_key, Lsn, MemEntry, Operation, WalRecord};
@@ -858,11 +857,34 @@ impl Engine {
     }
 
     /// Returns the local RangeMerkleTree root for anti-entropy probing (D02).
+    ///
+    /// The root is computed from each segment's content hash (`segment_hash`, the BLAKE3
+    /// of raw segment bytes). Using `segment_hash` — rather than the per-segment
+    /// `merkle_root` field that is computed differently by `SegmentWriter` vs.
+    /// `import_segment` — ensures that two nodes converge after a successful sync:
+    /// once B has imported all of A's segments, their `segment_hash` sets are identical,
+    /// so `range_merkle_root()` returns the same value on both sides.
+    ///
+    /// Algorithm: sort segment hashes lexicographically, then feed them in order through
+    /// a single BLAKE3 hasher. Returns the all-zero hash when there are no segments.
     pub fn range_merkle_root(&self) -> Result<[u8; 32], EdgestoreError> {
         let metas = self.segment_store.list_segment_metas();
-        let refs: Vec<&crate::types::SegmentMeta> = metas.iter().collect();
-        let tree = RangeMerkleTree::build(&refs);
-        Ok(tree.root())
+        if metas.is_empty() {
+            return Ok([0u8; 32]);
+        }
+
+        // Collect and sort segment_hash values for a deterministic, order-independent root.
+        let mut hashes: Vec<Vec<u8>> = metas.iter().map(|m| m.segment_hash.clone()).collect();
+        hashes.sort_unstable();
+
+        let mut hasher = blake3::Hasher::new();
+        for h in &hashes {
+            hasher.update(h);
+        }
+        let result = hasher.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(result.as_bytes());
+        Ok(out)
     }
 
     /// Returns true if local Merkle root matches other_root (nodes are in sync).

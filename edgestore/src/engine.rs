@@ -260,6 +260,13 @@ impl Engine {
         ))
     }
 
+    /// Returns the filesystem path to the engine's database directory.
+    ///
+    /// Used by external crates (e.g. `edgestore-repl`) to locate segment files.
+    pub fn db_path(&self) -> &std::path::Path {
+        &self.config.path
+    }
+
     /// Returns a point-in-time snapshot of all engine metrics.
     pub fn metrics(&self) -> MetricsSnapshot {
         self.metrics.snapshot()

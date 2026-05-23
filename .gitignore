@@ -1,0 +1,4 @@
+/target
+edgestore_demo.db/
+*.db/
+Cargo.lock

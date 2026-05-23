@@ -1,3 +1,18 @@
+---
+gsd_state_version: 1.0
+milestone: v0.1
+milestone_name: milestone
+current_phase: Phase 4.1 Complete — ready for Phase 4 replication work
+status: unknown
+last_updated: "2026-05-23T01:59:05.108Z"
+progress:
+  total_phases: 8
+  completed_phases: 4
+  total_plans: 27
+  completed_plans: 22
+  percent: 50
+---
+
 # Project State — EdgeStore
 
 ## Current Status
@@ -36,6 +51,7 @@
 ## Completed Plans: 03-01, 03-02, 03-03, 03-04, 03-05
 
 Plan 03-05 (Integration tests) completed 2026-05-20.
+
 - 5 integration tests in edgestore/tests/integration_compaction.rs; all pass
 - SC1 (COMPACT-04): TTL expiry → compact_once → live_records_relocated == 0
 - SC2 (COMPACT-05): range scan across 3+ overlapping segments returns correct LWW value
@@ -46,6 +62,7 @@ Plan 03-05 (Integration tests) completed 2026-05-20.
 - Commit: 888c15a
 
 Plan 03-04 (Engine integration) completed 2026-05-20.
+
 - Engine.snapshot_registry: SnapshotRegistry field added (COMPACT-06 wiring)
 - SegmentStore.segment_ids() helper added (readers field is private)
 - Engine::compact_once: wall-clock now_nanos, pinned_ids, Compactor, manifest.mf reload (COMPACT-04)
@@ -54,6 +71,7 @@ Plan 03-04 (Engine integration) completed 2026-05-20.
 - Commits: fe60746, 5a8011b, fc14138
 
 Plan 03-01 (Compactor + Snapshot scaffold) completed 2026-05-19.
+
 - EdgestoreConfig.compaction_write_budget_bytes = 256 MB default
 - EdgestoreError.CompactionError(String) variant
 - compactor.rs: Compactor, CohortInfo, CompactionStats
@@ -62,6 +80,7 @@ Plan 03-01 (Compactor + Snapshot scaffold) completed 2026-05-19.
 - cargo build --workspace and cargo clippy -D warnings clean
 
 Plan 03-02 (Compactor core algorithm) completed 2026-05-19.
+
 - CohortInfo.is_fully_expired field added
 - identify_cohorts: group by cohort_bucket, sort expired-first
 - collect_expired_cohort: zero-live-relocation expired cohort removal (COMPACT-04)
@@ -71,6 +90,7 @@ Plan 03-02 (Compactor core algorithm) completed 2026-05-19.
 - Commit: 31873ef
 
 Plan 03-03 (Snapshot implementation) completed 2026-05-19.
+
 - SnapshotRegistry: register/release/is_pinned/pinned_ids (COMPACT-06)
 - Snapshot::new, Drop (RAII pin release), get (LWW by LSN), range (LWW merge + decode)
 - 5 unit tests pass; clippy -D warnings clean

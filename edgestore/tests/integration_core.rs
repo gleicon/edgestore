@@ -1,12 +1,23 @@
 use edgestore::{EdgestoreConfig, Engine};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
+use std::time::Instant;
 use tempfile::TempDir;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn open_engine(dir: &TempDir) -> Engine {
     Engine::open(EdgestoreConfig::new(dir.path())).unwrap()
+}
+
+fn time_op<F, R>(label: &str, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let t0 = Instant::now();
+    let result = f();
+    eprintln!("[timing] {:40} {:?}", label, t0.elapsed());
+    result
 }
 
 fn open_engine_with_config(config: EdgestoreConfig) -> Engine {
@@ -432,4 +443,79 @@ fn test_wal_rotates_inline_without_reopen() {
             key
         );
     }
+}
+
+// ── Timing ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_operation_timing() {
+    const N: usize = 1_000;
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    // Single puts
+    time_op(&format!("{N} puts (memtable)"), || {
+        for i in 0..N {
+            engine
+                .put(b"bench", format!("key-{:06}", i).as_bytes(), b"value")
+                .unwrap();
+        }
+    });
+
+    // Gets from memtable (hot path — all keys still in memtable)
+    time_op(&format!("{N} gets (memtable)"), || {
+        for i in 0..N {
+            engine.get(b"bench", format!("key-{:06}", i).as_bytes()).unwrap();
+        }
+    });
+
+    // Flush to segments
+    time_op("flush_to_segments", || {
+        engine.flush_to_segments().unwrap();
+    });
+
+    // Gets from segments (cold path — memtable cleared after flush)
+    time_op(&format!("{N} gets (segment)"), || {
+        for i in 0..N {
+            engine.get(b"bench", format!("key-{:06}", i).as_bytes()).unwrap();
+        }
+    });
+
+    // Transaction: 100 puts committed as a group
+    time_op("transaction 100 puts + commit", || {
+        let mut tx = engine.begin();
+        for i in 0..100usize {
+            tx.put(
+                b"tx",
+                format!("tx-key-{:04}", i).as_bytes(),
+                b"tx-value",
+                0,
+                0,
+            )
+            .unwrap();
+        }
+        engine.commit_transaction(tx).unwrap();
+    });
+
+    // Range scan across all N segment-backed keys
+    time_op(&format!("range scan {N} keys (segment)"), || {
+        engine.range(b"bench", b"key-000000", b"key-999999").unwrap()
+    });
+
+    // Prefix scan
+    time_op(&format!("prefix scan {N} keys (segment)"), || {
+        engine.prefix(b"bench", b"key-").unwrap()
+    });
+
+    // Engine metrics after the benchmark
+    let m = engine.metrics();
+    eprintln!("\n[metrics]\n{}", m);
+
+    // Sanity: counters match what we did
+    assert_eq!(m.puts, N as u64, "put count mismatch");
+    assert_eq!(m.transactions_committed, 1);
+    assert!(m.segment_flushes >= 1);
+    assert!(m.put_avg_ns() > 0, "put avg ns must be non-zero");
+    assert!(m.get_avg_ns() > 0, "get avg ns must be non-zero");
+    assert!(m.transaction_commit_avg_ns() > 0);
 }

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use edgestore::{Engine, ImportResult};
+use edgestore::{Engine, ImportResult, RemoteStore};
 use edgestore::replication::ReplicationProtocol;
 
 use crate::http_client::HttpReplicationClient;
@@ -44,6 +44,10 @@ pub struct AntiEntropyLoop {
     db_path: PathBuf,
     /// Probe interval in seconds. Default: 30.
     pub interval_secs: u64,
+    /// Optional durable segment backend. When `Some`, each successfully applied
+    /// segment is uploaded after import (D08). Upload failure is non-fatal — the
+    /// segment is already applied locally.
+    remote_store: Option<Arc<dyn RemoteStore>>,
 }
 
 impl AntiEntropyLoop {
@@ -65,7 +69,16 @@ impl AntiEntropyLoop {
             peer_id,
             db_path,
             interval_secs: 30,
+            remote_store: None,
         }
+    }
+
+    /// Attach a `RemoteStore` backend. After each segment is successfully applied, the
+    /// loop will call `remote_store.upload(hash, data)`. Upload failures are logged and
+    /// ignored — they do not abort the sync loop.
+    pub fn with_remote_store(mut self, store: Arc<dyn RemoteStore>) -> Self {
+        self.remote_store = Some(store);
+        self
     }
 
     /// Spawn the anti-entropy loop in a background thread.
@@ -76,7 +89,13 @@ impl AntiEntropyLoop {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(self.interval_secs));
-                run_once(&self.engine, &self.peer_url, &self.peer_id, &self.db_path);
+                run_once(
+                    &self.engine,
+                    &self.peer_url,
+                    &self.peer_id,
+                    &self.db_path,
+                    self.remote_store.as_deref(),
+                );
             }
         })
     }
@@ -88,6 +107,7 @@ fn run_once(
     peer_url: &str,
     peer_id: &str,
     db_path: &Path,
+    remote_store: Option<&dyn RemoteStore>,
 ) {
     // Step 1: Load or create cursor.
     let cursor_path = cursor_file_path(db_path, peer_id);
@@ -207,6 +227,17 @@ fn run_once(
                     keys_written,
                     keys_skipped
                 );
+
+                // Upload to remote store if configured (D08). Non-fatal on error.
+                if let Some(rs) = remote_store {
+                    if let Err(e) = rs.upload(&hash, &data) {
+                        eprintln!(
+                            "[anti_entropy] remote_store upload warning for {}: {}",
+                            hex_str(&hash),
+                            e
+                        );
+                    }
+                }
             }
             Ok(ImportResult::Skipped) => {
                 // Already present — remove from pending.

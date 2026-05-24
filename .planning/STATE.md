@@ -2,24 +2,24 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_phase: 04
-status: Executing Phase 04
-last_updated: "2026-05-23T02:45:00.000Z"
-progress:
-  total_phases: 8
-  completed_phases: 4
-  total_plans: 27
-  completed_plans: 22
-  percent: 50
+  current_phase: 05
+  status: Complete
+  last_updated: "2026-05-23T03:30:00.000Z"
+  progress:
+    total_phases: 8
+    completed_phases: 5
+    total_plans: 32
+    completed_plans: 27
+    percent: 62
 ---
 
 # Project State — EdgeStore
 
 ## Current Status
 
-**Phase:** 4 — Replication + S3
-**Current Phase:** 04
-**Milestone:** Milestone 2 (v0.2)
+**Phase:** 5 — Vector Search
+**Current Phase:** 05
+**Milestone:** Milestone 3 (v0.3)
 
 ## Phase Progress
 
@@ -30,7 +30,7 @@ progress:
 | 3 — Deathtime Compaction | Complete | 2026-05-19 | 2026-05-20 |
 | 4 — Replication + S3 | Complete | 2026-05-20 | 2026-05-23 |
 | 4.1 — Engine Correctness & Edge Cases | Complete | 2026-05-21 | 2026-05-21 |
-| 5 — Vector Search | Not started | — | — |
+| 5 — Vector Search | Complete | 2026-05-23 | 2026-05-23 |
 | 6 — SSD Optimization + HNSW | Not started | — | — |
 | 7 — Full-Text Search (v2) | Not started | — | — |
 
@@ -115,11 +115,21 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 | 04.1-03 | 1 | Fix SegmentReader::range_scan end-inclusive bug | CORE-05 |
 | 04.1-04 | 2 | Snapshot::get LWW ordering — multi-segment divergence test | CORE-04 |
 
+## Phase 5 Plans
+
+| Plan | Wave | Title | Requirements |
+|------|------|-------|--------------|
+| 05-01 | 1 | Vector types, encoding, dtype support | VECTOR-01, VECTOR-04 |
+| 05-02 | 2 | Vector KV API (vector_put, vector_get, vector_delete) | VECTOR-02 |
+| 05-03 | 3 | Distance metrics — SIMD + scalar, all three metrics | VECTOR-03, VECTOR-04 |
+| 05-04 | 4 | Flat scan search with top-k heap | VECTOR-02, VECTOR-03 |
+| 05-05 | 5 | Integration tests + benchmarks (all 5 SC) | VECTOR-01–05 |
+
 ## Next Step
 
-Phase 4 and Phase 4.1 both complete. Phase 5 (Vector Search) is the next unstarted phase.
+Phase 5 complete. Phase 6 (SSD Optimization + HNSW) is the next unstarted phase.
 
-Run `/gsd:plan-phase 5` to plan Vector Search, or `/gsd:discuss-phase 5` to gather context first.
+Run `/gsd:plan-phase 6` to plan SSD Optimization + HNSW.
 
 ## Phase 2 Plans
 
@@ -165,3 +175,22 @@ Three critical blockers in `import_segment` fixed post-execution:
 - **W-03**: .meta file fsync added for durability
 
 All fixes committed. 147 tests pass workspace-wide. cargo clippy -D warnings clean.
+
+### Phase 5 Completion (2026-05-23)
+
+All 5 plans executed successfully:
+
+- **05-01**: Vector types (Dtype: F32/F16/I8), VectorRecord, encode/decode with 3-byte big-endian header
+- **05-02**: VectorEngine trait with vector_put, vector_get, vector_delete on Engine; synthetic `__vec__{ns}` namespace isolation
+- **05-03**: All 3 distance metrics (Cosine, L2, DotProduct) with SIMD (wide::f32x8) + scalar fallback; f16/i8 widening
+- **05-04**: Brute-force flat scan with top-k BinaryHeap; results sorted ascending; deletes excluded
+- **05-05**: 5 success criteria verified + Criterion benchmarks (10K, 100K collections)
+
+**Key fixes during execution:**
+- HeapItem Ord: fixed reverse ordering bug so BinaryHeap peek returns worst (largest distance) item
+- SC2 tests use set-equality comparison to tolerate SIMD vs scalar near-tie differences
+
+**Stats:**
+- 187 tests pass workspace-wide (10 test suites)
+- cargo clippy --workspace -D warnings clean
+- Benchmarks compile successfully

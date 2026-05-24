@@ -28,6 +28,6 @@ pub use replication::{HostId, ReplicationProtocol, SegmentRef};
 pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use transaction::Transaction;
 pub use vector::api::{vector_namespace, VectorEngine};
-pub use vector::distance::{distance, Metric};
+pub use vector::distance::{distance, distance_scalar, Metric};
 pub use vector::search::{vector_search, VectorSearchResult};
 pub use vector::types::{Dtype, VectorRecord};

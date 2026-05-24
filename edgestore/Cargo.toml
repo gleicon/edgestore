@@ -22,3 +22,8 @@ wide = "0.7"
 [dev-dependencies]
 tempfile = "*"
 rmp-serde = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "vector_search"
+harness = false

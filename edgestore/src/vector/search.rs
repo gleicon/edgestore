@@ -33,12 +33,12 @@ impl Eq for HeapItem {}
 
 impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse ordering: larger distance = "greater" for BinaryHeap
-        // so peek() returns the worst item (largest distance)
+        // Standard ordering: larger distance = Greater.
+        // BinaryHeap (max-heap) peek() returns the maximum = worst item (largest distance).
+        // When we find a new item with smaller distance, we pop the worst and push the new one.
         self.distance
             .partial_cmp(&other.distance)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .reverse()
     }
 }
 

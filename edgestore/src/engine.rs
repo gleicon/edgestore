@@ -10,6 +10,8 @@ use crate::metrics::{EngineMetrics, MetricsSnapshot};
 use crate::replication::SegmentRef;
 use crate::types::{decode_key, encode_key, Lsn, MemEntry, Operation, WalRecord};
 use crate::vector::api::{vector_namespace, VectorEngine};
+use crate::vector::distance::Metric;
+use crate::vector::search::VectorSearchResult;
 use crate::vector::types::{encode_vector_record, decode_vector_record, Dtype, VectorRecord};
 use crate::wal::WalWriter;
 
@@ -986,6 +988,20 @@ impl Engine {
         self.wal = WalWriter::create(&new_path, &self.config)?;
         self.metrics.wal_rotations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Search for the k closest vectors to the query in the given namespace.
+    ///
+    /// Uses brute-force flat scan over all vector records in the synthetic
+    /// namespace `__vec__{ns}`. Results are ordered by ascending distance.
+    pub fn vector_search(
+        &self,
+        ns: &[u8],
+        query: &VectorRecord,
+        k: usize,
+        metric: Metric,
+    ) -> Result<Vec<VectorSearchResult>, EdgestoreError> {
+        crate::vector::search::vector_search(self, ns, query, k, metric)
     }
 }
 

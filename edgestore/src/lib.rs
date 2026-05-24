@@ -27,4 +27,5 @@ pub use remote_store::RemoteStore;
 pub use replication::{HostId, ReplicationProtocol, SegmentRef};
 pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use transaction::Transaction;
+pub use vector::api::{vector_namespace, VectorEngine};
 pub use vector::types::{Dtype, VectorRecord};

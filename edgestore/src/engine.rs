@@ -9,6 +9,8 @@ use crate::memtable::MemTable;
 use crate::metrics::{EngineMetrics, MetricsSnapshot};
 use crate::replication::SegmentRef;
 use crate::types::{decode_key, encode_key, Lsn, MemEntry, Operation, WalRecord};
+use crate::vector::api::{vector_namespace, VectorEngine};
+use crate::vector::types::{encode_vector_record, decode_vector_record, Dtype, VectorRecord};
 use crate::wal::WalWriter;
 
 fn next_wal_path(db_path: &Path, lsn: Lsn) -> PathBuf {
@@ -984,6 +986,56 @@ impl Engine {
         self.wal = WalWriter::create(&new_path, &self.config)?;
         self.metrics.wal_rotations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+}
+
+impl VectorEngine for Engine {
+    fn vector_put(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        dims: u16,
+        dtype: Dtype,
+        data: &[u8],
+    ) -> Result<Lsn, EdgestoreError> {
+        let expected = dims as usize * dtype.element_size();
+        if data.len() != expected {
+            return Err(EdgestoreError::DimensionMismatch {
+                expected,
+                actual: data.len(),
+            });
+        }
+
+        let record = VectorRecord {
+            dims,
+            dtype,
+            data: data.to_vec(),
+        };
+        let encoded = encode_vector_record(&record)?;
+        self.put(&vector_namespace(ns), key, &encoded)
+    }
+
+    fn vector_get(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+    ) -> Result<Option<VectorRecord>, EdgestoreError> {
+        match self.get(&vector_namespace(ns), key)? {
+            Some(bytes) => {
+                let record = decode_vector_record(&bytes)
+                    .map_err(|e| EdgestoreError::CorruptData(format!("decode vector: {}", e)))?;
+                Ok(Some(record))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn vector_delete(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+    ) -> Result<Lsn, EdgestoreError> {
+        self.delete(&vector_namespace(ns), key)
     }
 }
 

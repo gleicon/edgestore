@@ -1205,6 +1205,110 @@ impl VectorEngine for Engine {
     }
 }
 
+use crate::text::engine::{TextEngine, TextSearchResult, text_namespace};
+use crate::text::tokenizer::tokenize;
+use crate::text::index::{InvertedIndex, score_document};
+use crate::text::types::{encode_text_record, FacetValue};
+
+impl TextEngine for Engine {
+    fn index_text(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        text: &str,
+        facets: HashMap<String, FacetValue>,
+    ) -> Result<Lsn, EdgestoreError> {
+        let tokens = tokenize(text);
+        let doc_len = tokens.len() as u32;
+
+        // Build/update the per-namespace inverted index
+        let text_ns = text_namespace(ns);
+        let mut index = InvertedIndex::new();
+        index.add_document(key.to_vec(), &tokens, doc_len);
+
+        // Serialize and store the inverted index entry
+        let index_bytes = index.serialize();
+        let index_key = format!("idx:{}", std::str::from_utf8(key).unwrap_or(""));
+        self.put(&text_ns, index_key.as_bytes(), &index_bytes)?;
+
+        // Store the raw text record for retrieval
+        let record = crate::text::types::TextRecord {
+            text: text.to_string(),
+            facets,
+        };
+        let record_bytes = encode_text_record(&record);
+        self.put(&text_ns, key, &record_bytes)
+    }
+
+    fn search_text(
+        &self,
+        ns: &[u8],
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+        if k == 0 {
+            return Ok(vec![]);
+        }
+
+        let query_tokens = tokenize(query);
+        if query_tokens.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let text_ns = text_namespace(ns);
+
+        // Load all inverted index entries for this namespace
+        let all_entries = self.prefix(&text_ns, b"idx:")?;
+        if all_entries.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Aggregate postings from all index entries
+        let mut aggregated = InvertedIndex::new();
+        for (_, val_bytes) in &all_entries {
+            if let Ok(idx) = InvertedIndex::deserialize(val_bytes) {
+                aggregated.total_docs += idx.total_docs;
+                aggregated.total_doc_len += idx.total_doc_len;
+                for (term, postings) in idx.postings {
+                    aggregated.postings.entry(term).or_default().extend(postings);
+                }
+            }
+        }
+
+        if aggregated.total_docs == 0 {
+            return Ok(vec![]);
+        }
+
+        // Collect unique doc IDs from query term postings
+        let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
+        for token in &query_tokens {
+            if let Some(postings) = aggregated.postings.get(&token.term) {
+                for posting in postings {
+                    let score = score_document(&aggregated, &posting.doc_id, std::slice::from_ref(token));
+                    *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
+                }
+            }
+        }
+
+        // Sort by score descending, return top-k
+        let mut results: Vec<TextSearchResult> = doc_scores
+            .into_iter()
+            .map(|(doc_id, score)| TextSearchResult { doc_id, score })
+            .collect();
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+
+        Ok(results)
+    }
+
+    fn delete_text(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
+        let text_ns = text_namespace(ns);
+        let index_key = format!("idx:{}", std::str::from_utf8(key).unwrap_or(""));
+        self.delete(&text_ns, index_key.as_bytes())?;
+        self.delete(&text_ns, key)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

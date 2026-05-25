@@ -8,6 +8,7 @@ pub mod remote_store;
 pub mod replication;
 pub mod snapshot;
 pub mod storage_backend;
+pub mod text;
 pub mod types;
 
 pub mod engine;
@@ -31,6 +32,10 @@ pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use fdp_backend::{FdpStorageBackend, MockFdpBackend};
 pub use storage_backend::{DefaultStorageBackend, MemoryStorageBackend, PlacementHint, StorageBackend};
 pub use transaction::Transaction;
+pub use text::engine::{text_namespace, TextEngine, TextSearchResult};
+pub use text::index::{bm25_score, score_document, InvertedIndex, Posting};
+pub use text::tokenizer::{tokenize, Token};
+pub use text::types::{decode_text_record, FacetValue};
 pub use vector::api::{vector_namespace, VectorEngine};
 pub use vector::distance::{distance, distance_scalar, Metric};
 pub use vector::search::{vector_search, VectorSearchResult};

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-  current_phase: 05
+  current_phase: 06
   status: Complete
-  last_updated: "2026-05-23T03:30:00.000Z"
+  last_updated: "2026-05-25T03:30:00.000Z"
   progress:
     total_phases: 8
-    completed_phases: 5
-    total_plans: 32
-    completed_plans: 27
-    percent: 62
+    completed_phases: 6
+    total_plans: 38
+    completed_plans: 33
+    percent: 75
 ---
 
 # Project State — EdgeStore
@@ -31,7 +31,7 @@ milestone_name: milestone
 | 4 — Replication + S3 | Complete | 2026-05-20 | 2026-05-23 |
 | 4.1 — Engine Correctness & Edge Cases | Complete | 2026-05-21 | 2026-05-21 |
 | 5 — Vector Search | Complete | 2026-05-23 | 2026-05-23 |
-| 6 — SSD Optimization + HNSW | Not started | — | — |
+| 6 — SSD Optimization + HNSW | Complete | 2026-05-25 | 2026-05-25 |
 | 7 — Full-Text Search (v2) | Not started | — | — |
 
 ## Requirement Status
@@ -125,11 +125,16 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 | 05-04 | 4 | Flat scan search with top-k heap | VECTOR-02, VECTOR-03 |
 | 05-05 | 5 | Integration tests + benchmarks (all 5 SC) | VECTOR-01–05 |
 
-## Next Step
+## Phase 6 Plans
 
-Phase 5 complete. Phase 6 (SSD Optimization + HNSW) is the next unstarted phase.
-
-Run `/gsd:plan-phase 6` to plan SSD Optimization + HNSW.
+| Plan | Wave | Title | Requirements |
+|------|------|-------|--------------|
+| 06-01 | 1 | StorageBackend trait + default/local/test backends | SSD-01 |
+| 06-02 | 2 | FDP placement hints + mock backend | SSD-01, SSD-02 |
+| 06-03 | 1 | HNSW core — graph, search, serialization | SSD-03 |
+| 06-04 | 2 | HNSW integration — build, search routing, sidecar | SSD-03 |
+| 06-05 | 3 | edgestore-tokio async wrapper | SSD-04 |
+| 06-06 | 3 | Benchmarks + integration tests | SSD-05 |
 
 ## Phase 2 Plans
 
@@ -194,3 +199,24 @@ All 5 plans executed successfully:
 - 187 tests pass workspace-wide (10 test suites)
 - cargo clippy --workspace -D warnings clean
 - Benchmarks compile successfully
+
+### Phase 6 Completion (2026-05-25)
+
+All 6 plans executed successfully:
+
+- **06-01**: StorageBackend trait (read/write/flush/read_all) + DefaultStorageBackend + MemoryStorageBackend for tests
+- **06-02**: FDP placement hints — PlacementHint struct, write_with_hint default impl, MockFdpBackend for verification
+- **06-03**: HNSW core — HnswIndex with probabilistic layer assignment, greedy beam search, diversity heuristic neighbor selection, serialize/deserialize
+- **06-04**: HNSW integration — build_vector_index, get_vector_index with lazy load, vector_search routing (HNSW vs flat scan), sidecar file persistence
+- **06-05**: edgestore-tokio async wrapper — AsyncEngine with spawn_blocking for all Engine methods
+- **06-06**: 3 Criterion benchmarks (hnsw_recall, throughput, vector_search) + 8 Phase 6 integration tests
+
+**Key decisions during execution:**
+- MemTable trait bound expanded to `Send + Sync` to enable `Arc<RwLock<Engine>>` in tokio wrapper
+- HNSW recall threshold set to 0.70 for clustered data (v1 without full diversity heuristic optimization)
+- `vector_search` returns decoded raw keys (not encoded); `build_vector_index` uses them directly
+
+**Stats:**
+- 214 tests pass workspace-wide (13 test suites)
+- cargo clippy --workspace -D warnings clean
+- All benchmarks compile (`cargo bench --no-run`)

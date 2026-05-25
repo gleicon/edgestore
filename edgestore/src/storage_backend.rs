@@ -4,6 +4,15 @@ use std::sync::Mutex;
 
 use crate::error::EdgestoreError;
 
+/// Placement hint for FDP (Flexible Data Placement, NVMe 2.0) backends.
+///
+/// The `cohort_bucket` maps to an FDP placement handle, allowing
+/// cohort-aware data placement on supported hardware.
+#[derive(Debug, Clone, Copy)]
+pub struct PlacementHint {
+    pub cohort_bucket: i64,
+}
+
 /// Pluggable storage backend abstraction.
 ///
 /// All segment I/O goes through this trait so backends can be swapped
@@ -18,6 +27,19 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// Creates or truncates the file if necessary.
     fn write(&self, path: &Path, offset: u64, data: &[u8]) -> Result<(), EdgestoreError>;
+
+    /// Write `data` with an optional placement hint.
+    ///
+    /// Default implementation ignores the hint and delegates to `write`.
+    fn write_with_hint(
+        &self,
+        path: &Path,
+        offset: u64,
+        data: &[u8],
+        _hint: PlacementHint,
+    ) -> Result<(), EdgestoreError> {
+        self.write(path, offset, data)
+    }
 
     /// Ensure all prior writes to `path` are durable.
     fn flush(&self, path: &Path) -> Result<(), EdgestoreError>;

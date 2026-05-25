@@ -23,6 +23,9 @@ pub struct EngineMetrics {
     pub transaction_commit_nanos: AtomicU64,
     pub compaction_nanos: AtomicU64,
     pub segment_flush_nanos: AtomicU64,
+    pub vector_index_loads: AtomicU64,
+    pub vector_index_stales: AtomicU64,
+    pub vector_index_load_nanos: AtomicU64,
 }
 
 impl EngineMetrics {
@@ -46,6 +49,9 @@ impl EngineMetrics {
             transaction_commit_nanos: AtomicU64::new(0),
             compaction_nanos: AtomicU64::new(0),
             segment_flush_nanos: AtomicU64::new(0),
+            vector_index_loads: AtomicU64::new(0),
+            vector_index_stales: AtomicU64::new(0),
+            vector_index_load_nanos: AtomicU64::new(0),
         }
     }
 
@@ -69,6 +75,10 @@ impl EngineMetrics {
             transaction_commit_nanos_total: self.transaction_commit_nanos.load(Ordering::Relaxed),
             compaction_nanos_total: self.compaction_nanos.load(Ordering::Relaxed),
             segment_flush_nanos_total: self.segment_flush_nanos.load(Ordering::Relaxed),
+            vector_index_loads: self.vector_index_loads.load(Ordering::Relaxed),
+            vector_index_stales: self.vector_index_stales.load(Ordering::Relaxed),
+            vector_index_load_ms: self.vector_index_load_nanos.load(Ordering::Relaxed) / 1_000_000,
+            vector_index_stale: false, // set by caller
         }
     }
 }
@@ -101,6 +111,10 @@ pub struct MetricsSnapshot {
     pub transaction_commit_nanos_total: u64,
     pub compaction_nanos_total: u64,
     pub segment_flush_nanos_total: u64,
+    pub vector_index_loads: u64,
+    pub vector_index_stales: u64,
+    pub vector_index_load_ms: u64,
+    pub vector_index_stale: bool,
 }
 
 impl MetricsSnapshot {

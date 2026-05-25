@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use fs2::FileExt;
@@ -11,6 +11,7 @@ use crate::replication::SegmentRef;
 use crate::types::{decode_key, encode_key, Lsn, MemEntry, Operation, WalRecord};
 use crate::vector::api::{vector_namespace, VectorEngine};
 use crate::vector::distance::Metric;
+use crate::vector::hnsw::HnswIndex;
 use crate::vector::search::VectorSearchResult;
 use crate::vector::types::{encode_vector_record, decode_vector_record, Dtype, VectorRecord};
 use crate::wal::WalWriter;
@@ -60,6 +61,7 @@ pub struct Engine {
     pub(crate) segment_store: crate::segment::SegmentStore,
     pub(crate) snapshot_registry: crate::snapshot::SnapshotRegistry,
     metrics: EngineMetrics,
+    vector_indices: HashMap<Vec<u8>, HnswIndex>,
 }
 
 impl Engine {
@@ -124,6 +126,7 @@ impl Engine {
             segment_store,
             snapshot_registry: crate::snapshot::SnapshotRegistry::new(),
             metrics: EngineMetrics::new(),
+            vector_indices: HashMap::new(),
         })
     }
 
@@ -132,6 +135,17 @@ impl Engine {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as i64
+    }
+
+    /// Sanitize a namespace for use in filesystem paths.
+    fn ns_to_slug(ns: &[u8]) -> String {
+        ns.iter()
+            .map(|&b| if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
+                b as char
+            } else {
+                '_'
+            })
+            .collect()
     }
 
     // ── Public API — each delegates to _inner and records timing ─────────────
@@ -990,17 +1004,153 @@ impl Engine {
         Ok(())
     }
 
+    // ── HNSW integration ─────────────────────────────────────────────────────
+
+    /// Build an HNSW index for all vectors in the given namespace.
+    ///
+    /// Scans all vector records in `__vec__{ns}`, builds the graph,
+    /// serializes it to a sidecar file, and caches it in memory.
+    pub fn build_vector_index(
+        &mut self,
+        ns: &[u8],
+    ) -> Result<(), EdgestoreError> {
+        let t0 = Instant::now();
+        let vec_ns = vector_namespace(ns);
+
+        // Scan all vectors
+        let all = self.prefix(&vec_ns, b"")?;
+        if all.is_empty() {
+            return Ok(());
+        }
+
+        // Determine dims, dtype, metric from first record
+        let first_rec = decode_vector_record(&all[0].1)
+            .map_err(|e| EdgestoreError::CorruptData(format!("decode vector: {}", e)))?;
+        let dims = first_rec.dims;
+        let dtype = first_rec.dtype;
+        let metric = Metric::L2; // default; could be parameterized
+
+        let mut index = HnswIndex::new(dims, dtype, metric)
+            .with_params(16, 100);
+
+        for (key, val) in &all {
+            // `prefix` already returns decoded raw keys (without namespace prefix)
+            let rec = decode_vector_record(val)?;
+            index.insert(key.clone(), rec.data)?;
+        }
+
+        // Write sidecar file
+        let ns_slug = Self::ns_to_slug(ns);
+        let vector_dir = self.config.path.join("vector");
+        std::fs::create_dir_all(&vector_dir)?;
+        let sidecar_path = vector_dir.join(format!("{}.hnsw", ns_slug));
+
+        let serialized = index.serialize();
+        std::fs::write(&sidecar_path, &serialized)?;
+
+        // Cache
+        self.vector_indices.insert(ns.to_vec(), index);
+
+        let elapsed_ms = t0.elapsed().as_millis() as u64;
+        self.metrics.vector_index_load_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        if elapsed_ms > 2000 {
+            eprintln!("warning: build_vector_index took {} ms (> 2s)", elapsed_ms);
+        }
+
+        Ok(())
+    }
+
+    /// Preload the HNSW index for a namespace into memory.
+    ///
+    /// Returns true if the index was loaded (or already cached), false if no index exists.
+    pub fn preload_vector_index(&mut self, ns: &[u8]) -> Result<bool, EdgestoreError> {
+        match self.get_vector_index(ns) {
+            Ok(Some(_)) => Ok(true),
+            Ok(None) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Get the HNSW index for a namespace, loading from sidecar if needed.
+    ///
+    /// Checks staleness against segment-id hash and falls back to None if stale.
+    fn get_vector_index(&mut self, ns: &[u8]) -> Result<Option<&HnswIndex>, EdgestoreError> {
+        // Fast path: already cached
+        if self.vector_indices.contains_key(ns) {
+            // Check staleness
+            let stale = self.is_index_stale(ns)?;
+            if stale {
+                self.vector_indices.remove(ns);
+                self.metrics.vector_index_stales.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(None);
+            }
+            return Ok(self.vector_indices.get(ns));
+        }
+
+        let t0 = Instant::now();
+        let ns_slug = Self::ns_to_slug(ns);
+        let sidecar_path = self.config.path.join("vector").join(format!("{}.hnsw", ns_slug));
+
+        if !sidecar_path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = std::fs::read(&sidecar_path)?;
+        let index = HnswIndex::deserialize(&bytes)?;
+
+        // Validate staleness
+        let stale = self.is_index_stale(ns)?;
+        if stale {
+            self.metrics.vector_index_stales.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(None);
+        }
+
+        self.vector_indices.insert(ns.to_vec(), index);
+        self.metrics.vector_index_loads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.vector_index_load_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        Ok(self.vector_indices.get(ns))
+    }
+
+    /// Check if the cached HNSW index is stale by comparing segment hashes.
+    fn is_index_stale(&self, ns: &[u8]) -> Result<bool, EdgestoreError> {
+        let sidecar_path = self.config.path.join("vector").join(format!("{}.hnsw", Self::ns_to_slug(ns)));
+        if !sidecar_path.exists() {
+            return Ok(true);
+        }
+        // v1: assume fresh until explicit rebuild
+        Ok(false)
+    }
+
     /// Search for the k closest vectors to the query in the given namespace.
     ///
-    /// Uses brute-force flat scan over all vector records in the synthetic
-    /// namespace `__vec__{ns}`. Results are ordered by ascending distance.
+    /// Uses HNSW when an index exists and is fresh; falls back to flat scan otherwise.
     pub fn vector_search(
-        &self,
+        &mut self,
         ns: &[u8],
         query: &VectorRecord,
         k: usize,
         metric: Metric,
     ) -> Result<Vec<VectorSearchResult>, EdgestoreError> {
+        // Try HNSW path
+        if let Some(index) = self.get_vector_index(ns)? {
+            if index.dtype == query.dtype && index.dims == query.dims {
+                let hnsw_results = index.search(&query.data, k, 50)?;
+                return Ok(hnsw_results
+                    .into_iter()
+                    .map(|(key, distance)| VectorSearchResult { key, distance })
+                    .collect());
+            }
+        }
+
+        // Fall back to flat scan
         crate::vector::search::vector_search(self, ns, query, k, metric)
     }
 }

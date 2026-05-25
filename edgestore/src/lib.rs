@@ -1,6 +1,7 @@
 pub mod compactor;
 pub mod config;
 pub mod error;
+pub mod fdp_backend;
 pub mod merkle;
 pub mod metrics;
 pub mod remote_store;
@@ -27,7 +28,8 @@ pub use metrics::MetricsSnapshot;
 pub use remote_store::RemoteStore;
 pub use replication::{HostId, ReplicationProtocol, SegmentRef};
 pub use snapshot::{Snapshot, SnapshotRegistry};
-pub use storage_backend::{DefaultStorageBackend, MemoryStorageBackend, StorageBackend};
+pub use fdp_backend::{FdpStorageBackend, MockFdpBackend};
+pub use storage_backend::{DefaultStorageBackend, MemoryStorageBackend, PlacementHint, StorageBackend};
 pub use transaction::Transaction;
 pub use vector::api::{vector_namespace, VectorEngine};
 pub use vector::distance::{distance, distance_scalar, Metric};

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-  current_phase: 06
+  current_phase: 07
   status: Complete
-  last_updated: "2026-05-25T03:30:00.000Z"
+  last_updated: "2026-05-25T06:30:00.000Z"
   progress:
     total_phases: 8
-    completed_phases: 6
-    total_plans: 38
-    completed_plans: 33
-    percent: 75
+    completed_phases: 7
+    total_plans: 43
+    completed_plans: 38
+    percent: 88
 ---
 
 # Project State — EdgeStore
@@ -32,7 +32,8 @@ milestone_name: milestone
 | 4.1 — Engine Correctness & Edge Cases | Complete | 2026-05-21 | 2026-05-21 |
 | 5 — Vector Search | Complete | 2026-05-23 | 2026-05-23 |
 | 6 — SSD Optimization + HNSW | Complete | 2026-05-25 | 2026-05-25 |
-| 7 — Full-Text Search (v2) | Not started | — | — |
+| 7 — Full-Text Search (v2) | Complete | 2026-05-25 | 2026-05-25 |
+| 8 — v1.0 Polish & Release | Not started | — | — |
 
 ## Requirement Status
 
@@ -136,6 +137,16 @@ Plan 03-03 (Snapshot implementation) completed 2026-05-19.
 | 06-05 | 3 | edgestore-tokio async wrapper | SSD-04 |
 | 06-06 | 3 | Benchmarks + integration tests | SSD-05 |
 
+## Phase 7 Plans
+
+| Plan | Wave | Title | Requirements |
+|------|------|-------|--------------|
+| 07-01 | 1 | Tokenizer + text types (English, stopwords, stemming) | SEARCH-01 |
+| 07-02 | 1 | Inverted index core — posting lists, BM25 scoring | SEARCH-02 |
+| 07-03 | 2 | TextEngine trait + Engine integration | SEARCH-01, SEARCH-02 |
+| 07-04 | 2 | Faceting + typo tolerance (Levenshtein ≤ 1) | SEARCH-03, SEARCH-04 |
+| 07-05 | 3 | Integration tests + benchmarks | SEARCH-01–04 |
+
 ## Phase 2 Plans
 
 | Plan | Wave | Title | Requirements |
@@ -220,3 +231,31 @@ All 6 plans executed successfully:
 - 214 tests pass workspace-wide (13 test suites)
 - cargo clippy --workspace -D warnings clean
 - All benchmarks compile (`cargo bench --no-run`)
+
+### Phase 7 Completion (2026-05-25)
+
+All 5 plans executed successfully:
+
+- **07-01**: Text tokenizer — English tokenization, stopwords (~100 words), simple stemming (-ing, -ed, -ies, -s), `Token` with position info
+- **07-02**: Inverted index core — `InvertedIndex` with `HashMap<String, Vec<Posting>>`, BM25 scoring (k1=1.2, b=0.75), serialize/deserialize with `INVX` magic header
+- **07-03**: TextEngine integration — `index_text`, `search_text`, `delete_text` on Engine; `__text__{ns}` synthetic namespace; `TextSearchResult` with BM25 score; `SearchOptions` with facet filters and typo tolerance
+- **07-04**: Faceting + typo tolerance — `FacetFilter` struct, `filter_by_facets` function, `levenshtein` distance (Wagner-Fischer), `is_one_edit_away`, fuzzy matching with 0.5 weight penalty
+- **07-05**: 8 integration tests + 2 Criterion benchmarks (text_search QPS, index throughput)
+
+**Deferred to BACKLOG.md:**
+- FT-01: Pluggable Tokenizer trait (for Hugging Face `tokenizers` crate integration)
+- FT-02: LLM-compatible BPE/WordPiece/Unigram tokenization
+- FT-03: Bigram/shingle inverted index with vocabulary dictionary
+- FT-04: RAG-optimized chunk-level indexing with shared text+embedding storage
+- FT-05: Multi-language tokenization (CJK, unicode segmentation)
+
+**Key decisions during execution:**
+- Lightweight English tokenizer for v1 to minimize dependencies (vs Hugging Face's 100+ dep crate)
+- Facets stored in each posting for filtering during search (not separate index)
+- Typo tolerance scans all indexed terms for edit distance ≤ 1 (acceptable for small indexes)
+- BM25 sort uses doc_id as tiebreaker for stable, deterministic ordering
+
+**Stats:**
+- 421 tests pass (180 lib + 237 integration + 4 tokio)
+- cargo clippy --workspace -D warnings clean
+- 4 benchmarks compile (vector_search, hnsw_recall, throughput, text_search)

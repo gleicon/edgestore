@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod remote_store;
 pub mod replication;
 pub mod snapshot;
+pub mod storage_backend;
 pub mod types;
 
 pub mod engine;
@@ -26,6 +27,7 @@ pub use metrics::MetricsSnapshot;
 pub use remote_store::RemoteStore;
 pub use replication::{HostId, ReplicationProtocol, SegmentRef};
 pub use snapshot::{Snapshot, SnapshotRegistry};
+pub use storage_backend::{DefaultStorageBackend, MemoryStorageBackend, StorageBackend};
 pub use transaction::Transaction;
 pub use vector::api::{vector_namespace, VectorEngine};
 pub use vector::distance::{distance, distance_scalar, Metric};

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::EdgestoreError;
+use crate::text::types::FacetValue;
 
 /// A posting in the inverted index.
 #[derive(Debug, Clone, PartialEq)]
@@ -8,6 +9,7 @@ pub struct Posting {
     pub doc_id: Vec<u8>,
     pub term_freq: u32,
     pub doc_len: u32,
+    pub facets: HashMap<String, FacetValue>,
 }
 
 /// In-memory inverted index for a namespace.
@@ -28,7 +30,13 @@ impl InvertedIndex {
     }
 
     /// Add a document to the index.
-    pub fn add_document(&mut self, doc_id: Vec<u8>, tokens: &[crate::text::tokenizer::Token], doc_len: u32) {
+    pub fn add_document(
+        &mut self,
+        doc_id: Vec<u8>,
+        tokens: &[crate::text::tokenizer::Token],
+        doc_len: u32,
+        facets: HashMap<String, FacetValue>,
+    ) {
         // Count term frequencies
         let mut term_counts: HashMap<String, u32> = HashMap::new();
         for token in tokens {
@@ -40,6 +48,7 @@ impl InvertedIndex {
                 doc_id: doc_id.clone(),
                 term_freq: freq,
                 doc_len,
+                facets: facets.clone(),
             };
             self.postings.entry(term).or_default().push(posting);
         }
@@ -75,6 +84,28 @@ impl InvertedIndex {
                 buf.extend_from_slice(&p.doc_id);
                 buf.extend_from_slice(&p.term_freq.to_le_bytes());
                 buf.extend_from_slice(&p.doc_len.to_le_bytes());
+                buf.extend_from_slice(&(p.facets.len() as u16).to_le_bytes());
+                for (k, v) in &p.facets {
+                    let k_bytes = k.as_bytes();
+                    buf.extend_from_slice(&(k_bytes.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(k_bytes);
+                    match v {
+                        FacetValue::String(s) => {
+                            buf.push(0u8);
+                            let s_bytes = s.as_bytes();
+                            buf.extend_from_slice(&(s_bytes.len() as u16).to_le_bytes());
+                            buf.extend_from_slice(s_bytes);
+                        }
+                        FacetValue::Number(n) => {
+                            buf.push(1u8);
+                            buf.extend_from_slice(&n.to_le_bytes());
+                        }
+                        FacetValue::Bool(b) => {
+                            buf.push(2u8);
+                            buf.push(if *b { 1u8 } else { 0u8 });
+                        }
+                    }
+                }
             }
         }
 
@@ -123,7 +154,33 @@ impl InvertedIndex {
                 let doc_id = read!(id_len).to_vec();
                 let term_freq = u32::from_le_bytes(read!(4).try_into().unwrap());
                 let doc_len = u32::from_le_bytes(read!(4).try_into().unwrap());
-                posting_vec.push(Posting { doc_id, term_freq, doc_len });
+                let facet_count = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
+                let mut facets = HashMap::with_capacity(facet_count);
+                for _ in 0..facet_count {
+                    let k_len = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
+                    let k = String::from_utf8(read!(k_len).to_vec())
+                        .map_err(|_| EdgestoreError::CorruptData("inverted index: invalid facet key".to_string()))?;
+                    let tag = read!(1)[0];
+                    let v = match tag {
+                        0 => {
+                            let s_len = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
+                            let s = String::from_utf8(read!(s_len).to_vec())
+                                .map_err(|_| EdgestoreError::CorruptData("inverted index: invalid facet string".to_string()))?;
+                            FacetValue::String(s)
+                        }
+                        1 => {
+                            let n = i64::from_le_bytes(read!(8).try_into().unwrap());
+                            FacetValue::Number(n)
+                        }
+                        2 => {
+                            let b = read!(1)[0] != 0;
+                            FacetValue::Bool(b)
+                        }
+                        _ => return Err(EdgestoreError::CorruptData("inverted index: unknown facet tag".to_string())),
+                    };
+                    facets.insert(k, v);
+                }
+                posting_vec.push(Posting { doc_id, term_freq, doc_len, facets });
             }
             postings.insert(term, posting_vec);
         }
@@ -197,7 +254,7 @@ mod tests {
             Token { term: "world".to_string(), position: 1 },
             Token { term: "hello".to_string(), position: 2 },
         ];
-        index.add_document(vec![1], &tokens, 3);
+        index.add_document(vec![1], &tokens, 3, HashMap::new());
 
         assert_eq!(index.total_docs, 1);
         let hello_postings = index.postings.get("hello").unwrap();
@@ -220,7 +277,7 @@ mod tests {
             Token { term: "hello".to_string(), position: 0 },
             Token { term: "world".to_string(), position: 1 },
         ];
-        index.add_document(vec![1], &tokens, 2);
+        index.add_document(vec![1], &tokens, 2, HashMap::new());
 
         let bytes = index.serialize();
         let decoded = InvertedIndex::deserialize(&bytes).unwrap();
@@ -244,7 +301,7 @@ mod tests {
             Token { term: "hello".to_string(), position: 0 },
             Token { term: "world".to_string(), position: 1 },
         ];
-        index.add_document(vec![1], &tokens, 2);
+        index.add_document(vec![1], &tokens, 2, HashMap::new());
 
         let query = vec![
             Token { term: "hello".to_string(), position: 0 },

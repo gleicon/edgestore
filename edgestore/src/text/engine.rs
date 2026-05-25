@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::EdgestoreError;
+use crate::text::facet::FacetFilter;
 use crate::text::types::FacetValue;
 use crate::types::Lsn;
 
@@ -9,6 +10,17 @@ use crate::types::Lsn;
 pub struct TextSearchResult {
     pub doc_id: Vec<u8>,
     pub score: f32,
+}
+
+/// Search options for fine-grained control over text search behavior.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOptions {
+    /// Maximum number of results to return.
+    pub k: usize,
+    /// Optional facet filters to narrow results.
+    pub facet_filters: Vec<FacetFilter>,
+    /// Enable typo tolerance (edit distance ≤ 1).
+    pub typo_tolerance: bool,
 }
 
 /// Trait for full-text search operations on a KV engine.
@@ -31,6 +43,14 @@ pub trait TextEngine {
         ns: &[u8],
         query: &str,
         k: usize,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError>;
+
+    /// Search with full options (facets, typo tolerance, etc.).
+    fn search_text_with_options(
+        &self,
+        ns: &[u8],
+        query: &str,
+        options: &SearchOptions,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError>;
 
     /// Delete a text document from the index.

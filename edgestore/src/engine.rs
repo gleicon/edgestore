@@ -1224,7 +1224,7 @@ impl TextEngine for Engine {
         // Build/update the per-namespace inverted index
         let text_ns = text_namespace(ns);
         let mut index = InvertedIndex::new();
-        index.add_document(key.to_vec(), &tokens, doc_len);
+        index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
 
         // Serialize and store the inverted index entry
         let index_bytes = index.serialize();
@@ -1246,7 +1246,20 @@ impl TextEngine for Engine {
         query: &str,
         k: usize,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        if k == 0 {
+        self.search_text_with_options(
+            ns,
+            query,
+            &crate::text::engine::SearchOptions { k, ..Default::default() },
+        )
+    }
+
+    fn search_text_with_options(
+        &self,
+        ns: &[u8],
+        query: &str,
+        options: &crate::text::engine::SearchOptions,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+        if options.k == 0 {
             return Ok(vec![]);
         }
 
@@ -1279,12 +1292,36 @@ impl TextEngine for Engine {
             return Ok(vec![]);
         }
 
-        // Collect unique doc IDs from query term postings
+        // Collect terms to search (exact + typo-tolerant variants)
+        let mut search_terms: Vec<String> = query_tokens.iter().map(|t| t.term.clone()).collect();
+        
+        if options.typo_tolerance {
+            for token in &query_tokens {
+                for term in aggregated.postings.keys() {
+                    if term != &token.term
+                        && crate::text::typo::is_one_edit_away(term, &token.term)
+                        && !search_terms.contains(term)
+                    {
+                        search_terms.push(term.clone());
+                    }
+                }
+            }
+        }
+
+        // Collect unique doc IDs from query term postings, with facet filtering
         let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
-        for token in &query_tokens {
-            if let Some(postings) = aggregated.postings.get(&token.term) {
-                for posting in postings {
-                    let score = score_document(&aggregated, &posting.doc_id, std::slice::from_ref(token));
+        for term in &search_terms {
+            if let Some(postings) = aggregated.postings.get(term) {
+                let filtered = if !options.facet_filters.is_empty() {
+                    crate::text::facet::filter_by_facets(postings, &options.facet_filters)
+                } else {
+                    postings.to_vec()
+                };
+                
+                for posting in &filtered {
+                    let is_fuzzy = !query_tokens.iter().any(|t| &t.term == term);
+                    let weight = if is_fuzzy { 0.5 } else { 1.0 }; // Fuzzy matches get half weight
+                    let score = score_document(&aggregated, &posting.doc_id, &[crate::text::tokenizer::Token { term: term.clone(), position: 0 }]) * weight;
                     *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
                 }
             }
@@ -1295,8 +1332,15 @@ impl TextEngine for Engine {
             .into_iter()
             .map(|(doc_id, score)| TextSearchResult { doc_id, score })
             .collect();
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(k);
+        results.sort_by(|a, b| {
+            let score_cmp = b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal);
+            if score_cmp == std::cmp::Ordering::Equal {
+                a.doc_id.cmp(&b.doc_id) // Tiebreaker: lexicographic doc_id
+            } else {
+                score_cmp
+            }
+        });
+        results.truncate(options.k);
 
         Ok(results)
     }

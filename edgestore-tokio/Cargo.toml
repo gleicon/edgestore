@@ -1,0 +1,12 @@
+[package]
+name = "edgestore-tokio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+edgestore = { path = "../edgestore" }
+tokio = { version = "1.44", features = ["sync", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread"] }
+tempfile = "*"

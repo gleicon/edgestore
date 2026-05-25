@@ -1,6 +1,6 @@
 use crate::types::MemEntry;
 
-pub trait MemTable: Send {
+pub trait MemTable: Send + Sync {
     fn insert(&mut self, key: Vec<u8>, entry: MemEntry);
     fn get(&self, key: &[u8]) -> Option<&MemEntry>;
     fn range<'a>(&'a self, start: &[u8], end: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)>;

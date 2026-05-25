@@ -27,3 +27,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "vector_search"
 harness = false
+
+[[bench]]
+name = "hnsw_recall"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false

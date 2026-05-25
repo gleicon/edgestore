@@ -1,3 +1,3 @@
 [workspace]
-members = ["edgestore", "edgestore-repl"]
+members = ["edgestore", "edgestore-repl", "edgestore-tokio"]
 resolver = "2"

@@ -49,15 +49,16 @@ impl Eq for Candidate {}
 
 impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.distance
-            .partial_cmp(&other.distance)
-            .map(|o| o.then(self.node_idx.cmp(&other.node_idx)))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+        self.distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| self.node_idx.cmp(&other.node_idx))
     }
 }
 
@@ -100,8 +101,7 @@ impl HnswIndex {
         let r = self.next_rng();
         // Protect against r == 0 which would give ln(0) = -inf
         let r = r.max(1e-10);
-        let layer = (-r.ln() * m_l).floor() as usize;
-        layer
+        (-r.ln() * m_l).floor() as usize
     }
 
     /// Compute distance between the query vector (raw bytes) and a node.

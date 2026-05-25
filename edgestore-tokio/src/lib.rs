@@ -26,8 +26,7 @@ impl AsyncEngine {
     pub async fn open(config: EdgestoreConfig) -> Result<Self, EdgestoreError> {
         let engine = tokio::task::spawn_blocking(move || Engine::open(config))
             .await
-            .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|e| EdgestoreError::Io(std::io::Error::other(
                 format!("spawn_blocking failed: {}", e),
             )))??;
         Ok(AsyncEngine {
@@ -45,9 +44,7 @@ impl AsyncEngine {
             engine.get(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -62,9 +59,7 @@ impl AsyncEngine {
             engine.put(&ns, &key, &val)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -78,9 +73,7 @@ impl AsyncEngine {
             engine.delete(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -94,9 +87,7 @@ impl AsyncEngine {
             engine.prefix(&ns, &prefix)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -118,9 +109,7 @@ impl AsyncEngine {
             engine.vector_put(&ns, &key, dims, dtype, &data)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -134,9 +123,7 @@ impl AsyncEngine {
             engine.vector_get(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -150,9 +137,7 @@ impl AsyncEngine {
             engine.vector_delete(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -172,9 +157,7 @@ impl AsyncEngine {
             engine.vector_search(&ns, &query, k, metric)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -187,9 +170,7 @@ impl AsyncEngine {
             engine.build_vector_index(&ns)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -202,9 +183,7 @@ impl AsyncEngine {
             engine.preload_vector_index(&ns)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -216,9 +195,7 @@ impl AsyncEngine {
             engine.flush()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 
@@ -247,9 +224,7 @@ impl AsyncEngine {
             engine.import_segment(&data, &expected_hash)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("spawn_blocking failed: {}", e),
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
         )))?
     }
 }

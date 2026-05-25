@@ -66,6 +66,7 @@ pub trait StorageBackend: Send + Sync {
 }
 
 /// Default local-filesystem backend.
+#[derive(Default)]
 pub struct DefaultStorageBackend;
 
 impl DefaultStorageBackend {
@@ -88,6 +89,7 @@ impl StorageBackend for DefaultStorageBackend {
         std::fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(path)?;
         f.seek(SeekFrom::Start(offset))?;
@@ -109,6 +111,12 @@ impl StorageBackend for DefaultStorageBackend {
 /// In-memory backend for unit tests.
 pub struct MemoryStorageBackend {
     files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+}
+
+impl Default for MemoryStorageBackend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryStorageBackend {

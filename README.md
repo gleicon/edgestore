@@ -1,171 +1,157 @@
 # EdgeStore
 
-Local-first embedded KV database in Rust. Append-oriented, SSD-aware, single-writer, library-only.
+[![CI](https://github.com/edgestore/edgestore/workflows/CI/badge.svg)](https://github.com/edgestore/edgestore/actions)
+[![Crates.io](https://img.shields.io/crates/v/edgestore.svg)](https://crates.io/crates/edgestore)
+[![docs.rs](https://docs.rs/edgestore/badge.svg)](https://docs.rs/edgestore)
 
-No mandatory server process. Embed it like SQLite or RocksDB.
+**Local-first embedded KV + vector database in Rust.**
 
-**Status:** Core KV engine, WAL, memtable, immutable segment store, deathtime-cohort compaction, and point-in-time snapshots are complete (Phases 1–3 + 4.1). Replication and vector search are in progress.
+EdgeStore is an SSD-aware, append-only embedded database for edge deployments.
+It pairs local NVMe fast-path writes with S3-safe recovery,
+and uses **deathtime-cohort compaction** (VLDB 2026) to drive device write
+amplification toward 1.0 — no existing embedded database does this.
 
----
-
-## Design
-
-### Append-only, never in-place
-
-All writes append to a WAL. The WAL is periodically flushed into immutable sorted segment files. Existing segments are never modified. Old versions of a key coexist with new versions until compaction removes them. This maps cleanly to SSD write patterns: sequential appends, no random overwrites, write amplification factor approaching 1.
-
-### Deathtime-cohort compaction
-
-Records carry a `death_time` derived from their creation timestamp and TTL. At compaction time, records are grouped by cohort bucket (1-hour window by default). When all records in a cohort have expired, the entire cohort's segments are collected without relocating any live data — zero live-record amplification for fully-expired cohorts. Live records are relocated only when a cohort is partially expired. This is the core insight from Lee et al. (VLDB 2026): grouping by expected death time, not by size, drives write amplification to near zero.
-
-### Namespaces
-
-Keys are prefix-encoded as `{ns_len:u16}{ns_bytes}{key_bytes}`. Namespace separation is logical, not structural — no per-namespace files or column families. All namespaces share one WAL and one segment pool. Prefix-encoded namespaces produce adjacent key ranges, making cross-namespace range scans impossible by construction.
-
-### Probabilistic filters
-
-Each segment carries an xor filter (not bloom) over its key set. Point reads that miss the filter skip the segment entirely without touching disk. False positive rate defaults to 1%.
-
-### Content addressing
-
-Segment files are content-addressed with BLAKE3. The manifest stores per-segment hashes for integrity verification and future Merkle-based replication.
-
-### Lazy expiry
-
-TTL-expired records are readable until `compact_once` removes their cohort. There are no per-read TTL checks. This keeps the hot read path branchless with respect to TTL.
+Library-first. No mandatory server. No mandatory async runtime.
 
 ---
 
 ## Quick Start
 
-```toml
-[dependencies]
-edgestore = { path = "edgestore" }
-```
-
 ```rust
 use edgestore::{EdgestoreConfig, Engine};
 
-let config = EdgestoreConfig::new("./mydb");
-let mut engine = Engine::open(config)?;
+let config = EdgestoreConfig::new("/tmp/mydb");
+let mut db = Engine::open(config)?;
 
-engine.put(b"users", b"alice", b"active")?;
-let val = engine.get(b"users", b"alice")?; // Some(b"active".to_vec())
+db.put(b"default", b"hello", b"world")?;
+let value = db.get(b"default", b"hello")?;
+assert_eq!(value, Some(b"world".to_vec()));
 
-engine.flush()?; // fsync WAL
+db.flush()?; // WAL fsync + optional memtable flush
 ```
 
-Run the persistent demo:
-
-```sh
-cargo run --example demo   # run multiple times to observe accumulating state
-```
-
-Each execution opens the same `./edgestore_demo.db`, writes new records, and reads back the full history. On every third run it flushes the memtable to immutable segments; snapshots taken after a flush see the new data.
+See [`examples/`](examples/) for vector search, transactions, and replication.
 
 ---
 
-## API Reference
+## Feature Matrix
 
-### Engine
-
-```rust
-Engine::open(config: EdgestoreConfig) -> Result<Engine, EdgestoreError>
-```
-Opens or creates a database at `config.path`. Acquires an exclusive write lock. Recovers from all WAL files present, sorted by LSN.
-
-```rust
-engine.put(ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError>
-engine.put_with_ttl(ns: &[u8], key: &[u8], val: &[u8], ttl_secs: u32) -> Result<Lsn, EdgestoreError>
-engine.delete(ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError>
-```
-Appends to WAL and updates memtable. Returns the log sequence number. `put_with_ttl` sets a death time `now + ttl_secs`; the record remains readable until compaction collects its cohort.
-
-```rust
-engine.get(ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError>
-```
-Reads from memtable first, then segments (newest-first). Returns the highest-LSN live value.
-
-```rust
-engine.range(ns: &[u8], start: &[u8], end: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError>
-```
-Returns keys in `[start, end)` — exclusive end, matching standard range conventions. Merges memtable and segment results, LWW by LSN.
-
-```rust
-engine.prefix(ns: &[u8], prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError>
-```
-Returns all keys beginning with `prefix`. Uses an exclusive upper bound computed by incrementing the last non-`0xFF` byte.
-
-```rust
-engine.flush(&mut self) -> Result<(), EdgestoreError>
-```
-Fsyncs the current WAL file. Does not create a segment.
-
-```rust
-engine.flush_to_segments(&mut self) -> Result<SegmentMeta, EdgestoreError>
-```
-Serializes the entire memtable into a new immutable segment file (ZSTD compressed, xor filter, BLAKE3 hash), registers it in the manifest, and clears the memtable. After this call, snapshots will see the new data.
-
-```rust
-engine.compact_once(&mut self) -> Result<CompactionStats, EdgestoreError>
-```
-Runs one bounded compaction cycle. Collects fully-expired cohorts, partially rewrites mixed cohorts (LWW merge + dead-record filter), respects `compaction_write_budget_bytes`, skips pinned segments. Reloads the segment store from the manifest after completion.
-
-```rust
-engine.snapshot(&self) -> Result<Snapshot, EdgestoreError>
-```
-Returns a `Snapshot` that pins the current set of segment IDs. The snapshot reads from those segments only — writes after the snapshot was taken are not visible. Pins are released when the `Snapshot` is dropped.
-
-### Transactions
-
-```rust
-let mut tx = engine.begin();
-tx.put(ns, key, val, 0, 0)?;
-tx.put_with_ttl(ns, key, val, ttl_secs, 0, 0)?;
-tx.delete(ns, key, 0, 0)?;
-engine.commit_transaction(tx)?;  // or: tx.commit(&mut engine)?
-```
-All operations in a transaction are written to WAL as a group and fsynced together. Commit is atomic. Rollback discards pending records without writing anything. A transaction that is neither committed nor rolled back before drop will leave pending records silently discarded.
-
-### Snapshot
-
-```rust
-let snap = engine.snapshot()?;
-snap.get(ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError>
-snap.range(ns: &[u8], start: &[u8], end: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError>
-```
-Reads from the segment set that was pinned at snapshot creation time. Memtable writes after `engine.snapshot()` are invisible. Segments are not garbage-collected while any snapshot holds a pin.
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **KV store** (put/get/delete/range/prefix) | ✅ v1.0 | Ordered byte keys, namespaced |
+| **Transactions** (begin/commit/rollback) | ✅ v1.0 | Single-writer, group commit |
+| **TTL / Lazy expiry** | ✅ v1.0 | `put_with_ttl`; expired data removed at compaction |
+| **Snapshots** | ✅ v1.0 | RAII point-in-time reads |
+| **Vector search** (flat SIMD) | ✅ v1.0 | Cosine, dot, euclidean; f32/f16/i8 |
+| **HNSW index** | ✅ v1.0 | Approximate search for large collections |
+| **Full-text search** (BM25) | ✅ v1.0 | Tokenization, faceting, typo tolerance |
+| **Replication** (Merkle delta sync) | ✅ v1.0 | Transport-agnostic; HTTP + S3 backends |
+| **S3 cold storage** | ✅ v1.0 | Archive + replication mailbox |
+| **SSD optimization** | ✅ v1.0 | FDP placement hints, deathtime-cohort WAF≈1 |
 
 ---
 
-## Configuration
+## Installation
 
-```rust
-EdgestoreConfig::new(path)
+Add to `Cargo.toml`:
+
+```toml
+[dependencies]
+edgestore = "1.0"
 ```
 
-| Field | Default | Description |
-|---|---|---|
-| `wal_max_bytes` | 64 MiB | WAL file size threshold; rotation creates a new WAL file |
-| `wal_max_age_secs` | 60 s | WAL age threshold for rotation |
-| `segment_size_bytes` | 16 MiB | Target size for flushed segment files |
-| `cohort_window_secs` | 3600 s | Cohort bucket width for deathtime grouping |
-| `compression_wal` | LZ4 | WAL frame compression |
-| `compression_segments` | ZSTD(1) | Segment block compression |
-| `xor_filter_fpr` | 0.01 | Xor filter false positive rate |
-| `compaction_write_budget_bytes` | 256 MiB | Max bytes written per `compact_once` call |
+Or run:
+
+```bash
+cargo add edgestore
+```
+
+Optional async wrapper:
+
+```toml
+edgestore-tokio = "1.0"
+```
+
+Optional replication transport:
+
+```toml
+edgestore-repl = "1.0"
+```
+
+Minimum supported Rust version: **1.85** (2024 edition).
 
 ---
 
-## References
+## Architecture Overview
 
-- Lee et al., **"Deathtime-Based Grouping for Out-of-Place Key-Value Stores"**, VLDB 2026, Vol. 19(6): 1469–1482. https://www.vldb.org/pvldb/vol19/p1469-lee.pdf — primary design reference; deathtime-cohort compaction, 7.8× write amplification reduction vs. size-tiered.
-- Durner et al., **"The SSD Survival Guide"**, VLDB 2023, Vol. 16(11): 2769–2782. https://www.vldb.org/pvldb/vol16/p2769-durner.pdf — SSD write amplification analysis and workload classification.
-- SlateDB. https://github.com/slatedb/slatedb — S3-backed LSM reference implementation.
-- EloqData, **"How NVMe and S3 Reshape Decoupled Storage"**, 2025. https://www.eloqdata.com/blog/2025/10/24/how-nvme-and-s3-reshape-decoupling
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Application                                                │
+│    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│    │   KV API     │  │ Vector API   │  │  Text API    │   │
+│    └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
+└───────────┼─────────────────┼─────────────────┼───────────┘
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Engine (single writer + group commit)                    │
+│    • Transactions, namespace isolation, LWW conflict res.   │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ writes batches
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  WAL (LZ4, CRC32C)                    Memtable (BTreeMap)   │
+│  • Append-only, rotated at 64 MB / 60 s  • In-memory buf   │
+│  • Crash recovery source                 • Flushed → segment│
+└─────────────────────────────────────────────────────────────┘
+                      │ flushes
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Segment Store                                              │
+│    • Immutable SSTables (ZSTD L1, 4 KiB blocks, 16 MB)      │
+│    • Sparse index + xor filter + BLAKE3 content addressing  │
+│    • Manifest: live segment tracking, Merkle roots           │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  SSD / NVMe / S3 (via StorageBackend trait)                 │
+│    • Deathtime-cohort compaction → WAF → 1.0                │
+│    • FDP placement hints on supported hardware              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+For a deep dive, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## Documentation
+
+- **API reference:** [docs.rs/edgestore](https://docs.rs/edgestore)
+- **Architecture & file formats:** [ARCHITECTURE.md](ARCHITECTURE.md)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+- **Design spec:** [prod.md](prod.md)
 
 ---
 
 ## License
 
-MIT
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
+Please read our [Contributing Guide](CONTRIBUTING.md) before submitting.
+
+---
+
+*EdgeStore is not affiliated with the VLDB organization. The deathtime-cohort
+technique is described in Lee et al., VLDB 2026.*

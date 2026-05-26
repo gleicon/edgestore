@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-  current_phase: 07
-  status: Complete
+  current_phase: 08
+  status: Planned
   last_updated: "2026-05-25T06:30:00.000Z"
   progress:
     total_phases: 8
     completed_phases: 7
-    total_plans: 43
-    completed_plans: 38
-    percent: 88
+    total_plans: 50
+    completed_plans: 39
+    percent: 90
 ---
 
 # Project State — EdgeStore
@@ -33,7 +33,7 @@ milestone_name: milestone
 | 5 — Vector Search | Complete | 2026-05-23 | 2026-05-23 |
 | 6 — SSD Optimization + HNSW | Complete | 2026-05-25 | 2026-05-25 |
 | 7 — Full-Text Search (v2) | Complete | 2026-05-25 | 2026-05-25 |
-| 8 — v1.0 Polish & Release | Not started | — | — |
+| 8 — v1.0 Polish & Release | Planned | 2026-05-25 | — |
 
 ## Requirement Status
 
@@ -259,3 +259,33 @@ All 5 plans executed successfully:
 - 421 tests pass (180 lib + 237 integration + 4 tokio)
 - cargo clippy --workspace -D warnings clean
 - 4 benchmarks compile (vector_search, hnsw_recall, throughput, text_search)
+
+## Phase 8 Plans
+
+| Plan | Wave | Title | Requirements | Status |
+|------|------|-------|--------------|--------|
+| 08-01 | 1 | API polish: rustdoc, clippy, visibility, feature flags, metadata | POLISH-01, POLISH-02, POLISH-05 | Planned |
+| 08-02a | 1 | Core documentation: README, ARCHITECTURE.md, CHANGELOG | POLISH-03 | Planned |
+| 08-02b | 1 | Benchmarks, examples, and license files | POLISH-03, POLISH-07 | **Complete** |
+| 08-03a | 2 | CLI scaffold and core subcommands | POLISH-04 | Planned |
+| 08-03b | 2 | CLI advanced subcommands and build config | POLISH-04 | Planned |
+| 08-04a | 3 | Final integration test and metadata finalization | POLISH-05, POLISH-06 | Planned |
+| 08-04b | 3 | Publish dry-run, benchmarks, and final validation | POLISH-07, POLISH-08 | Planned |
+
+### Plan 08-02b Completion (2026-05-25)
+
+- **BENCHMARKS.md**: Documents all 4 benchmark binaries, methodology, hardware requirements, and placeholder results for 6 measurement categories
+- **Examples**: 3 runnable examples in `edgestore/examples/`
+  - `basic_kv.rs`: namespace put/get/range/prefix/delete
+  - `vector_search.rs`: 1000 vectors, HNSW build, ANN search top-5
+  - `replication.rs`: primary→replica segment export/import with merkle sync
+- **Licenses**: Dual MIT/Apache-2.0 at repo root; Cargo.toml updated with `license = "MIT OR Apache-2.0"`
+- All examples compile and run with `cargo run --example <name>`
+- Commits: 0981f2e, 0fd7011, c3f00e3
+
+## Phase 8 Planning Notes
+
+- Phase 8 planning completed 2026-05-25
+- 7 plans across 3 waves
+- All 8 POLISH requirements mapped
+- Plans verified by plan-checker agent — no blockers remaining

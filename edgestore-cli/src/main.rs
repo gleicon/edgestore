@@ -544,14 +544,11 @@ fn handle_compact(cmd: Compact) -> Result<(), Box<dyn std::error::Error>> {
     let lock_path = cmd.path.join("LOCK");
     if lock_path.exists() {
         // Try to open lock file to check if database is busy
-        match std::fs::OpenOptions::new().write(true).open(&lock_path) {
-            Ok(file) => {
-                use fs2::FileExt;
-                if let Err(_) = file.try_lock_exclusive() {
-                    return Err("Database is locked by another process. Please close other connections to this database first.".into());
-                }
+        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&lock_path) {
+            use fs2::FileExt;
+            if file.try_lock_exclusive().is_err() {
+                return Err("Database is locked by another process. Please close other connections to this database first.".into());
             }
-            Err(_) => {}
         }
     }
 
@@ -685,7 +682,7 @@ fn handle_export(cmd: Export) -> Result<(), Box<dyn std::error::Error>> {
             writer.write_all(json.as_bytes())?;
 
             count += 1;
-            if count % 1000 == 0 {
+            if count.is_multiple_of(1000) {
                 eprintln!("Exported {} keys...", count);
             }
         }
@@ -717,7 +714,7 @@ fn handle_export(cmd: Export) -> Result<(), Box<dyn std::error::Error>> {
             writer.write_all(&value)?;
 
             count += 1;
-            if count % 1000 == 0 {
+            if count.is_multiple_of(1000) {
                 eprintln!("Exported {} keys...", count);
             }
         }
@@ -740,6 +737,7 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
         key: String,
         value: String,
         #[serde(default)]
+        #[allow(dead_code)]
         ttl: Option<u64>,
     }
 
@@ -781,7 +779,7 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to store key '{}': {}", record.key, e))?;
 
             count += 1;
-            if count % 1000 == 0 {
+            if count.is_multiple_of(1000) {
                 eprintln!("Imported {}/{} keys...", count, total);
             }
         }
@@ -848,7 +846,7 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to store record: {}", e))?;
 
             count += 1;
-            if count % 1000 == 0 {
+            if count.is_multiple_of(1000) {
                 eprintln!("Imported {} keys...", count);
             }
         }

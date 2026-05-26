@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EdgeStore — Local-First Embedded KV + Vector Database</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            edge: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              200: '#bae6fd',
+              300: '#7dd3fc',
+              400: '#38bdf8',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+              800: '#075985',
+              900: '#0c4a6e',
+            },
+            rust: {
+              500: '#dea584',
+              600: '#c56c3a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .gradient-hero {
+      background: linear-gradient(135deg, #0c4a6e 0%, #0369a1 50%, #0ea5e9 100%);
+    }
+    .code-block {
+      background: #1e293b;
+      border-radius: 0.5rem;
+      overflow-x: auto;
+    }
+    .code-block code {
+      color: #e2e8f0;
+    }
+    .keyword { color: #c678dd; }
+    .string { color: #98c379; }
+    .function { color: #61afef; }
+    .comment { color: #5c6370; font-style: italic; }
+    .type { color: #e5c07b; }
+    .number { color: #d19a66; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+
+  <!-- Navigation -->
+  <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center">
+            <span class="text-white font-bold text-sm">E</span>
+          </div>
+          <span class="font-bold text-xl text-slate-800">EdgeStore</span>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="text-edge-600 font-medium">Home</a>
+          <a href="features.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Features</a>
+          <a href="examples.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Examples</a>
+          <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
+          <a href="api.html" class="text-slate-600 hover:text-edge-600 font-medium transition">API</a>
+        </div>
+        <div class="flex items-center space-x-4">
+          <a href="https://github.com/gleicon/edgestore" class="text-slate-500 hover:text-slate-800 transition">
+            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          </a>
+          <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition">docs.rs</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="gradient-hero text-white py-20 lg:py-28">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <div class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 text-sm font-medium mb-6 border border-white/20">
+            <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
+            v1.0 Released
+          </div>
+          <h1 class="text-4xl lg:text-6xl font-bold leading-tight mb-6">
+            Local-First Embedded<br>
+            <span class="text-edge-200">KV + Vector Database</span>
+          </h1>
+          <p class="text-lg text-blue-100 mb-8 max-w-xl leading-relaxed">
+            SSD-aware, append-only storage with deathtime-cohort compaction.
+            Built in Rust. Ships as a library. No server required.
+          </p>
+          <div class="flex flex-wrap gap-4">
+            <a href="examples.html" class="px-6 py-3 bg-white text-edge-700 rounded-lg font-semibold hover:bg-blue-50 transition">Get Started</a>
+            <a href="papers.html" class="px-6 py-3 bg-white/10 text-white rounded-lg font-semibold border border-white/20 hover:bg-white/20 transition">Read the Research</a>
+          </div>
+        </div>
+        <div class="hidden lg:block">
+          <div class="code-block p-6 shadow-2xl">
+            <pre><code><span class="keyword">use</span> edgestore::{EdgestoreConfig, Engine};
+
+<span class="keyword">let</span> config = EdgestoreConfig::new(<span class="string">"/tmp/mydb"</span>);
+<span class="keyword">let mut</span> db = Engine::open(config)?;
+
+db.put(<span class="string">b"default"</span>, <span class="string">b"hello"</span>, <span class="string">b"world"</span>)?;
+<span class="keyword">let</span> value = db.get(<span class="string">b"default"</span>, <span class="string">b"hello"</span>)?;
+
+<span class="comment">// Vector search</span>
+db.vector_put(<span class="string">b"vec"</span>, <span class="string">b"doc1"</span>, <span class="number">128</span>, <span class="type">Dtype::F32</span>, &vector_data)?;
+<span class="keyword">let</span> results = db.vector_search(<span class="string">b"vec"</span>, &query, <span class="number">10</span>, <span class="type">Metric::Cosine</span>)?;
+
+<span class="comment">// Full-text search</span>
+db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is fast"</span>)?;
+<span class="keyword">let</span> hits = db.search_text(<span class="string">b"docs"</span>, <span class="string">"fast database"</span>, <span class="number">5</span>)?;</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature Grid -->
+  <section class="py-20 bg-white">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="text-center mb-16">
+        <h2 class="text-3xl font-bold text-slate-900 mb-4">Everything you need, nothing you don't</h2>
+        <p class="text-lg text-slate-600 max-w-2xl mx-auto">
+          EdgeStore bundles KV storage, vector search, full-text search, and replication into one compact embedded library.
+        </p>
+      </div>
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">KV Store</h3>
+          <p class="text-slate-600 text-sm">Ordered byte keys, namespaced isolation, range scans, prefix queries. Single-writer with group commit.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">TTL & Lazy Expiry</h3>
+          <p class="text-slate-600 text-sm"><code>put_with_ttl</code> for time-bound records. Expired cohorts compact with zero live-data relocation.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Transactions</h3>
+          <p class="text-slate-600 text-sm">Atomic multi-record batches. Begin, commit, rollback. WAL-backed durability with fsync group commit.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Vector Search</h3>
+          <p class="text-slate-600 text-sm">Flat SIMD scan and HNSW approximate search. Cosine, L2, dot product. f32, f16, i8 dtypes.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Full-Text Search</h3>
+          <p class="text-slate-600 text-sm">BM25 ranking, English tokenization, faceting, typo tolerance (Levenshtein distance ≤ 1).</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Replication</h3>
+          <p class="text-slate-600 text-sm">Merkle-based delta sync. Content-addressed segments (BLAKE3). HTTP + S3 transports.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Teaser -->
+  <section class="py-20 bg-slate-100">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <h2 class="text-3xl font-bold text-slate-900 mb-4">SSD-First Architecture</h2>
+          <p class="text-slate-600 mb-6 leading-relaxed">
+            EdgeStore uses <strong>deathtime-cohort compaction</strong> — a technique from VLDB 2026 research —
+            to group records by their predicted invalidation time instead of size tiers.
+          </p>
+          <p class="text-slate-600 mb-6 leading-relaxed">
+            When a cohort fully expires, compaction reclaims space with <strong>zero live-data reads or writes</strong>.
+            This drives device write amplification toward 1.0, a 10-30x improvement over level-based LSM trees.
+          </p>
+          <a href="papers.html" class="inline-flex items-center text-edge-600 font-semibold hover:text-edge-700 transition">
+            Read how the research shaped EdgeStore
+            <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+          </a>
+        </div>
+        <div class="bg-white rounded-xl p-8 shadow-sm border border-slate-200">
+          <div class="space-y-4">
+            <div class="flex items-center space-x-3 p-3 bg-slate-50 rounded-lg">
+              <div class="w-3 h-3 bg-edge-500 rounded-full"></div>
+              <span class="text-sm font-medium text-slate-700">Application Layer (KV / Vector / Text)</span>
+            </div>
+            <div class="flex items-center space-x-3 p-3 bg-slate-50 rounded-lg">
+              <div class="w-3 h-3 bg-edge-600 rounded-full"></div>
+              <span class="text-sm font-medium text-slate-700">Engine — Single Writer + Group Commit</span>
+            </div>
+            <div class="flex items-center space-x-3 p-3 bg-slate-50 rounded-lg">
+              <div class="w-3 h-3 bg-rust-500 rounded-full"></div>
+              <span class="text-sm font-medium text-slate-700">WAL (LZ4) + Memtable (BTreeMap)</span>
+            </div>
+            <div class="flex items-center space-x-3 p-3 bg-slate-50 rounded-lg">
+              <div class="w-3 h-3 bg-rust-600 rounded-full"></div>
+              <span class="text-sm font-medium text-slate-700">Segment Store (ZSTD, xor filters, sparse index)</span>
+            </div>
+            <div class="flex items-center space-x-3 p-3 bg-slate-50 rounded-lg">
+              <div class="w-3 h-3 bg-green-500 rounded-full"></div>
+              <span class="text-sm font-medium text-slate-700">SSD / NVMe / S3 (StorageBackend trait)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section class="py-20 bg-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <h2 class="text-3xl font-bold text-slate-900 mb-8">Installation</h2>
+      <div class="grid md:grid-cols-3 gap-6 text-left">
+        <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
+          <h3 class="font-semibold text-slate-900 mb-2">Core Library</h3>
+          <pre class="code-block p-3 text-sm"><code>cargo add edgestore</code></pre>
+        </div>
+        <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
+          <h3 class="font-semibold text-slate-900 mb-2">Async Wrapper</h3>
+          <pre class="code-block p-3 text-sm"><code>cargo add edgestore-tokio</code></pre>
+        </div>
+        <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
+          <h3 class="font-semibold text-slate-900 mb-2">CLI Tool</h3>
+          <pre class="code-block p-3 text-sm"><code>cargo install edgestore-cli</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="bg-slate-900 text-slate-400 py-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid md:grid-cols-4 gap-8">
+        <div>
+          <div class="flex items-center space-x-2 mb-4">
+            <div class="w-6 h-6 bg-edge-500 rounded flex items-center justify-center">
+              <span class="text-white font-bold text-xs">E</span>
+            </div>
+            <span class="text-white font-semibold">EdgeStore</span>
+          </div>
+          <p class="text-sm">Local-first embedded database for edge deployments.</p>
+        </div>
+        <div>
+          <h4 class="text-white font-semibold mb-3">Docs</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="features.html" class="hover:text-white transition">Features</a></li>
+            <li><a href="examples.html" class="hover:text-white transition">Examples</a></li>
+            <li><a href="api.html" class="hover:text-white transition">API Reference</a></li>
+            <li><a href="papers.html" class="hover:text-white transition">Research</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="text-white font-semibold mb-3">Resources</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="https://docs.rs/edgestore" class="hover:text-white transition">docs.rs</a></li>
+            <li><a href="../ARCHITECTURE.md" class="hover:text-white transition">Architecture</a></li>
+            <li><a href="../CHANGELOG.md" class="hover:text-white transition">Changelog</a></li>
+            <li><a href="../BENCHMARKS.md" class="hover:text-white transition">Benchmarks</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="text-white font-semibold mb-3">Community</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="https://github.com/gleicon/edgestore" class="hover:text-white transition">GitHub</a></li>
+            <li><a href="../LICENSE-MIT" class="hover:text-white transition">MIT License</a></li>
+            <li><a href="../LICENSE-APACHE" class="hover:text-white transition">Apache-2.0</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="border-t border-slate-800 mt-8 pt-8 text-sm text-center">
+        <p>EdgeStore is not affiliated with the VLDB organization. Research citations are for attribution only.</p>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Compression","Operation"],"fn":["cohort_bucket_for","death_time_for","decode_key","encode_key"],"struct":["MemEntry","SegmentMeta","WalRecord"],"type":["Lsn","SegmentId"]};
+window.SIDEBAR_ITEMS = {"enum":["Compression","Operation"],"fn":["encode_key"],"struct":["MemEntry","SegmentMeta","WalRecord"],"type":["Lsn","SegmentId"]};

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Overview — EdgeStore</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          colors: { edge: { 50:'#f0f9ff',100:'#e0f2fe',200:'#bae6fd',300:'#7dd3fc',400:'#38bdf8',500:'#0ea5e9',600:'#0284c7',700:'#0369a1',800:'#075985',900:'#0c4a6e' } }
+        }
+      }
+    }
+  </script>
+  <style>
+    .code-block { background: #1e293b; border-radius: 0.5rem; overflow-x: auto; }
+    .code-block code { color: #e2e8f0; }
+    .keyword { color: #c678dd; } .string { color: #98c379; } .function { color: #61afef; }
+    .comment { color: #5c6370; font-style: italic; } .type { color: #e5c07b; } .number { color: #d19a66; }
+    .api-item { transition: all 0.15s; }
+    .api-item:hover { background: #f8fafc; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+
+  <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center"><span class="text-white font-bold text-sm">E</span></div>
+          <a href="index.html" class="font-bold text-xl text-slate-800">EdgeStore</a>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Home</a>
+          <a href="features.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Features</a>
+          <a href="examples.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Examples</a>
+          <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
+          <a href="api.html" class="text-edge-600 font-medium">API</a>
+        </div>
+        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <h1 class="text-4xl font-bold text-slate-900 mb-4">API Overview</h1>
+    <p class="text-lg text-slate-600 mb-8 max-w-3xl">
+      EdgeStore's public API surface is intentionally small. The core type is <code>Engine</code> — everything else is configuration, traits, or return types.
+      For full rustdoc, see <a href="https://docs.rs/edgestore" class="text-edge-600 hover:underline">docs.rs/edgestore</a>.
+    </p>
+
+    <!-- Quick Nav -->
+    <div class="flex flex-wrap gap-2 mb-10">
+      <a href="#engine" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Engine</a>
+      <a href="#config" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Config</a>
+      <a href="#kv" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">KV API</a>
+      <a href="#vector" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Vector</a>
+      <a href="#text" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Text</a>
+      <a href="#replication" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Replication</a>
+      <a href="#types" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Types</a>
+    </div>
+
+    <!-- Engine -->
+    <section id="engine" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Engine
+      </h2>
+      <p class="text-slate-600 mb-4">The single-writer KV engine. All mutations go through one <code>Engine</code> instance per database directory.</p>
+
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">Engine::open(config: EdgestoreConfig) -> Result&lt;Engine, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Open or create a database at the path specified in config. Acquires a file lock to enforce single-writer semantics.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.put(ns, key, val) -> Result&lt;Lsn, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Write a key-value pair in the given namespace. Appends to WAL, then memtable. Returns the assigned LSN.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.put_with_ttl(ns, key, val, ttl_seconds) -> Result&lt;Lsn, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Write with a time-to-live. Expired via deathtime-cohort compaction, not per-read checks.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.get(ns, key) -> Result&lt;Option&lt;Vec&lt;u8&gt;&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Point lookup. Checks memtable first, then segments in LSN order (newest wins).</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.delete(ns, key) -> Result&lt;Lsn, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Write a delete tombstone. Visible to subsequent reads; removed at compaction.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.range(ns, start, end) -> Result&lt;Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Range scan with <strong>exclusive</strong> end bound. Returns latest LSN values across memtable and all segments.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.prefix(ns, prefix) -> Result&lt;Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Prefix scan. Efficient for time-series keys, hierarchical data, etc.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.flush() -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Force WAL fsync. Does not flush memtable to segments.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.flush_to_segments() -> Result&lt;SegmentMeta, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Flush memtable to an immutable segment on disk. Creates .dat, .idx, .xf, and .meta files.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.compact_once() -> Result&lt;CompactionStats, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Run one deathtime-cohort compaction cycle. Budget-bounded; stops after first partial cohort if write budget exhausted.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.snapshot() -> Result&lt;Snapshot, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Capture a point-in-time view of current segments. RAII release on Drop.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.metrics() -> MetricsSnapshot</code>
+          <p class="text-slate-600 text-sm mt-1">Return current engine metrics: segment count, memtable entries, WAL files, total bytes.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Config -->
+    <section id="config" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Configuration
+      </h2>
+      <div class="code-block p-4 mb-4">
+        <pre><code><span class="keyword">use</span> edgestore::EdgestoreConfig;
+
+<span class="keyword">let</span> config = EdgestoreConfig::new(<span class="string">"/tmp/mydb"</span>)
+    .with_wal_max_bytes(<span class="number">64</span> * <span class="number">1024</span> * <span class="number">1024</span>)      <span class="comment">// 64 MB WAL rotation</span>
+    .with_wal_max_seconds(<span class="number">60</span>)                      <span class="comment">// or 60 seconds</span>
+    .with_segment_target_size(<span class="number">16</span> * <span class="number">1024</span> * <span class="number">1024</span>)    <span class="comment">// 16 MB segments</span>
+    .with_cohort_window_secs(<span class="number">3600</span>)                  <span class="comment">// 1 hour cohorts</span>
+    .with_compression_wal(edgestore::Compression::Lz4)
+    .with_compression_segment(edgestore::Compression::Zstd {<span class="number"> level</span>: <span class="number">1</span> });</code></pre>
+      </div>
+    </section>
+
+    <!-- KV -->
+    <section id="kv" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Transaction API
+      </h2>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.begin() -> Transaction</code>
+          <p class="text-slate-600 text-sm mt-1">Start a new multi-record transaction batch.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">tx.put(ns, key, val, ttl, timestamp) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Add a put to the transaction. Accumulated in memory until commit.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.commit_transaction(tx) -> Result&lt;Lsn, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Atomically commit all transaction records to WAL with a single fsync.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.rollback_transaction(tx)</code>
+          <p class="text-slate-600 text-sm mt-1">Discard the transaction without writing anything.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Vector -->
+    <section id="vector" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Vector API
+      </h2>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">VectorEngine::vector_put(ns, key, dims, dtype, data) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Store a typed vector. Uses a synthetic <code>__vec__{ns}</code> namespace underneath.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">VectorEngine::vector_get(ns, key) -> Result&lt;Option&lt;VectorRecord&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Retrieve a vector by key.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">VectorEngine::vector_delete(ns, key) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Remove a vector from the collection.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.vector_search(ns, query, k, metric) -> Result&lt;Vec&lt;VectorSearchResult&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Search top-k nearest neighbors. Routes to HNSW if an index exists, otherwise flat SIMD scan.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.build_vector_index(ns, dims, dtype, metric) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Build an HNSW approximate index for the collection. Persists to a sidecar file.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.preload_vector_index(ns) -> Result&lt;bool, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Lazy-load an existing HNSW index from disk.</p>
+        </div>
+      </div>
+
+      <h3 class="text-lg font-semibold text-slate-900 mt-6 mb-3">Vector Types</h3>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">Dtype</code>
+          <p class="text-slate-600 text-sm mt-1">F32, F16, I8 — the vector element type. All distances computed in f32 (widening for f16/i8).</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">Metric</code>
+          <p class="text-slate-600 text-sm mt-1">Cosine, L2 (Euclidean), DotProduct — three supported distance metrics.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Text -->
+    <section id="text" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Text Search API
+      </h2>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">TextEngine::index_text(ns, key, text) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Tokenize and index a text document. Stores inverted index in a synthetic <code>__text__{ns}</code> namespace.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">TextEngine::search_text(ns, query, k) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">BM25-ranked search. Tokenizes the query, intersects posting lists, scores with BM25(k1=1.2, b=0.75).</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">TextEngine::delete_text(ns, key) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Remove a document from the text index.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">SearchOptions</code>
+          <p class="text-slate-600 text-sm mt-1">Builder for facet filters, typo tolerance, and result limits. Chain methods: <code>.with_facet(field, value)</code>, <code>.with_typo_tolerance(true)</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Replication -->
+    <section id="replication" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Replication API
+      </h2>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.export_manifest() -> Result&lt;Vec&lt;SegmentRef&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Export the current live segment list with BLAKE3 hashes. Send this to a replica to compare.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.missing_segments(peer_segments) -> Vec&lt;[u8; 32]&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Compare local segments against a peer's manifest. Returns BLAKE3 hashes of missing segments.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.import_segment(seg_ref, data) -> Result&lt;ImportResult, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Import a segment from a peer. Applies LWW conflict resolution by wall-clock timestamp. Verifies BLAKE3 hash.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.range_merkle_root() -> Result&lt;[u8; 32], EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Compute the root hash of the range-level Merkle tree over all segments.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.compare_merkle(other_root) -> Result&lt;bool, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Compare local Merkle root with a peer's. Returns true if identical.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Types -->
+    <section id="types" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Key Types
+      </h2>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">EdgestoreError</code>
+          <p class="text-slate-600 text-sm mt-1">All errors: Io, KeyNotFound, Corruption, CompactionError, InvalidArgument, etc.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">Snapshot / SnapshotRegistry</code>
+          <p class="text-slate-600 text-sm mt-1">Point-in-time reads with RAII segment pinning. Registry tracks active snapshots for compaction exclusion.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">CompactionStats</code>
+          <p class="text-slate-600 text-sm mt-1">cohorts_collected, segments_removed, segments_written, bytes_written, live_records_relocated.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">StorageBackend / DefaultStorageBackend / MemoryStorageBackend</code>
+          <p class="text-slate-600 text-sm mt-1">Pluggable I/O trait. Default uses pread/pwrite. Memory backend for tests.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">HnswIndex</code>
+          <p class="text-slate-600 text-sm mt-1">Standalone HNSW graph. Can be serialized/deserialized for persistence. Used by Engine for vector_search routing.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">RangeMerkleTree</code>
+          <p class="text-slate-600 text-sm mt-1">Merkle tree over key ranges for anti-entropy probes and delta sync.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Async -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Async Wrapper (edgestore-tokio)
+      </h2>
+      <div class="code-block p-4">
+        <pre><code><span class="keyword">use</span> edgestore_tokio::AsyncEngine;
+
+<span class="keyword">let</span> engine = AsyncEngine::open(EdgestoreConfig::new(<span class="string">"/tmp/async_db"</span>)).<span class="keyword">await</span>?;
+engine.put(<span class="string">b"default"</span>, <span class="string">b"key"</span>, <span class="string">b"val"</span>).<span class="keyword">await</span>?;
+<span class="keyword">let</span> val = engine.get(<span class="string">b"default"</span>, <span class="string">b"key"</span>).<span class="keyword">await</span>?;</code></pre>
+      </div>
+      <p class="text-slate-600 text-sm mt-3">All Engine methods are wrapped with <code>tokio::task::spawn_blocking</code>. No async code in the core library — the wrapper is thin and optional.</p>
+    </section>
+  </div>
+
+  <footer class="bg-slate-900 text-slate-400 py-8 mt-12">
+    <div class="max-w-7xl mx-auto px-4 text-center text-sm">
+      <p><a href="index.html" class="hover:text-white transition">EdgeStore</a> — Local-first embedded database</p>
+      <p class="mt-1">Full API docs at <a href="https://docs.rs/edgestore" class="text-edge-400 hover:text-white">docs.rs/edgestore</a></p>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Features — EdgeStore</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          colors: { edge: { 50:'#f0f9ff',100:'#e0f2fe',200:'#bae6fd',300:'#7dd3fc',400:'#38bdf8',500:'#0ea5e9',600:'#0284c7',700:'#0369a1',800:'#075985',900:'#0c4a6e' }, rust: { 500:'#dea584',600:'#c56c3a' } }
+        }
+      }
+    }
+  </script>
+  <style>
+    .code-block { background: #1e293b; border-radius: 0.5rem; overflow-x: auto; }
+    .code-block code { color: #e2e8f0; }
+    .keyword { color: #c678dd; } .string { color: #98c379; } .function { color: #61afef; }
+    .comment { color: #5c6370; font-style: italic; } .type { color: #e5c07b; } .number { color: #d19a66; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+
+  <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center"><span class="text-white font-bold text-sm">E</span></div>
+          <a href="index.html" class="font-bold text-xl text-slate-800">EdgeStore</a>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Home</a>
+          <a href="features.html" class="text-edge-600 font-medium">Features</a>
+          <a href="examples.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Examples</a>
+          <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
+          <a href="api.html" class="text-slate-600 hover:text-edge-600 font-medium transition">API</a>
+        </div>
+        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <h1 class="text-4xl font-bold text-slate-900 mb-4">Features</h1>
+    <p class="text-lg text-slate-600 mb-12 max-w-3xl">EdgeStore bundles KV storage, vector search, full-text search, and replication into a single embedded library. Each layer sits cleanly on top of the core without polluting it.</p>
+
+    <!-- KV Store -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Key-Value Store</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Ordered byte keys with namespace isolation. Every key is prefix-encoded as <code>{ns_len:u16}{ns}{key}</code>, giving you a single flat sorted keyspace with logical separation.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>put / get / delete</strong> — single-record operations</li>
+            <li><strong>range</strong> — exclusive-end range scans</li>
+            <li><strong>prefix</strong> — prefix-bounded iteration</li>
+            <li><strong>namespaces</strong> — multi-tenant isolation without ColumnFamily complexity</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Basic operations</span>
+db.put(<span class="string">b"users"</span>, <span class="string">b"alice"</span>, <span class="string">b"{"age":30}"</span>)?;
+<span class="keyword">let</span> val = db.get(<span class="string">b"users"</span>, <span class="string">b"alice"</span>)?;
+
+<span class="comment">// Range scan within a namespace</span>
+<span class="keyword">for</span> (k, v) <span class="keyword">in</span> db.range(<span class="string">b"users"</span>, <span class="string">b"a"</span>, <span class="string">b"z"</span>)? {
+    println!(<span class="string">"{} = {}"</span>, k, v);
+}
+
+<span class="comment">// Prefix scan</span>
+<span class="keyword">for</span> (k, v) <span class="keyword">in</span> db.prefix(<span class="string">b"events"</span>, <span class="string">b"2024-01-"</span>)? {
+    <span class="comment">// all keys starting with 2024-01-</span>
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Transactions -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Transactions</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Atomic multi-record batches with single-writer semantics. A transaction accumulates puts and deletes in memory, then commits as a single WAL-append with group fsync.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>begin()</strong> — start a transaction</li>
+            <li><strong>commit_transaction()</strong> — atomic commit to WAL</li>
+            <li><strong>rollback_transaction()</strong> — discard without writing</li>
+            <li>All-or-nothing: partial commits are impossible</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">let mut</span> tx = db.begin();
+tx.put(<span class="string">b"accounts"</span>, <span class="string">b"alice"</span>, <span class="string">b"900"</span>, <span class="number">0</span>, <span class="number">0</span>)?;
+tx.put(<span class="string">b"accounts"</span>, <span class="string">b"bob"</span>, <span class="string">b"1100"</span>, <span class="number">0</span>, <span class="number">0</span>)?;
+
+<span class="comment">// Both writes land atomically, or neither does</span>
+db.commit_transaction(tx)?;</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- TTL -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">TTL & Lazy Expiry</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Records with TTL are grouped by their predicted death time into cohorts. When a cohort fully expires, compaction removes it with zero live-data relocation — the key mechanism that drives write amplification toward 1.0.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>put_with_ttl</strong> — write with seconds-to-live</li>
+            <li><strong>Lazy expiry</strong> — expired records remain readable until compaction</li>
+            <li><strong>Zero-cost collection</strong> — fully-expired cohorts need no live-record scans</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Session expires in 60 seconds</span>
+db.put_with_ttl(<span class="string">b"sessions"</span>, <span class="string">b"sess-42"</span>, <span class="string">b"active"</span>, <span class="number">60</span>)?;
+
+<span class="comment">// Still readable immediately after TTL expires</span>
+<span class="comment">// (lazy expiry contract)</span>
+std::thread::sleep(Duration::from_secs(<span class="number">61</span>));
+<span class="keyword">let</span> val = db.get(<span class="string">b"sessions"</span>, <span class="string">b"sess-42"</span>)?; <span class="comment">// Some(...)</span>
+
+<span class="comment">// After compaction, the cohort is gone</span>
+db.compact_once()?;
+<span class="keyword">let</span> val = db.get(<span class="string">b"sessions"</span>, <span class="string">b"sess-42"</span>)?; <span class="comment">// None</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Vector Search -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Vector Search</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Store and search dense vectors with SIMD-accelerated distance computation. Two search modes: flat brute-force scan (exact, fast for &lt;500K vectors) and HNSW graph index (approximate, scales to millions).</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>Metrics</strong> — Cosine, L2 (Euclidean), Dot Product</li>
+            <li><strong>Dtypes</strong> — f32, f16, i8 with automatic widening</li>
+            <li><strong>SIMD</strong> — wide::f32x8 on x86_64/AVX2, scalar fallback everywhere</li>
+            <li><strong>HNSW</strong> — probabilistic layer assignment, greedy beam search</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Insert vectors</span>
+db.vector_put(<span class="string">b"embeddings"</span>, <span class="string">b"doc1"</span>, <span class="number">128</span>, <span class="type">Dtype::F32</span>, &vec_data)?;
+
+<span class="comment">// Build HNSW index for fast ANN search</span>
+db.build_vector_index(<span class="string">b"embeddings"</span>, <span class="number">128</span>, <span class="type">Dtype::F32</span>, <span class="type">Metric::Cosine</span>)?;
+
+<span class="comment">// Search top-10 nearest neighbors</span>
+<span class="keyword">let</span> results = db.vector_search(
+    <span class="string">b"embeddings"</span>, &query_vec, <span class="number">10</span>, <span class="type">Metric::Cosine</span>
+)?;
+<span class="keyword">for</span> r <span class="keyword">in</span> results {
+    println!(<span class="string">"{} distance={:.4}"</span>, r.key, r.distance);
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Text Search -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Full-Text Search</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Embedded Algolia-like search with BM25 relevance scoring. Inverted index stored in segments, merged during compaction. No separate server process.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>BM25 ranking</strong> — k1=1.2, b=0.75, configurable</li>
+            <li><strong>Tokenization</strong> — English with stopwords and simple stemming</li>
+            <li><strong>Faceting</strong> — filter results by facet values</li>
+            <li><strong>Typo tolerance</strong> — Levenshtein distance ≤ 1 with 0.5 weight penalty</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Index a document</span>
+db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is fast and reliable"</span>)?;
+
+<span class="comment">// Search with BM25 ranking</span>
+<span class="keyword">let</span> results = db.search_text(<span class="string">b"docs"</span>, <span class="string">"fast database"</span>, <span class="number">5</span>)?;
+<span class="keyword">for</span> hit <span class="keyword">in</span> results {
+    println!(<span class="string">"{} score={:.3}"</span>, hit.key, hit.score);
+}
+
+<span class="comment">// With facet filtering</span>
+<span class="keyword">let</span> opts = SearchOptions::new()
+    .with_facet(<span class="string">"category"</span>, <span class="string">"database"</span>);
+<span class="keyword">let</span> filtered = db.search_text(<span class="string">b"docs"</span>, <span class="string">"fast"</span>, <span class="number">5</span>)?;</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Replication -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Replication</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Merkle-based delta sync compares range-level Merkle trees between nodes to identify divergent segments. Only missing segments are transferred — not full copies.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>Content-addressed</strong> — BLAKE3 hashes guarantee integrity</li>
+            <li><strong>LWW conflict resolution</strong> — wall-clock timestamp wins</li>
+            <li><strong>Resume-friendly</strong> — interrupted sync resumes from last Ack(lsn)</li>
+            <li><strong>S3 backend</strong> — cold archive and replication mailbox</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Primary: export manifest</span>
+<span class="keyword">let</span> segments = primary.export_manifest()?;
+
+<span class="comment">// Replica: compare and find missing</span>
+<span class="keyword">let</span> missing = replica.missing_segments(&segments);
+
+<span class="comment">// Transfer each missing segment</span>
+<span class="keyword">for</span> seg <span class="keyword">in</span> missing {
+    <span class="keyword">let</span> data = primary.read_segment(&seg)?;
+    replica.import_segment(&seg, &data)?;
+}
+
+<span class="comment">// Verify Merkle roots match</span>
+<span class="keyword">let</span> match_result = replica.compare_merkle(&primary_root)?;</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Snapshots -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Snapshots</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>RAII point-in-time reads that pin segments in the manifest. Compaction can proceed on live data while snapshots hold old segments for consistent reads.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>snapshot()</strong> — capture current segment set</li>
+            <li><strong>RAII release</strong> — Drop unpins segments automatically</li>
+            <li><strong>SnapshotRegistry</strong> — tracks active snapshots, excludes pinned segments from compaction</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Capture point-in-time view</span>
+<span class="keyword">let</span> snap = db.snapshot()?;
+
+<span class="comment">// Modify live data</span>
+db.put(<span class="string">b"data"</span>, <span class="string">b"key"</span>, <span class="string">b"new"</span>)?;
+
+<span class="comment">// Snapshot still sees old value</span>
+<span class="keyword">let</span> old = snap.get(<span class="string">b"data"</span>, <span class="string">b"key"</span>)?;
+
+<span class="comment">// Release when done — pins are dropped automatically</span>
+drop(snap);</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- SSD Optimization -->
+    <section>
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">SSD Optimization</h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Every design decision prioritizes SSD health: append-only writes avoid in-place rewrites, deathtime-cohort compaction aligns invalidation with erase blocks, and FDP hints place related data together on NVMe 2.0 hardware.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>Append-only</strong> — no page rewrites, minimal SSD GC pressure</li>
+            <li><strong>ZSTD L1 compression</strong> — reduces bytes written without CPU cost</li>
+            <li><strong>4 KiB block alignment</strong> — matches SSD page size</li>
+            <li><strong>FDP hints</strong> — NVMe 2.0 placement guidance (Linux stub)</li>
+          </ul>
+        </div>
+        <div class="bg-slate-100 rounded-xl p-6 border border-slate-200">
+          <h3 class="font-semibold text-slate-900 mb-3">Write Amplification Comparison</h3>
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-300">
+                <th class="text-left py-2 text-slate-700">Database</th>
+                <th class="text-right py-2 text-slate-700">App WA</th>
+                <th class="text-right py-2 text-slate-700">Device WA</th>
+              </tr>
+            </thead>
+            <tbody class="text-slate-600">
+              <tr class="border-b border-slate-200"><td class="py-2 font-medium">EdgeStore</td><td class="text-right">~1x</td><td class="text-right">~1.2x</td></tr>
+              <tr class="border-b border-slate-200"><td class="py-2">RocksDB</td><td class="text-right">10-30x</td><td class="text-right">~90x</td></tr>
+              <tr class="border-b border-slate-200"><td class="py-2">LevelDB</td><td class="text-right">10-30x</td><td class="text-right">~90x</td></tr>
+              <tr><td class="py-2">SQLite WAL</td><td class="text-right">2-4x</td><td class="text-right">~8x</td></tr>
+            </tbody>
+          </table>
+          <p class="text-xs text-slate-500 mt-3">For TTL workloads. See <a href="papers.html" class="text-edge-600 hover:underline">Papers</a> for methodology.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="bg-slate-900 text-slate-400 py-8 mt-12">
+    <div class="max-w-7xl mx-auto px-4 text-center text-sm">
+      <p><a href="index.html" class="hover:text-white transition">EdgeStore</a> — Local-first embedded database</p>
+    </div>
+  </footer>
+
+</body>
+</html>

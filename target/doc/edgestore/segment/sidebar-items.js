@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["SEGMENT_BLOCK_MAGIC","SEGMENT_BLOCK_SIZE","SEGMENT_FILE_MAGIC","SEGMENT_FORMAT_VERSION","SPARSE_INDEX_STRIDE"],"fn":["build_xor_filter","deserialize_entry","filter_contains","read_idx_file","read_xf_file","serialize_entry","write_idx_file","write_xf_file"],"struct":["SegmentReader","SegmentStore","SegmentWriter"]};
+window.SIDEBAR_ITEMS = {"constant":["SPARSE_INDEX_STRIDE"],"fn":["read_idx_file"],"struct":["SegmentReader","SegmentWriter"]};

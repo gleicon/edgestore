@@ -30,7 +30,9 @@ assert_eq!(value, Some(b"world".to_vec()));
 db.flush()?; // WAL fsync + optional memtable flush
 ```
 
-See [`examples/`](examples/) for vector search, transactions, and replication.
+See [`edgestore/examples/`](edgestore/examples/) for runnable examples (KV, vector search, replication).
+
+For a rich documentation site with feature guides and paper references, open [`website/index.html`](website/index.html) in your browser.
 
 ---
 
@@ -175,7 +177,7 @@ at your option.
 ## Contributing
 
 Issues and pull requests are welcome.
-Please read our [Contributing Guide](CONTRIBUTING.md) before submitting.
+Please open an issue or PR on GitHub.
 
 ---
 

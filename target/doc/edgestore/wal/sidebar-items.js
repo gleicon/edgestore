@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["WAL_FORMAT_VERSION","WAL_HEADER_LEN","WAL_MAGIC"],"fn":["deserialize_record","serialize_record"],"struct":["WalReader","WalWriter"]};
+window.SIDEBAR_ITEMS = {};

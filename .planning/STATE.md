@@ -1,25 +1,25 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.1
+milestone: v1.0
 milestone_name: milestone
   current_phase: 08
-  status: In Progress
-  last_updated: "2026-05-25T06:30:00.000Z"
+  status: Complete
+  last_updated: "2026-05-26T00:00:00.000Z"
   progress:
     total_phases: 8
-    completed_phases: 7
+    completed_phases: 8
     total_plans: 50
-    completed_plans: 42
-    percent: 94
+    completed_plans: 50
+    percent: 100
 ---
 
 # Project State — EdgeStore
 
 ## Current Status
 
-**Phase:** 5 — Vector Search
-**Current Phase:** 05
-**Milestone:** Milestone 3 (v0.3)
+**Phase:** 8 — v1.0 Polish & Release
+**Current Phase:** 08
+**Milestone:** Milestone 4 (v1.0)
 
 ## Phase Progress
 
@@ -33,7 +33,7 @@ milestone_name: milestone
 | 5 — Vector Search | Complete | 2026-05-23 | 2026-05-23 |
 | 6 — SSD Optimization + HNSW | Complete | 2026-05-25 | 2026-05-25 |
 | 7 — Full-Text Search (v2) | Complete | 2026-05-25 | 2026-05-25 |
-| 8 — v1.0 Polish & Release | In Progress | 2026-05-25 | — |
+| 8 — v1.0 Polish & Release | Complete | 2026-05-25 | 2026-05-26 |
 
 ## Requirement Status
 
@@ -265,10 +265,10 @@ All 5 plans executed successfully:
 | Plan | Wave | Title | Requirements | Status |
 |------|------|-------|--------------|--------|
 | 08-01 | 1 | API polish: rustdoc, clippy, visibility, feature flags, metadata | POLISH-01, POLISH-02, POLISH-05 | **Complete** |
-| 08-02a | 1 | Core documentation: README, ARCHITECTURE.md, CHANGELOG | POLISH-03 | Planned |
+| 08-02a | 1 | Core documentation: README, ARCHITECTURE.md, CHANGELOG | POLISH-03 | **Complete** |
 | 08-02b | 1 | Benchmarks, examples, and license files | POLISH-03, POLISH-07 | **Complete** |
-| 08-03a | 2 | CLI scaffold and core subcommands | POLISH-04 | Planned |
-| 08-03b | 2 | CLI advanced subcommands and build config | POLISH-04 | Planned |
+| 08-03a | 2 | CLI scaffold and core subcommands | POLISH-04 | **Complete** |
+| 08-03b | 2 | CLI advanced subcommands and build config | POLISH-04 | **Complete** |
 | 08-04a | 3 | Final integration test and metadata finalization | POLISH-05, POLISH-06 | **Complete** |
 | 08-04b | 3 | Publish dry-run, benchmarks, and final validation | POLISH-07, POLISH-08 | **Complete** |
 

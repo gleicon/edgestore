@@ -1,8 +1,10 @@
-# EdgeStore — Project Guide
+# EdgeStore — Agent Guide
 
 ## What We're Building
 
-Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, deathtime-cohort compaction. Library-first — no mandatory server. See `.planning/prod.md` for full spec and `.planning/PROJECT.md` for project context.
+Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, deathtime-cohort compaction. Library-first — no mandatory server. See `prod.md` for full spec and `.planning/PROJECT.md` for project context.
+
+**Status:** v1.0 complete (all 8 phases shipped).
 
 ## Architecture Constraints (non-negotiable)
 
@@ -30,6 +32,70 @@ Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, d
 | Vector header | `{dims:u16}{dtype:u8}{data}` |
 | Content addressing | BLAKE3 |
 
+## Academic Foundations
+
+EdgeStore is built on ideas from peer-reviewed database research:
+
+- **VLDB 2026 (Lee et al.)** — deathtime-based garbage collection. Primary design reference for cohort-grouped compaction that achieves near-zero write amplification on TTL workloads.
+- **VLDB SSD WAF (Durner et al., 2023)** — SSD write amplification analysis. Informs the append-only, out-of-place write design that keeps device WAF near 1.0.
+- **SlateDB** — cloud-native LSM design reference for segment formats and manifest patterns.
+- **NVMe + S3 (EloqData, 2025)** — decoupled storage architecture patterns for replication and cold archive.
+
+See `website/papers.html` and `ARCHITECTURE.md` for detailed citations.
+
+## File Layout
+
+```
+edgestore/          — Core sync KV + vector + text engine
+edgestore-tokio/    — Async wrapper (Tokio)
+edgestore-repl/     — HTTP replication + S3 remote store
+edgestore-cli/      — Administrative CLI binary
+website/            — Static documentation site (Tailwind CSS)
+examples/           — Runnable Rust examples (edgestore/examples/)
+.planning/          — GSD project plans, roadmaps, requirements
+prod.md             — Full design spec (source of truth)
+ARCHITECTURE.md     — Component overview and data flows
+README.md           — Quick-start and feature matrix
+```
+
+## Developer Quick-Start
+
+```bash
+# Build everything
+cargo build --workspace
+
+# Run all tests
+cargo test --workspace
+
+# Run clippy
+cargo clippy --workspace -- -D warnings
+
+# Build docs
+cargo doc --workspace --no-deps --open
+
+# Run examples
+cargo run --example basic_kv
+cargo run --example vector_search
+cargo run --example replication
+
+# Run benchmarks
+cargo bench --workspace
+```
+
+## Public API Surface
+
+| Type | Item | Description |
+|------|------|-------------|
+| Engine | `Engine` | Main KV engine (open, get, put, delete, range, prefix, flush, snapshot, compact) |
+| Config | `EdgestoreConfig` | Database configuration |
+| Error | `EdgestoreError` | All error variants |
+| Transaction | `Transaction` | Multi-record atomic batch |
+| Vector | `VectorEngine` trait, `VectorRecord`, `Dtype`, `Metric` | Vector storage & search |
+| Text | `TextEngine` trait, `TextSearchResult`, `SearchOptions` | Full-text search |
+| Snapshot | `Snapshot`, `SnapshotRegistry` | Point-in-time reads |
+| Replication | `ReplicationProtocol`, `HostId`, `SegmentRef` | Pull-only sync |
+| Storage | `StorageBackend`, `DefaultStorageBackend`, `MemoryStorageBackend` | Pluggable I/O |
+
 ## GSD Workflow
 
 This project uses GSD for structured phase execution.
@@ -41,23 +107,9 @@ This project uses GSD for structured phase execution.
 /gsd:progress          — check current state
 ```
 
-**Current phase:** Not started. Run `/gsd:plan-phase 1` to begin.
-
-## File Layout
-
-```
-.planning/
-  PROJECT.md        — project context and decisions
-  REQUIREMENTS.md   — all requirements with REQ-IDs
-  ROADMAP.md        — 7 phases, success criteria, risks
-  STATE.md          — current progress
-  config.json       — GSD workflow config
-prod.md             — full design spec (source of truth for architecture)
-```
-
 ## References
 
-- VLDB 2026 (Lee et al.): https://www.vldb.org/pvldb/vol19/p1469-lee.pdf — deathtime-based GC, primary design reference
+- VLDB 2026 (Lee et al.): https://www.vldb.org/pvldb/vol19/p1469-lee.pdf
 - VLDB SSD WAF: https://www.vldb.org/pvldb/vol16/p2769-durner.pdf
 - SlateDB: https://github.com/slatedb/slatedb
 - NVMe + S3: https://www.eloqdata.com/blog/2025/10/24/how-nvme-and-s3-reshape-decoupling

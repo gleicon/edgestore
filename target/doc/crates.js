@@ -1,2 +1,2 @@
-window.ALL_CRATES = ["arrayref","arrayvec","blake3","byteorder","cfg_if","constant_time_eq","crc32c","edgestore","fs2","getrandom","itoa","libc","libm","lz4_flex","memchr","ppv_lite86","proc_macro2","quote","rand","rand_chacha","rand_core","serde","serde_bytes","serde_core","serde_derive","serde_json","syn","twox_hash","unicode_ident","xorf","zerocopy","zmij","zstd","zstd_safe","zstd_sys"];
-//{"start":21,"fragment_lengths":[10,11,9,12,9,19,9,12,6,12,7,7,7,11,9,13,14,8,7,14,12,8,14,13,15,13,6,12,16,7,11,7,7,12,11]}
+window.ALL_CRATES = ["edgestore","edgestore_cli","edgestore_repl","edgestore_tokio"];
+//{"start":21,"fragment_lengths":[11,16,17,18]}

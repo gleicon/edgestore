@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Engine"]};
+window.SIDEBAR_ITEMS = {"enum":["ImportResult"],"struct":["Engine"]};

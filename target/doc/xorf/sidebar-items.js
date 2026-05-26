@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["BinaryFuse16","BinaryFuse16Ref","BinaryFuse32","BinaryFuse32Ref","BinaryFuse8","BinaryFuse8Ref","Fuse16","Fuse32","Fuse8","HashProxy","Xor16","Xor32","Xor8"],"trait":["DmaSerializable","Filter","FilterRef"]};

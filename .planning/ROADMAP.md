@@ -228,12 +228,14 @@ Plans:
 
 Plans:
 - [x] 08-01-PLAN.md — API polish: rustdoc coverage, clippy clean, visibility audit, feature flags, Cargo.toml metadata
-- [ ] 08-02a-PLAN.md — Core documentation: README, ARCHITECTURE.md, CHANGELOG
+- [x] 08-02a-PLAN.md — Core documentation: README, ARCHITECTURE.md, CHANGELOG
 - [x] 08-02b-PLAN.md — Benchmarks, examples, and license files
-- [ ] 08-03a-PLAN.md — CLI scaffold and core subcommands (create, stats, put, get, delete, range)
-- [ ] 08-03b-PLAN.md — CLI advanced subcommands (compact, export, import, vector-search, text-search) and build config
+- [x] 08-03a-PLAN.md — CLI scaffold and core subcommands (create, stats, put, get, delete, range)
+- [x] 08-03b-PLAN.md — CLI advanced subcommands (compact, export, import, vector-search, text-search) and build config
 - [x] 08-04a-PLAN.md — Final integration test and metadata finalization
-- [ ] 08-04b-PLAN.md — Publish dry-run, benchmarks, and final validation
+- [x] 08-04b-PLAN.md — Publish dry-run, benchmarks, and final validation
+
+**Status:** All 7 plans complete (2026-05-26). All 8 success criteria verified.
 
 **Success Criteria:**
 1. `cargo doc --workspace` builds with zero rustdoc warnings; all public items documented

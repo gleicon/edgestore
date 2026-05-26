@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["recover_from_wal"],"struct":["RecoveryResult"]};
+window.SIDEBAR_ITEMS = {};

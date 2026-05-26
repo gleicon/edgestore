@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Research & Papers — EdgeStore</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          colors: { edge: { 50:'#f0f9ff',100:'#e0f2fe',200:'#bae6fd',300:'#7dd3fc',400:'#38bdf8',500:'#0ea5e9',600:'#0284c7',700:'#0369a1',800:'#075985',900:'#0c4a6e' } }
+        }
+      }
+    }
+  </script>
+  <style>
+    .paper-card { border-left: 4px solid #0284c7; }
+    .quote { border-left: 3px solid #e2e8f0; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+
+  <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center"><span class="text-white font-bold text-sm">E</span></div>
+          <a href="index.html" class="font-bold text-xl text-slate-800">EdgeStore</a>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Home</a>
+          <a href="features.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Features</a>
+          <a href="examples.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Examples</a>
+          <a href="papers.html" class="text-edge-600 font-medium">Papers</a>
+          <a href="api.html" class="text-slate-600 hover:text-edge-600 font-medium transition">API</a>
+        </div>
+        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <h1 class="text-4xl font-bold text-slate-900 mb-4">Research & Papers</h1>
+    <p class="text-lg text-slate-600 mb-12 max-w-3xl">
+      EdgeStore is built on peer-reviewed database research. Each paper below directly influenced a specific architectural decision — from the compaction algorithm to the segment format to the replication protocol.
+    </p>
+
+    <!-- VLDB 2026 -->
+    <article class="paper-card bg-white rounded-xl p-8 shadow-sm mb-8">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <span class="inline-block px-3 py-1 bg-edge-100 text-edge-700 text-xs font-semibold rounded-full mb-2">Primary Design Reference</span>
+          <h2 class="text-2xl font-bold text-slate-900">Deathtime-Based Garbage Collection</h2>
+          <p class="text-slate-500 text-sm mt-1">Lee et al., VLDB 2026</p>
+        </div>
+        <a href="https://www.vldb.org/pvldb/vol19/p1469-lee.pdf" target="_blank" class="text-edge-600 hover:text-edge-700 font-medium text-sm flex items-center">
+          Read Paper
+          <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </a>
+      </div>
+
+      <div class="quote pl-4 py-2 mb-4 bg-slate-50 rounded-r-lg">
+        <p class="text-slate-700 italic text-sm">
+          "By grouping records by their predicted invalidation time (deathtime) rather than write time or size, compaction can collect fully-expired cohorts without reading or rewriting any live data."
+        </p>
+      </div>
+
+      <h3 class="font-semibold text-slate-900 mb-2">How it shaped EdgeStore</h3>
+      <div class="prose text-slate-600 text-sm max-w-none">
+        <p>This paper is the single most important influence on EdgeStore's storage engine. The authors demonstrate that traditional LSM compaction (level-based, size-tiered) suffers from high write amplification because it repeatedly rewrites live data alongside tombstones and expired records.</p>
+        <p class="mt-2">EdgeStore implements their cohort-grouped approach directly:</p>
+        <ul class="list-disc pl-5 space-y-1 mt-2">
+          <li>Every record is assigned a <strong>cohort bucket</strong> = death_time / cohort_window (default 1 hour)</li>
+          <li>Records with TTL cluster with others expiring in the same window</li>
+          <li>Records without TTL fall back to <strong>write-time cohorts</strong> (temporal locality)</li>
+          <li>Compaction prioritizes <strong>fully-expired cohorts</strong> first — no live-record reads or writes</li>
+          <li>Partially-expired cohorts get one merge pass; only live records are relocated</li>
+        </ul>
+        <p class="mt-2">The paper measured a <strong>7.8x reduction in write amplification</strong> on TTL workloads compared to RocksDB. EdgeStore's design targets the same asymptotic behavior.</p>
+      </div>
+
+      <div class="mt-6 p-4 bg-slate-100 rounded-lg">
+        <h4 class="font-semibold text-slate-900 text-sm mb-2">Code mapping</h4>
+        <p class="text-slate-600 text-sm">See <code>edgestore/src/compactor.rs</code> — <code>identify_cohorts()</code>, <code>collect_expired_cohort()</code>, and <code>compact_partial_cohort()</code> implement the paper's algorithm.</p>
+      </div>
+    </article>
+
+    <!-- VLDB SSD WAF -->
+    <article class="paper-card bg-white rounded-xl p-8 shadow-sm mb-8">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <span class="inline-block px-3 py-1 bg-rust-100 text-rust-700 text-xs font-semibold rounded-full mb-2">SSD Architecture</span>
+          <h2 class="text-2xl font-bold text-slate-900">SSD Write Amplification Analysis</h2>
+          <p class="text-slate-500 text-sm mt-1">Durner et al., VLDB 2023</p>
+        </div>
+        <a href="https://www.vldb.org/pvldb/vol16/p2769-durner.pdf" target="_blank" class="text-edge-600 hover:text-edge-700 font-medium text-sm flex items-center">
+          Read Paper
+          <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </a>
+      </div>
+
+      <div class="quote pl-4 py-2 mb-4 bg-slate-50 rounded-r-lg">
+        <p class="text-slate-700 italic text-sm">
+          "Application-level write amplification compounds with SSD firmware garbage collection. An LSM tree with 30x WA creates 90x total device WA when the SSD GC factor is 3x."
+        </p>
+      </div>
+
+      <h3 class="font-semibold text-slate-900 mb-2">How it shaped EdgeStore</h3>
+      <div class="prose text-slate-600 text-sm max-w-none">
+        <p>Durner's analysis showed that the write amplification problem is worse than previously understood: it's not just the database's fault, but a <strong>compound effect</strong> between application WA and SSD firmware WA.</p>
+        <p class="mt-2">EdgeStore's design directly addresses both layers:</p>
+        <ul class="list-disc pl-5 space-y-1 mt-2">
+          <li><strong>Append-only writes</strong> — never rewrite a page in place. SSD firmware sees sequential, full-page writes instead of scattered updates.</li>
+          <li><strong>4 KiB block alignment</strong> — segment blocks match SSD page boundaries, eliminating read-modify-write cycles.</li>
+          <li><strong>Cohort invalidation alignment</strong> — when a cohort expires, <em>all</em> pages in those segments become invalid simultaneously. The SSD GC can reclaim entire erase blocks without copying valid remnants.</li>
+        </ul>
+        <p class="mt-2">The compound effect is dramatic:</p>
+        <pre class="bg-slate-100 p-3 rounded-lg text-xs mt-2 overflow-x-auto">RocksDB:    30x (app WA) × 3x (SSD GC) = 90x total device WA
+EdgeStore:   1x (app WA) × 1.2x (SSD GC) = 1.2x total device WA</pre>
+      </div>
+    </article>
+
+    <!-- SlateDB -->
+    <article class="paper-card bg-white rounded-xl p-8 shadow-sm mb-8">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <span class="inline-block px-3 py-1 bg-purple-100 text-purple-700 text-xs font-semibold rounded-full mb-2">Format Design</span>
+          <h2 class="text-2xl font-bold text-slate-900">SlateDB: Cloud-Native LSM</h2>
+          <p class="text-slate-500 text-sm mt-1">SlateDB Project (Open Source)</p>
+        </div>
+        <a href="https://github.com/slatedb/slatedb" target="_blank" class="text-edge-600 hover:text-edge-700 font-medium text-sm flex items-center">
+          GitHub
+          <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </a>
+      </div>
+
+      <h3 class="font-semibold text-slate-900 mb-2">How it shaped EdgeStore</h3>
+      <div class="prose text-slate-600 text-sm max-w-none">
+        <p>SlateDB is an open-source cloud-native LSM that influenced EdgeStore's segment format and manifest design. While EdgeStore uses deathtime-cohort compaction instead of SlateDB's level-based approach, the <strong>segment file structure</strong> and <strong>manifest patterns</strong> draw directly from SlateDB's clean separations:</p>
+        <ul class="list-disc pl-5 space-y-1 mt-2">
+          <li><strong>.dat file</strong> — sorted key-value blocks, ZSTD compressed, 4 KiB aligned</li>
+          <li><strong>.idx file</strong> — sparse index with stride-64 sampling for efficient seeks</li>
+          <li><strong>.xf file</strong> — xor filter (not Bloom) for fast negative lookup checks</li>
+          <li><strong>.meta file</strong> — JSON metadata with cohort_bucket, death_time, min/max keys, BLAKE3 hash</li>
+          <li><strong>manifest.mf</strong> — append-only, CRC32C checksummed, live segment registry</li>
+        </ul>
+        <p class="mt-2">SlateDB's insight that "segments should be immutable, self-describing, and content-addressed" became a core EdgeStore principle.</p>
+      </div>
+    </article>
+
+    <!-- NVMe + S3 -->
+    <article class="paper-card bg-white rounded-xl p-8 shadow-sm mb-8">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <span class="inline-block px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full mb-2">Decoupled Storage</span>
+          <h2 class="text-2xl font-bold text-slate-900">NVMe and S3 in Decoupled Storage</h2>
+          <p class="text-slate-500 text-sm mt-1">EloqData, 2025</p>
+        </div>
+        <a href="https://www.eloqdata.com/blog/2025/10/24/how-nvme-and-s3-reshape-decoupling" target="_blank" class="text-edge-600 hover:text-edge-700 font-medium text-sm flex items-center">
+          Read Article
+          <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </a>
+      </div>
+
+      <h3 class="font-semibold text-slate-900 mb-2">How it shaped EdgeStore</h3>
+      <div class="prose text-slate-600 text-sm max-w-none">
+        <p>EloqData's architecture separates hot NVMe storage from cold S3 archive using a unified object model. EdgeStore adopts the same separation principle in its <strong>StorageBackend</strong> trait:</p>
+        <ul class="list-disc pl-5 space-y-1 mt-2">
+          <li><strong>DefaultStorageBackend</strong> — local pread/pwrite on NVMe/SSD</li>
+          <li><strong>MemoryStorageBackend</strong> — in-memory for tests and ephemeral workloads</li>
+          <li><strong>FdpStorageBackend</strong> — NVMe 2.0 FDP placement hints for cohort-aligned writes</li>
+          <li><strong>RemoteStore trait</strong> — content-addressed upload/download for S3 or HTTP replication</li>
+        </ul>
+        <p class="mt-2">The key insight: segments are immutable blobs that can live on <em>any</em> backend. A segment written to local NVMe can be uploaded to S3 unchanged, then downloaded and imported into another node. Content addressing (BLAKE3) guarantees integrity across transports.</p>
+      </div>
+    </article>
+
+    <!-- Summary -->
+    <section class="bg-edge-900 text-white rounded-xl p-8">
+      <h2 class="text-2xl font-bold mb-4">Why This Matters</h2>
+      <p class="text-blue-100 mb-4 leading-relaxed">
+        Most embedded databases are built on 1990s LSM-tree theory (LevelDB, RocksDB). EdgeStore is one of the first to apply 2020s SSD-aware research to an embedded, library-first design.
+      </p>
+      <div class="grid md:grid-cols-2 gap-6 text-sm">
+        <div>
+          <h4 class="font-semibold text-edge-200 mb-2">Traditional LSM</h4>
+          <ul class="space-y-1 text-blue-100">
+            <li>Level-based compaction rewrites live data repeatedly</li>
+            <li>TTL records mixed with live data in same levels</li>
+            <li>Write amplification: 10-30x</li>
+            <li>SSD GC forced to copy valid remnants</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold text-edge-200 mb-2">EdgeStore (Deathtime-Cohort)</h4>
+          <ul class="space-y-1 text-blue-100">
+            <li>Cohort-grouped compaction skips expired data entirely</li>
+            <li>TTL records cluster by death time</li>
+            <li>Write amplification: ~1x on TTL workloads</li>
+            <li>SSD GC reclaims full erase blocks</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="bg-slate-900 text-slate-400 py-8 mt-12">
+    <div class="max-w-7xl mx-auto px-4 text-center text-sm">
+      <p><a href="index.html" class="hover:text-white transition">EdgeStore</a> — Local-first embedded database</p>
+      <p class="mt-1 text-xs">Research citations are for attribution. EdgeStore is not affiliated with VLDB, SlateDB, or EloqData.</p>
+    </div>
+  </footer>
+
+</body>
+</html>

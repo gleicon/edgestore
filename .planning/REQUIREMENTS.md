@@ -58,6 +58,17 @@
 - [ ] **SSD-04**: `edgestore-tokio` crate: thin async wrapper over sync core using `spawn_blocking`; no changes to core library
 - [ ] **SSD-05**: Benchmark suite: write amplification factor (logical/physical), device WAF measurement, steady-state SSD behavior over multiple device-capacity writes
 
+### POLISH — Release Engineering & Documentation
+
+- [ ] **POLISH-01**: All public API items have rustdoc comments; `cargo doc --workspace` emits zero warnings
+- [ ] **POLISH-02**: `cargo clippy --workspace -D warnings` passes on stable Rust
+- [ ] **POLISH-03**: README includes quick-start, architecture diagram, feature matrix, and crate links
+- [ ] **POLISH-04**: CLI binary (`edgestore-cli`) supports create, compact, stats, export, import, search subcommands
+- [ ] **POLISH-05**: Workspace Cargo.toml metadata complete: version, description, license, repository, authors, keywords, categories, edition
+- [ ] **POLISH-06**: Cross-feature integration test exercises KV + vector + text + compaction + snapshot + replication end-to-end
+- [ ] **POLISH-07**: Benchmark suite runs and results published in `BENCHMARKS.md`
+- [ ] **POLISH-08**: crates.io publish dry-run (`cargo publish --dry-run`) passes for `edgestore` crate
+
 ## v2 Requirements (Deferred)
 
 - Full-text search: tokenizer, stemmer, inverted index (BM25), postings compression, `index_text`/`search` API
@@ -87,6 +98,7 @@
 | 5 — Vector Search | VECTOR-01 through VECTOR-05 |
 | 6 — SSD Optimization + HNSW | SSD-01 through SSD-05 |
 | 7 — Full-Text Search (v2) | SEARCH-01 through SEARCH-04 |
+| 8 — v1.0 Polish & Release | POLISH-01 through POLISH-08 |
 
 ## Definition of Done (v1)
 

@@ -2,6 +2,13 @@
 name = "edgestore-tokio"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Async Tokio integration for EdgeStore"
+repository = "https://github.com/gleicon/edgestore"
+homepage = "https://github.com/gleicon/edgestore"
+readme = "../README.md"
+keywords = ["edgestore", "tokio", "async", "database"]
+categories = ["database", "asynchronous"]
 
 [dependencies]
 edgestore = { path = "../edgestore" }

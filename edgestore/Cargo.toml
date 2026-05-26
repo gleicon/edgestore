@@ -3,6 +3,12 @@ name = "edgestore"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Local-first embedded KV + vector database in Rust"
+repository = "https://github.com/gleicon/edgestore"
+homepage = "https://github.com/gleicon/edgestore"
+readme = "../README.md"
+keywords = ["kv", "vector", "database", "embedded", "local-first"]
+categories = ["database", "data-structures"]
 
 [lib]
 name = "edgestore"

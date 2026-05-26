@@ -9,8 +9,8 @@ milestone_name: milestone
     total_phases: 8
     completed_phases: 7
     total_plans: 50
-    completed_plans: 39
-    percent: 90
+    completed_plans: 40
+    percent: 92
 ---
 
 # Project State — EdgeStore
@@ -33,7 +33,7 @@ milestone_name: milestone
 | 5 — Vector Search | Complete | 2026-05-23 | 2026-05-23 |
 | 6 — SSD Optimization + HNSW | Complete | 2026-05-25 | 2026-05-25 |
 | 7 — Full-Text Search (v2) | Complete | 2026-05-25 | 2026-05-25 |
-| 8 — v1.0 Polish & Release | Planned | 2026-05-25 | — |
+| 8 — v1.0 Polish & Release | In Progress | 2026-05-25 | — |
 
 ## Requirement Status
 
@@ -264,7 +264,7 @@ All 5 plans executed successfully:
 
 | Plan | Wave | Title | Requirements | Status |
 |------|------|-------|--------------|--------|
-| 08-01 | 1 | API polish: rustdoc, clippy, visibility, feature flags, metadata | POLISH-01, POLISH-02, POLISH-05 | Planned |
+| 08-01 | 1 | API polish: rustdoc, clippy, visibility, feature flags, metadata | POLISH-01, POLISH-02, POLISH-05 | **Complete** |
 | 08-02a | 1 | Core documentation: README, ARCHITECTURE.md, CHANGELOG | POLISH-03 | Planned |
 | 08-02b | 1 | Benchmarks, examples, and license files | POLISH-03, POLISH-07 | **Complete** |
 | 08-03a | 2 | CLI scaffold and core subcommands | POLISH-04 | Planned |
@@ -282,6 +282,17 @@ All 5 plans executed successfully:
 - **Licenses**: Dual MIT/Apache-2.0 at repo root; Cargo.toml updated with `license = "MIT OR Apache-2.0"`
 - All examples compile and run with `cargo run --example <name>`
 - Commits: 0981f2e, 0fd7011, c3f00e3
+
+### Plan 08-01 Completion (2026-05-25)
+
+- **Rustdoc coverage**: `#![warn(missing_docs)]` added to lib.rs; crate-level and module-level docs added; all public items documented
+- **Visibility audit**: Many `pub` items changed to `pub(crate)`; integration-test-used items kept as `pub` with docs added
+- **Clippy clean**: `RUSTFLAGS="-D warnings" cargo clippy --workspace` passes with zero warnings
+- **Clean build**: `cargo clean && cargo test --workspace` — 249 tests pass
+- **Feature flags**: Verified `cargo build --no-default-features -p edgestore` compiles; no changes needed
+- **Cargo.toml metadata**: description, repository, homepage, keywords, categories, readme added to all 3 crates; license added to edgestore-repl and edgestore-tokio
+- **Publish dry-run**: `cargo publish --dry-run -p edgestore` passes
+- **Commits**: docs(edgestore): add rustdoc coverage and visibility audit for 08-01; ci(edgestore): verify clippy clean build and test pass for 08-01; ci(edgestore): verify feature flag cleanup for 08-01; ci(edgestore): add Cargo.toml metadata for 08-01
 
 ## Phase 8 Planning Notes
 

@@ -9,7 +9,7 @@ milestone_name: milestone
     total_phases: 8
     completed_phases: 7
     total_plans: 50
-    completed_plans: 41
+    completed_plans: 42
     percent: 94
 ---
 
@@ -270,7 +270,7 @@ All 5 plans executed successfully:
 | 08-03a | 2 | CLI scaffold and core subcommands | POLISH-04 | Planned |
 | 08-03b | 2 | CLI advanced subcommands and build config | POLISH-04 | Planned |
 | 08-04a | 3 | Final integration test and metadata finalization | POLISH-05, POLISH-06 | **Complete** |
-| 08-04b | 3 | Publish dry-run, benchmarks, and final validation | POLISH-07, POLISH-08 | Planned |
+| 08-04b | 3 | Publish dry-run, benchmarks, and final validation | POLISH-07, POLISH-08 | **Complete** |
 
 ### Plan 08-02b Completion (2026-05-25)
 
@@ -301,6 +301,22 @@ All 5 plans executed successfully:
 - **Metadata finalization**: All crates version 1.0.0 via `[workspace.package]` inheritance; dependency versions pinned; edgestore keywords/categories updated for crates.io discoverability
 - **RELEASE_CHECKLIST.md**: Step-by-step release process including verification, tagging, crates.io publish order, and GitHub release notes
 - Commits: `ce70f2f`, `fedce85`
+
+### Plan 08-04b Completion (2026-05-25)
+
+- **Publish dry-run**: `cargo publish --dry-run -p edgestore` passes with 55 files packaged (512 KiB, 113 KiB compressed); includes README.md, LICENSE-MIT, LICENSE-APACHE
+- **Benchmark suite**: All 4 Criterion benchmarks execute successfully on Apple M5 / 16 GB RAM
+  - `hnsw_recall`: 500 vec = 378 µs, 1000 vec = 654 µs, 5000 vec = 3.19 ms
+  - `text_search`: 100 docs = 215 µs/query, 1000 docs = 3.77 ms/query, 10000 docs = 164.7 ms/query
+  - `throughput`: put 1K = 2.53 ms (395K ops/sec), get 1K hot = 111.8 µs (8.9M ops/sec), vector flat 1K = 57.6 µs, vector HNSW 1K = 20.6 µs
+  - `vector_search`: flat scan 500 = 8.2 µs, HNSW 500 = 8.2 µs
+- **Validation gates**: All pass — 250 tests, clippy -D warnings clean, doc clean, release build clean, publish dry-run clean
+- **CLI install check**: `cargo install --path edgestore-cli && edgestore-cli --version` → `edgestore-cli 1.0.0`
+- **Auto-fixes during execution**:
+  - NaN panic in HNSW benchmark: added `total_cmp_f32` helper for NaN-safe f32 ordering across 5 files
+  - Clippy errors in edgestore-cli: fixed single_match, redundant_pattern_matching, manual_is_multiple_of, dead_code
+  - LICENSE files not in package: added symlinks from repo root into each crate directory
+- Commits: `13a1792`, `7628fa8`, `clippy fix commit`
 
 ## Phase 8 Planning Notes
 

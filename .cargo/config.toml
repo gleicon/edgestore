@@ -1,0 +1,25 @@
+[profile.release]
+# Optimize for speed
+opt-level = 3
+
+# Enable Link-Time Optimization for better performance and smaller binary
+lto = true
+
+# Enable code generation units for parallel compilation (faster builds)
+codegen-units = 1
+
+# Enable panic=abort for smaller binary and slightly better performance
+panic = "abort"
+
+# Strip symbols for smaller binary
+strip = true
+
+[build]
+# Enable all targets for comprehensive building
+target-dir = "target"
+
+# Additional rustflags for release builds
+rustflags = ["-C", "target-cpu=native"]
+
+[registries.crates-io]
+protocol = "sparse"

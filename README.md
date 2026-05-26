@@ -80,6 +80,32 @@ edgestore-repl = "1.0"
 
 Minimum supported Rust version: **1.85** (2024 edition).
 
+### CLI Installation
+
+The `edgestore-cli` administrative tool can be installed from source:
+
+```bash
+# Clone the repository
+git clone https://github.com/gleicon/edgestore.git
+cd edgestore
+
+# Install locally from source
+cargo install --path edgestore-cli
+
+# Or build the optimized release binary
+cargo build --release -p edgestore-cli
+# Binary will be at: target/release/edgestore-cli
+```
+
+The CLI provides commands for:
+- Database management: `create`, `stats`, `compact`
+- KV operations: `put`, `get`, `delete`, `range`
+- Data exchange: `export`, `import` (JSON and binary formats)
+- Vector search: `vector-put`, `vector-get`, `vector-search`
+- Text search: `text-search`
+
+Run `edgestore-cli --help` for full command reference.
+
 ---
 
 ## Architecture Overview

@@ -18,6 +18,14 @@ enum Commands {
     Create(Create),
     /// Show database statistics
     Stats(Stats),
+    /// Store a key-value pair
+    Put(Put),
+    /// Retrieve a value by key
+    Get(Get),
+    /// Delete a key
+    Delete(Delete),
+    /// List keys in a range
+    Range(Range),
 }
 
 #[derive(Parser)]
@@ -40,12 +48,89 @@ struct Stats {
     json: bool,
 }
 
+#[derive(Parser)]
+struct Put {
+    /// Path to the database
+    #[arg(short, long)]
+    path: PathBuf,
+    /// Namespace for the key
+    #[arg(short, long, default_value = "default")]
+    namespace: String,
+    /// Key to store
+    #[arg(short, long)]
+    key: String,
+    /// Value to store
+    #[arg(short, long)]
+    value: String,
+    /// TTL in seconds (optional)
+    #[arg(long)]
+    ttl_seconds: Option<u32>,
+    /// Treat value as hex-encoded binary data
+    #[arg(long)]
+    hex: bool,
+}
+
+#[derive(Parser)]
+struct Get {
+    /// Path to the database
+    #[arg(short, long)]
+    path: PathBuf,
+    /// Namespace for the key
+    #[arg(short, long, default_value = "default")]
+    namespace: String,
+    /// Key to retrieve
+    #[arg(short, long)]
+    key: String,
+    /// Output value as hex-encoded binary
+    #[arg(long)]
+    hex: bool,
+}
+
+#[derive(Parser)]
+struct Delete {
+    /// Path to the database
+    #[arg(short, long)]
+    path: PathBuf,
+    /// Namespace for the key
+    #[arg(short, long, default_value = "default")]
+    namespace: String,
+    /// Key to delete
+    #[arg(short, long)]
+    key: String,
+}
+
+#[derive(Parser)]
+struct Range {
+    /// Path to the database
+    #[arg(short, long)]
+    path: PathBuf,
+    /// Namespace for the keys
+    #[arg(short, long, default_value = "default")]
+    namespace: String,
+    /// Start key (inclusive)
+    #[arg(short, long)]
+    start: String,
+    /// End key (exclusive)
+    #[arg(short, long)]
+    end: String,
+    /// Maximum number of results
+    #[arg(short, long)]
+    limit: Option<usize>,
+    /// Output values as hex-encoded binary
+    #[arg(long)]
+    hex: bool,
+}
+
 fn main() {
     let cli = Cli::parse();
     
     let result = match cli.command {
         Commands::Create(cmd) => handle_create(cmd),
         Commands::Stats(cmd) => handle_stats(cmd),
+        Commands::Put(cmd) => handle_put(cmd),
+        Commands::Get(cmd) => handle_get(cmd),
+        Commands::Delete(cmd) => handle_delete(cmd),
+        Commands::Range(cmd) => handle_range(cmd),
     };
     
     if let Err(e) = result {
@@ -93,6 +178,147 @@ fn handle_stats(cmd: Stats) -> Result<(), Box<dyn std::error::Error>> {
         // Output as formatted table
         print_stats_table(&stats);
     }
+    
+    Ok(())
+}
+
+fn handle_put(cmd: Put) -> Result<(), Box<dyn std::error::Error>> {
+    // Verify the path exists
+    if !cmd.path.exists() {
+        return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
+    }
+    
+    // Open the engine
+    let config = EdgestoreConfig::new(&cmd.path);
+    let mut engine = Engine::open(config)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+    
+    // Decode value if hex flag is set
+    let value_bytes = if cmd.hex {
+        hex::decode(&cmd.value)
+            .map_err(|e| format!("Invalid hex value: {}", e))?
+    } else {
+        cmd.value.into_bytes()
+    };
+    
+    // Store the key-value pair
+    let namespace = cmd.namespace.as_bytes();
+    let key = cmd.key.as_bytes();
+    
+    if let Some(ttl) = cmd.ttl_seconds {
+        engine.put_with_ttl(namespace, key, &value_bytes, ttl)
+            .map_err(|e| format!("Failed to store key with TTL: {}", e))?;
+        println!("Stored key '{}' with TTL {} seconds", cmd.key, ttl);
+    } else {
+        engine.put(namespace, key, &value_bytes)
+            .map_err(|e| format!("Failed to store key: {}", e))?;
+        println!("Stored key '{}'", cmd.key);
+    }
+    
+    Ok(())
+}
+
+fn handle_get(cmd: Get) -> Result<(), Box<dyn std::error::Error>> {
+    // Verify the path exists
+    if !cmd.path.exists() {
+        return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
+    }
+    
+    // Open the engine
+    let config = EdgestoreConfig::new(&cmd.path);
+    let engine = Engine::open(config)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+    
+    // Retrieve the value
+    let namespace = cmd.namespace.as_bytes();
+    let key = cmd.key.as_bytes();
+    
+    match engine.get(namespace, key) {
+        Ok(Some(value)) => {
+            if cmd.hex {
+                // Output as hex
+                println!("{}", hex::encode(&value));
+            } else {
+                // Try to output as UTF-8, fall back to hex
+                match std::str::from_utf8(&value) {
+                    Ok(s) => println!("{}", s),
+                    Err(_) => {
+                        println!("(binary) {}", hex::encode(&value));
+                    }
+                }
+            }
+            Ok(())
+        }
+        Ok(None) => {
+            eprintln!("Key not found: {}", cmd.key);
+            std::process::exit(1);
+        }
+        Err(e) => Err(format!("Failed to retrieve key: {}", e).into()),
+    }
+}
+
+fn handle_delete(cmd: Delete) -> Result<(), Box<dyn std::error::Error>> {
+    // Verify the path exists
+    if !cmd.path.exists() {
+        return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
+    }
+    
+    // Open the engine
+    let config = EdgestoreConfig::new(&cmd.path);
+    let mut engine = Engine::open(config)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+    
+    // Delete the key
+    let namespace = cmd.namespace.as_bytes();
+    let key = cmd.key.as_bytes();
+    
+    engine.delete(namespace, key)
+        .map_err(|e| format!("Failed to delete key: {}", e))?;
+    
+    println!("Deleted key '{}'", cmd.key);
+    Ok(())
+}
+
+fn handle_range(cmd: Range) -> Result<(), Box<dyn std::error::Error>> {
+    // Verify the path exists
+    if !cmd.path.exists() {
+        return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
+    }
+    
+    // Open the engine
+    let config = EdgestoreConfig::new(&cmd.path);
+    let engine = Engine::open(config)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+    
+    // Perform range scan
+    let namespace = cmd.namespace.as_bytes();
+    let start = cmd.start.as_bytes();
+    let end = cmd.end.as_bytes();
+    
+    let results = engine.range(namespace, start, end)
+        .map_err(|e| format!("Failed to perform range scan: {}", e))?;
+    
+    // Apply limit if specified
+    let limit = cmd.limit.unwrap_or(results.len());
+    let count = results.len().min(limit);
+    
+    // Output results
+    for (key, value) in results.iter().take(limit) {
+        let key_str = String::from_utf8_lossy(key);
+        
+        if cmd.hex {
+            // Output both key and value as hex
+            println!("{}={}", hex::encode(key), hex::encode(value));
+        } else {
+            // Try to output as UTF-8
+            match std::str::from_utf8(value) {
+                Ok(val_str) => println!("{}={}", key_str, val_str),
+                Err(_) => println!("{}=(binary) {}", key_str, hex::encode(value)),
+            }
+        }
+    }
+    
+    eprintln!("Found {} keys (showing {})", results.len(), count);
     
     Ok(())
 }

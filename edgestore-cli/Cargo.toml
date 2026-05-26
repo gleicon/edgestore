@@ -1,0 +1,19 @@
+[package]
+name = "edgestore-cli"
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "EdgeStore CLI - Administrative tool for managing EdgeStore databases"
+repository = "https://github.com/gleicon/edgestore"
+keywords = ["cli", "kv", "database", "edgestore"]
+
+[[bin]]
+name = "edgestore-cli"
+path = "src/main.rs"
+
+[dependencies]
+edgestore = { path = "../edgestore" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"

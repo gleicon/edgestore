@@ -1,14 +1,14 @@
 [package]
 name = "edgestore-repl"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
 description = "REPL and HTTP server for EdgeStore"
-repository = "https://github.com/gleicon/edgestore"
-homepage = "https://github.com/gleicon/edgestore"
-readme = "../README.md"
-keywords = ["edgestore", "repl", "database"]
-categories = ["database"]
+keywords = ["edgestore", "repl", "database", "http", "server"]
+categories = ["database-implementations"]
 
 [dependencies]
 edgestore = { path = "../edgestore" }

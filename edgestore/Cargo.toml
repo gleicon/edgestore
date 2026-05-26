@@ -1,34 +1,34 @@
 [package]
 name = "edgestore"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
 description = "Local-first embedded KV + vector database in Rust"
-repository = "https://github.com/gleicon/edgestore"
-homepage = "https://github.com/gleicon/edgestore"
-readme = "../README.md"
-keywords = ["kv", "vector", "database", "embedded", "local-first"]
-categories = ["database", "data-structures"]
+keywords = ["database", "kv-store", "embedded", "vector", "ssd"]
+categories = ["database-implementations", "data-structures", "caching"]
 
 [lib]
 name = "edgestore"
 path = "src/lib.rs"
 
 [dependencies]
-lz4_flex = "*"
-zstd = "*"
-crc32c = "*"
-byteorder = "*"
-blake3 = "*"
-fs2 = "*"
-xorf = { version = "*", features = ["serde"] }
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
+lz4_flex = "0.13"
+zstd = "0.13"
+crc32c = "0.6"
+byteorder = "1.5"
+blake3 = "1.8"
+fs2 = "0.4"
+xorf = { version = "0.12", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 wide = "0.7"
 lazy_static = "1"
 
 [dev-dependencies]
-tempfile = "*"
+tempfile = "3"
 rmp-serde = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 

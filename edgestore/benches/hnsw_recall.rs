@@ -35,7 +35,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
             for i in 0..per_cluster {
                 let mut v = Vec::with_capacity(dims);
                 for d in 0..dims {
-                    let mut s = (cluster as u64 * 10000 + i as u64 * 100 + d as u64);
+                    let mut s = cluster as u64 * 10000 + i as u64 * 100 + d as u64;
                     s = s.wrapping_mul(1103515245).wrapping_add(12345);
                     let noise = ((s % 20) as f32) / 100.0 - 0.1;
                     v.push((center[d] + noise).clamp(0.0, 1.0));
@@ -79,7 +79,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                             let d = distance(&query_data, rec, Dtype::F32, Metric::L2).unwrap();
                             brute.push((vec![i as u8], d));
                         }
-                        brute.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                        brute.sort_by(|a, b| edgestore::total_cmp_f32(a.1, b.1));
                         let brute_keys: std::collections::HashSet<Vec<u8>> = brute.iter().take(10).map(|(k, _)| k.clone()).collect();
 
                         let intersection: Vec<_> = hnsw_keys.intersection(&brute_keys).collect();

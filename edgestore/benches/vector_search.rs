@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use edgestore::{
-    distance, Dtype, Engine, Metric, VectorEngine, VectorRecord,
+    Dtype, Engine, Metric, VectorEngine, VectorRecord,
 };
 use tempfile::TempDir;
 
@@ -34,7 +34,7 @@ fn bench_hnsw_vs_flat(c: &mut Criterion) {
             for i in 0..per_cluster {
                 let mut v = Vec::with_capacity(dims);
                 for d in 0..dims {
-                    let mut s = (cluster as u64 * 10000 + i as u64 * 100 + d as u64);
+                    let mut s = cluster as u64 * 10000 + i as u64 * 100 + d as u64;
                     s = s.wrapping_mul(1103515245).wrapping_add(12345);
                     let noise = ((s % 20) as f32) / 100.0 - 0.1;
                     v.push((center[d] + noise).clamp(0.0, 1.0));

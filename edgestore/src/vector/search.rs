@@ -38,9 +38,7 @@ impl Ord for HeapItem {
         // Standard ordering: larger distance = Greater.
         // BinaryHeap (max-heap) peek() returns the maximum = worst item (largest distance).
         // When we find a new item with smaller distance, we pop the worst and push the new one.
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        crate::vector::distance::total_cmp_f32(self.distance, other.distance)
     }
 }
 
@@ -110,11 +108,7 @@ pub fn vector_search(
             distance: item.distance,
         })
         .collect();
-    results.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    results.sort_by(|a, b| crate::vector::distance::total_cmp_f32(a.distance, b.distance));
 
     Ok(results)
 }

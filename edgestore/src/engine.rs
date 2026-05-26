@@ -1350,7 +1350,7 @@ impl TextEngine for Engine {
             .map(|(doc_id, score)| TextSearchResult { doc_id, score })
             .collect();
         results.sort_by(|a, b| {
-            let score_cmp = b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal);
+            let score_cmp = crate::vector::distance::total_cmp_f32(b.score, a.score);
             if score_cmp == std::cmp::Ordering::Equal {
                 a.doc_id.cmp(&b.doc_id) // Tiebreaker: lexicographic doc_id
             } else {

@@ -60,9 +60,7 @@ impl PartialOrd for Candidate {
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        crate::vector::distance::total_cmp_f32(self.distance, other.distance)
             .then_with(|| self.node_idx.cmp(&other.node_idx))
     }
 }
@@ -171,7 +169,7 @@ impl HnswIndex {
             .into_iter()
             .map(|c| (c.node_idx, c.distance))
             .collect();
-        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| crate::vector::distance::total_cmp_f32(a.1, b.1));
         Ok(out)
     }
 
@@ -212,7 +210,7 @@ impl HnswIndex {
             .map(|(idx, dist)| (self.nodes[idx].vector_id.clone(), dist))
             .collect();
 
-        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| crate::vector::distance::total_cmp_f32(a.1, b.1));
         Ok(out)
     }
 
@@ -513,7 +511,6 @@ impl HnswIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::types::encode_vector_record;
 
     fn random_f32_vector(dims: usize, seed: &mut u64) -> Vec<f32> {
         let mut v = Vec::with_capacity(dims);
@@ -588,7 +585,7 @@ mod tests {
 
         // Brute-force reference
         let mut query = Vec::with_capacity(dims);
-        for d in 0..dims {
+        for _ in 0..dims {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
             query.push(((seed % 100) as f32) / 100.0);
         }

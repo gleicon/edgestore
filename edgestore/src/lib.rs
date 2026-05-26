@@ -83,7 +83,7 @@ pub use text::tokenizer::{tokenize, Token};
 pub use text::typo::{is_one_edit_away, levenshtein};
 pub use text::types::{decode_text_record, FacetValue};
 pub use vector::api::{vector_namespace, VectorEngine};
-pub use vector::distance::{distance, distance_scalar, Metric};
+pub use vector::distance::{distance, distance_scalar, Metric, total_cmp_f32};
 pub use vector::hnsw::HnswIndex;
 pub use vector::search::{vector_search, VectorSearchResult};
 pub use vector::types::{Dtype, VectorRecord};

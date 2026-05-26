@@ -1,6 +1,28 @@
 use crate::error::EdgestoreError;
 use crate::vector::types::Dtype;
 
+/// Total ordering for `f32` that is consistent even when NaN is present.
+///
+/// Treats NaN as greater than all non-NaN values. Two NaNs are Equal.
+/// Required for `sort_by` and `BinaryHeap` comparators that must implement
+/// a strict weak ordering.
+pub fn total_cmp_f32(a: f32, b: f32) -> std::cmp::Ordering {
+    match a.partial_cmp(&b) {
+        Some(ord) => ord,
+        None => {
+            if a.is_nan() {
+                if b.is_nan() {
+                    std::cmp::Ordering::Equal
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            } else {
+                std::cmp::Ordering::Less
+            }
+        }
+    }
+}
+
 /// Distance metric for vector comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {

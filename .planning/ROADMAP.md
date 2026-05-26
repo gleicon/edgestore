@@ -12,6 +12,7 @@
 | 5 | Vector Search | Flat SIMD ANN search on top of KV | VECTOR-01–05 | 4 |
 | 6 | SSD Optimization + HNSW | FDP hints, HNSW index, async wrapper | SSD-01–05 | 4 |
 | 7 | Full-Text Search (v2) | Embedded Algolia-like search | SEARCH-01–04 | 3 |
+| 8 | v1.0 Polish & Release | Final docs, CLI, packaging, release engineering | POLISH-01–08 | 4 |
 
 ---
 
@@ -214,6 +215,39 @@ Plans:
 **Key risks:**
 - Posting list compaction semantics differ from KV tombstones — must not use same path
 - Tokenizer/stemmer internationalization is a long tail — English-first, documented
+
+---
+
+### Phase 8: v1.0 Polish & Release
+
+**Goal:** Final release engineering: comprehensive documentation, CLI binary, workspace packaging, API polish, and cross-feature integration validation. Ship a production-ready crate publishable to crates.io.
+
+**Requirements:** POLISH-01, POLISH-02, POLISH-03, POLISH-04, POLISH-05, POLISH-06, POLISH-07, POLISH-08
+
+**Plans:** 7 plans
+
+Plans:
+- [x] 08-01-PLAN.md — API polish: rustdoc coverage, clippy clean, visibility audit, feature flags, Cargo.toml metadata
+- [ ] 08-02a-PLAN.md — Core documentation: README, ARCHITECTURE.md, CHANGELOG
+- [x] 08-02b-PLAN.md — Benchmarks, examples, and license files
+- [ ] 08-03a-PLAN.md — CLI scaffold and core subcommands (create, stats, put, get, delete, range)
+- [ ] 08-03b-PLAN.md — CLI advanced subcommands (compact, export, import, vector-search, text-search) and build config
+- [x] 08-04a-PLAN.md — Final integration test and metadata finalization
+- [ ] 08-04b-PLAN.md — Publish dry-run, benchmarks, and final validation
+
+**Success Criteria:**
+1. `cargo doc --workspace` builds with zero rustdoc warnings; all public items documented
+2. `cargo clippy --workspace -D warnings` clean on stable Rust
+3. README contains quick-start example, feature matrix, and architecture diagram
+4. `edgestore-cli --help` shows all subcommands; `edgestore-cli create --path /tmp/db` opens a DB
+5. All workspace crates have version=1.0.0, proper metadata, and LICENSE file
+6. Final integration test: KV + vector + text + compaction + snapshot + replication end-to-end passes
+7. Benchmark suite runs and results captured in `BENCHMARKS.md`
+8. crates.io publish dry-run (`cargo publish --dry-run`) passes for `edgestore`
+
+**Key risks:**
+- Public API changes during polish may break downstream integration tests — freeze API after plan 08-01
+- CLI binary adds new dependencies (clap); must not bloat the library crate
 
 ---
 

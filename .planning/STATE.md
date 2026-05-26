@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
   current_phase: 08
-  status: Planned
+  status: In Progress
   last_updated: "2026-05-25T06:30:00.000Z"
   progress:
     total_phases: 8
     completed_phases: 7
     total_plans: 50
-    completed_plans: 40
-    percent: 92
+    completed_plans: 41
+    percent: 94
 ---
 
 # Project State — EdgeStore
@@ -269,7 +269,7 @@ All 5 plans executed successfully:
 | 08-02b | 1 | Benchmarks, examples, and license files | POLISH-03, POLISH-07 | **Complete** |
 | 08-03a | 2 | CLI scaffold and core subcommands | POLISH-04 | Planned |
 | 08-03b | 2 | CLI advanced subcommands and build config | POLISH-04 | Planned |
-| 08-04a | 3 | Final integration test and metadata finalization | POLISH-05, POLISH-06 | Planned |
+| 08-04a | 3 | Final integration test and metadata finalization | POLISH-05, POLISH-06 | **Complete** |
 | 08-04b | 3 | Publish dry-run, benchmarks, and final validation | POLISH-07, POLISH-08 | Planned |
 
 ### Plan 08-02b Completion (2026-05-25)
@@ -293,6 +293,14 @@ All 5 plans executed successfully:
 - **Cargo.toml metadata**: description, repository, homepage, keywords, categories, readme added to all 3 crates; license added to edgestore-repl and edgestore-tokio
 - **Publish dry-run**: `cargo publish --dry-run -p edgestore` passes
 - **Commits**: docs(edgestore): add rustdoc coverage and visibility audit for 08-01; ci(edgestore): verify clippy clean build and test pass for 08-01; ci(edgestore): verify feature flag cleanup for 08-01; ci(edgestore): add Cargo.toml metadata for 08-01
+
+### Plan 08-04a Completion (2026-05-25)
+
+- **integration_v1.rs**: Comprehensive end-to-end test covering KV operations, TTL + compaction, snapshots, vector storage/search, text search with BM25, replication (manifest export/import + merkle compare), and transactions (commit/rollback)
+- **Test passes in ~2.4s** (well under 60s target); uses temporary directories for isolation
+- **Metadata finalization**: All crates version 1.0.0 via `[workspace.package]` inheritance; dependency versions pinned; edgestore keywords/categories updated for crates.io discoverability
+- **RELEASE_CHECKLIST.md**: Step-by-step release process including verification, tagging, crates.io publish order, and GitHub release notes
+- Commits: `ce70f2f`, `fedce85`
 
 ## Phase 8 Planning Notes
 

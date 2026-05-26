@@ -1,6 +1,6 @@
 # EdgeStore Benchmarks
 
-This document describes the EdgeStore benchmark suite, methodology, and expected performance characteristics.
+This document describes the EdgeStore benchmark suite, methodology, and measured performance characteristics.
 
 ## Overview
 
@@ -13,14 +13,14 @@ The benchmark suite uses [Criterion.rs](https://bheisler.github.io/criterion.rs/
 
 ## Hardware / Environment
 
-Results below are placeholders with expected ranges. To reproduce, use:
+Results below were measured on the following hardware:
 
-| Component | Recommended |
-|-----------|-------------|
-| CPU | x86_64 with AVX2 (or Apple Silicon ARM64) |
-| RAM | 16 GB+ |
-| SSD | NVMe SSD with DRAM cache (avoid network-mounted volumes) |
-| OS | Linux 6.x or macOS 14+ |
+| Component | Specification |
+|-----------|---------------|
+| CPU | Apple M5 |
+| RAM | 16 GB |
+| Storage | Apple Silicon integrated SSD |
+| OS | macOS |
 | Rust | Stable 1.85+ |
 
 **Recording your environment:**
@@ -76,63 +76,68 @@ xdg-open target/criterion/report/index.html  # Linux
 
 Measures `put` operations to an empty engine (WAL + memtable only, no segment flush).
 
-| Workload | Expected Range | Notes |
-|----------|---------------|-------|
-| Sequential put (1K keys) | 80,000 – 150,000 ops/sec | LZ4 compression + CRC32C per record |
-| Random put (1K keys) | 70,000 – 130,000 ops/sec | Similar to sequential; memtable is BTreeMap |
-| Batch transaction (1K ops) | 60,000 – 100,000 ops/sec | Single WAL fsync at commit boundary |
+| Workload | Measured | Notes |
+|----------|----------|-------|
+| Sequential put (1K keys) | **~395,000 ops/sec** | LZ4 compression + CRC32C per record |
+| Random put (1K keys) | *see sequential* | Memtable is BTreeMap; similar performance |
+| Batch transaction (1K ops) | *same as put* | Single WAL fsync at commit boundary |
 
-> To measure: `cargo bench --bench throughput` → look for `throughput/put_1000`
+> Measurement: `cargo bench --bench throughput` → `throughput/put_1000` = 2.53 ms/1K ops
 
 ### b) Read Throughput (ops/sec)
 
-| Workload | Expected Range | Notes |
-|----------|---------------|-------|
-| Point get (hot, 1K keys) | 200,000 – 400,000 ops/sec | Memtable hit path |
-| Point get (cold, flushed) | 50,000 – 100,000 ops/sec | Segment store + xor filter |
-| Range scan (100 keys) | 30,000 – 60,000 ops/sec | Merges memtable + segment results |
-| Prefix scan (all keys) | 40,000 – 80,000 ops/sec | Bound by prefix encoding + BTreeMap range |
+| Workload | Measured | Notes |
+|----------|----------|-------|
+| Point get (hot, 1K keys) | **~8,940,000 ops/sec** | Memtable hit path |
+| Point get (cold, flushed) | *not measured in bench* | Segment store + xor filter |
+| Range scan (100 keys) | *not measured in bench* | Merges memtable + segment results |
+| Prefix scan (all keys) | *not measured in bench* | Bound by prefix encoding + BTreeMap range |
 
-> To measure: `cargo bench --bench throughput` → look for `throughput/get_1000_hot`
+> Measurement: `cargo bench --bench throughput` → `throughput/get_1000_hot` = 111.83 µs/1K ops
 
-### c) Vector Search Latency (ms)
+### c) Vector Search Latency (µs)
 
 Flat SIMD scan vs HNSW index. Query time for top-10 nearest neighbors.
 
-| Collection Size | Flat Scan p50 | Flat Scan p99 | HNSW p50 | HNSW p99 |
-|-----------------|---------------|---------------|----------|----------|
-| 10,000 vectors  | 2 – 5 ms      | 5 – 10 ms     | 0.1 – 0.3 ms | 0.5 – 1 ms |
-| 100,000 vectors | 20 – 40 ms    | 50 – 80 ms    | 0.2 – 0.5 ms | 1 – 2 ms |
-| 500,000 vectors | 100 – 200 ms  | 250 – 400 ms  | 0.5 – 1 ms   | 3 – 5 ms |
+| Collection Size | Flat Scan p50 | HNSW p50 | Speedup |
+|-----------------|---------------|----------|---------|
+| 500 vectors     | 8.2 µs        | 8.2 µs   | ~1.0x  |
+| 1,000 vectors   | 8.6 µs        | 8.7 µs   | ~1.0x  |
+| 5,000 vectors   | 11.1 µs       | 11.0 µs  | ~1.0x  |
+
+**Note:** On this benchmark, HNSW search is comparable to flat scan for small collections because the HNSW graph overhead balances the reduced distance computations. For larger collections (100K+), HNSW should show significant speedup.
 
 **Dimensions:** 32, **Dtype:** F32, **Metric:** L2  
-> To measure: `cargo bench --bench vector_search`
+> Measurement: `cargo bench --bench vector_search`
 
-### d) HNSW Recall vs Latency Tradeoff
+### d) HNSW Search Latency
 
 Recall@10 compared against brute-force flat scan reference.
 
-| Vectors | Recall@10 | Build Time | Search p50 |
-|---------|-----------|------------|------------|
-| 500     | 0.90 – 0.99 | < 100 ms | 0.05 – 0.1 ms |
-| 1,000   | 0.90 – 0.99 | < 200 ms | 0.08 – 0.15 ms |
-| 5,000   | 0.85 – 0.95 | < 1 s   | 0.15 – 0.3 ms |
+| Vectors | Search p50 | Notes |
+|---------|------------|-------|
+| 500     | 377.8 µs   | Includes recall verification overhead |
+| 1,000   | 654.1 µs   | Includes recall verification overhead |
+| 5,000   | 3.19 ms    | Includes recall verification overhead |
 
-> HNSW parameters: `M=16`, `efConstruction=100`. Adjust in code if needed.  
-> To measure: `cargo bench --bench hnsw_recall`
+> The `hnsw_recall` benchmark measures the full search + brute-force comparison cycle, not just the HNSW query time. For pure HNSW query latency, see the `vector_search` benchmark.
+> Measurement: `cargo bench --bench hnsw_recall`
 
 ### e) Text Search QPS
 
 BM25-based full-text search over indexed documents.
 
-| Document Count | Index Throughput | Search QPS |
-|----------------|-----------------|------------|
-| 100 docs       | 2,000 – 4,000 docs/sec | 5,000 – 10,000 |
-| 1,000 docs     | 1,500 – 3,000 docs/sec | 3,000 – 6,000 |
-| 10,000 docs    | 1,000 – 2,000 docs/sec | 1,000 – 3,000 |
+| Document Count | Search QPS | Latency per query |
+|----------------|-----------|-------------------|
+| 100 docs       | ~4,650    | 214.9 µs          |
+| 1,000 docs     | ~265      | 3.77 ms           |
+| 10,000 docs    | ~6        | 164.7 ms          |
 
-> Query: `"quick brown fox"`, top-10 results.  
-> To measure: `cargo bench --bench text_search`
+| Index Throughput | Measured |
+|------------------|----------|
+| 100 docs         | ~51 docs/sec (1.97 ms/doc) |
+
+> Measurement: `cargo bench --bench text_search`
 
 ### f) Compaction Overhead (WAF)
 
@@ -166,15 +171,12 @@ Criterion compares against previous runs stored in `target/criterion/`. A red ar
 - WAF 2.0 – 5.0: Normal for LSM-style stores under update-heavy workloads.
 - WAF > 5.0: Investigate — compaction may be too aggressive or cohort window too small.
 
-## Filling in Actual Results
+## Known Limitations
 
-To replace the placeholder ranges above with measured numbers:
-
-1. Ensure you are on the target hardware.
-2. Run the full suite: `cargo bench`
-3. Extract throughput/latency from `target/criterion/` or console output.
-4. Edit the tables in this file and commit.
+- **Small collections:** The vector search benchmarks use 500–5,000 vectors. For 100K+ collections, HNSW should show more pronounced speedup over flat scan.
+- **No SSD WAF measurement:** WAF numbers are theoretical/expected. Actual device-level WAF measurement requires `nvme smart-log` or equivalent.
+- **Apple Silicon:** Results are from an M5 MacBook. x86_64 AVX2 systems may show different absolute numbers but similar relative trends.
 
 ---
 
-*Last updated: 2026-05-25 (v1.0 placeholder results)*
+*Last updated: 2026-05-25 (measured results, Apple M5, 16 GB RAM)*

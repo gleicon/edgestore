@@ -15,6 +15,7 @@ name = "edgestore"
 path = "src/lib.rs"
 
 [dependencies]
+log = "0.4"
 lz4_flex = "0.13"
 zstd = "0.13"
 crc32c = "0.6"

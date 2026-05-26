@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "blake3",
  "byteorder",
@@ -371,6 +371,7 @@ dependencies = [
  "criterion",
  "fs2",
  "lazy_static",
+ "log",
  "lz4_flex",
  "rmp-serde",
  "serde",
@@ -383,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "edgestore",
@@ -395,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-repl"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "blake3",
  "edgestore",
@@ -409,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tokio"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "edgestore",
  "tempfile",

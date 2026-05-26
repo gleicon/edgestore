@@ -9,9 +9,9 @@ use crate::types::{Lsn, Operation, WalRecord};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-pub const WAL_MAGIC: [u8; 4] = [0x45, 0x44, 0x47, 0x57]; // "EDGW"
-pub const WAL_FORMAT_VERSION: u8 = 1;
-pub const WAL_HEADER_LEN: usize = 8;
+pub(crate) const WAL_MAGIC: [u8; 4] = [0x45, 0x44, 0x47, 0x57]; // "EDGW"
+pub(crate) const WAL_FORMAT_VERSION: u8 = 1;
+pub(crate) const WAL_HEADER_LEN: usize = 8;
 
 /// Maximum decompressed-payload length we will accept (DoS protection).
 const MAX_COMPRESSED_LEN: u32 = 64 * 1024 * 1024; // 64 MiB
@@ -24,7 +24,7 @@ const MAX_COMPRESSED_LEN: u32 = 64 * 1024 * 1024; // 64 MiB
 ///   txid(u64-LE) lsn(u64-LE) timestamp(i64-LE) ttl(u32-LE) op(u8)
 ///   ns_len(u16-BE) ns_bytes key_len(u32-LE) key_bytes
 ///   value_hash(32-bytes) val_len(u32-LE) val_bytes
-pub fn serialize_record(rec: &WalRecord) -> Vec<u8> {
+pub(crate) fn serialize_record(rec: &WalRecord) -> Vec<u8> {
     let cap = 8 + 8 + 8 + 4 + 1 + 2 + rec.ns_bytes.len() + 4 + rec.key_bytes.len()
         + 32 + 4 + rec.value_bytes.len();
     let mut buf = Vec::with_capacity(cap);
@@ -48,7 +48,7 @@ pub fn serialize_record(rec: &WalRecord) -> Vec<u8> {
 /// Deserialise a `WalRecord` from raw bytes.
 ///
 /// Returns `Err(CorruptRecord)` if the buffer is too short at any step.
-pub fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError> {
+pub(crate) fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError> {
     let mut pos = 0usize;
 
     macro_rules! need {
@@ -117,7 +117,7 @@ pub fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError> {
 
 // ── WalWriter ────────────────────────────────────────────────────────────────
 
-pub struct WalWriter {
+pub(crate) struct WalWriter {
     file: File,
     bytes_written: u64,
     created_at_secs: u64,
@@ -178,7 +178,7 @@ fn read_and_validate_header(r: &mut impl Read) -> Result<(), EdgestoreError> {
 
 impl WalWriter {
     /// Create a new WAL file, writing the 8-byte header.
-    pub fn create(path: &Path, config: &EdgestoreConfig) -> Result<WalWriter, EdgestoreError> {
+    pub(crate) fn create(path: &Path, config: &EdgestoreConfig) -> Result<WalWriter, EdgestoreError> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -197,7 +197,7 @@ impl WalWriter {
     }
 
     /// Open an existing WAL file for appending.  Validates header.
-    pub fn open(path: &Path, config: &EdgestoreConfig) -> Result<WalWriter, EdgestoreError> {
+    pub(crate) fn open(path: &Path, config: &EdgestoreConfig) -> Result<WalWriter, EdgestoreError> {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
         read_and_validate_header(&mut file)?;
@@ -217,7 +217,7 @@ impl WalWriter {
     /// Append one record.  Format:  {crc32c:u32-LE}{compressed_len:u32-LE}{lz4_payload}
     ///
     /// Does NOT call fsync — callers use `fsync()` for group-commit.
-    pub fn append(&mut self, record: &WalRecord) -> Result<(), EdgestoreError> {
+    pub(crate) fn append(&mut self, record: &WalRecord) -> Result<(), EdgestoreError> {
         let raw = serialize_record(record);
         let compressed = lz4_flex::compress_prepend_size(&raw);
         let crc = crc32c::crc32c(&compressed);
@@ -233,13 +233,13 @@ impl WalWriter {
     }
 
     /// Flush OS buffers to durable storage.
-    pub fn fsync(&mut self) -> Result<(), EdgestoreError> {
+    pub(crate) fn fsync(&mut self) -> Result<(), EdgestoreError> {
         self.file.sync_all()?;
         Ok(())
     }
 
     /// Returns `true` when this WAL should be rotated.
-    pub fn needs_rotation(&self, now_secs: u64) -> bool {
+    pub(crate) fn needs_rotation(&self, now_secs: u64) -> bool {
         self.bytes_written >= self.wal_max_bytes
             || (now_secs.saturating_sub(self.created_at_secs)) >= self.wal_max_age_secs
     }
@@ -247,13 +247,13 @@ impl WalWriter {
 
 // ── WalReader ────────────────────────────────────────────────────────────────
 
-pub struct WalReader {
+pub(crate) struct WalReader {
     file: File,
 }
 
 impl WalReader {
     /// Open an existing WAL file for reading.  Validates header.
-    pub fn open(path: &Path) -> Result<WalReader, EdgestoreError> {
+    pub(crate) fn open(path: &Path) -> Result<WalReader, EdgestoreError> {
         let mut file = OpenOptions::new().read(true).open(path)?;
         read_and_validate_header(&mut file)?;
         Ok(WalReader { file })
@@ -262,7 +262,7 @@ impl WalReader {
     /// Read all valid records from the WAL.
     ///
     /// Corrupt or truncated frames are logged to stderr and skipped / stopped.
-    pub fn read_records(&mut self) -> Vec<WalRecord> {
+    pub(crate) fn read_records(&mut self) -> Vec<WalRecord> {
         let mut records = Vec::new();
 
         loop {

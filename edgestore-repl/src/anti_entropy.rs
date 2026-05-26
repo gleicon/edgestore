@@ -53,7 +53,7 @@ pub struct AntiEntropyLoop {
 impl AntiEntropyLoop {
     /// Create a new anti-entropy loop.
     ///
-    /// - `engine`   — shared engine (Arc<Mutex>) for replication API access.
+    /// - `engine`   — shared engine (`Arc<Mutex>`) for replication API access.
     /// - `peer_url` — base URL of the remote peer's `HttpReplicationServer` (e.g. `"http://host:8900"`).
     /// - `peer_id`  — unique identifier for the peer; used as the cursor file name.
     /// - `db_path`  — database directory path; cursor file is written under `{db_path}/sync/`.

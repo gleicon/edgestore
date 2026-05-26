@@ -2,17 +2,29 @@ use std::path::PathBuf;
 use crate::types::Compression;
 use crate::memtable::{MemTable, BTreeMemTable};
 
+/// Database configuration.
 pub struct EdgestoreConfig {
+    /// Filesystem path for the database directory.
     pub path: PathBuf,
+    /// Maximum WAL file size in bytes before rotation.
     pub wal_max_bytes: u64,
+    /// Maximum WAL file age in seconds before rotation.
     pub wal_max_age_secs: u64,
+    /// Target uncompressed memtable size in bytes before flush.
     pub segment_size_bytes: u64,
+    /// Cohort window width in seconds for deathtime compaction.
     pub cohort_window_secs: u64,
+    /// Compression algorithm for WAL records.
     pub compression_wal: Compression,
+    /// Compression algorithm for segment blocks.
     pub compression_segments: Compression,
+    /// Target false-positive rate for xor filters.
     pub xor_filter_fpr: f64,
+    /// Write-amplification budget per compaction cycle in bytes.
     pub compaction_write_budget_bytes: u64,
+    /// Enable FDP (Flexible Data Placement) hints on NVMe 2.0 hardware.
     pub fdp_enabled: bool,
+    /// Factory function that returns a new empty memtable.
     pub memtable_factory: Box<dyn Fn() -> Box<dyn MemTable> + Send + Sync>,
 }
 
@@ -35,6 +47,7 @@ impl std::fmt::Debug for EdgestoreConfig {
 }
 
 impl EdgestoreConfig {
+    /// Create a new `EdgestoreConfig` with sensible defaults.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         EdgestoreConfig {
             path: path.into(),

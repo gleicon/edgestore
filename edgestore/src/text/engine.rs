@@ -8,7 +8,9 @@ use crate::types::Lsn;
 /// Result of a text search: document key and BM25 score.
 #[derive(Debug, Clone)]
 pub struct TextSearchResult {
+    /// Document key.
     pub doc_id: Vec<u8>,
+    /// BM25 relevance score (higher = more relevant).
     pub score: f32,
 }
 

@@ -1,8 +1,14 @@
+/// Text engine trait and helpers.
 pub mod engine;
+/// Facet filtering.
 pub mod facet;
+/// Inverted index and BM25 scoring.
 pub mod index;
+/// Tokenization and stemming.
 pub mod tokenizer;
+/// Typo tolerance (Levenshtein distance).
 pub mod typo;
+/// Text record types and encoding.
 pub mod types;
 
 pub use engine::{text_namespace, TextEngine, TextSearchResult};

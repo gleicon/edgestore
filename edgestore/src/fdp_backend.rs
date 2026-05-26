@@ -14,6 +14,7 @@ pub struct FdpStorageBackend {
 }
 
 impl FdpStorageBackend {
+    /// Wrap an existing backend with FDP hints.
     pub fn new(inner: Box<dyn StorageBackend>) -> Self {
         FdpStorageBackend { inner }
     }
@@ -62,10 +63,12 @@ impl StorageBackend for FdpStorageBackend {
 /// Mock FDP backend that records placement hints for test verification.
 pub struct MockFdpBackend {
     inner: Box<dyn StorageBackend>,
+    /// Hints recorded by this mock backend for test verification.
     pub recorded_hints: Mutex<Vec<(PathBuf, u64, PlacementHint)>>,
 }
 
 impl MockFdpBackend {
+    /// Create a new mock backend wrapping the given inner backend.
     pub fn new(inner: Box<dyn StorageBackend>) -> Self {
         MockFdpBackend {
             inner,

@@ -25,7 +25,9 @@ lazy_static::lazy_static! {
 /// A token with its original position in the text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
+    /// Stemmed, lowercased term.
     pub term: String,
+    /// Zero-based position in the original text.
     pub position: usize,
 }
 

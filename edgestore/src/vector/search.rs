@@ -7,7 +7,9 @@ use crate::vector::types::VectorRecord;
 /// Result of a vector search: key and distance.
 #[derive(Debug, Clone)]
 pub struct VectorSearchResult {
+    /// Opaque vector key.
     pub key: Vec<u8>,
+    /// Distance to the query vector (lower = closer).
     pub distance: f32,
 }
 

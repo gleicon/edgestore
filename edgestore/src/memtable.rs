@@ -1,23 +1,34 @@
 use crate::types::MemEntry;
 
+/// In-memory ordered table trait. Implementations must be Send + Sync.
 pub trait MemTable: Send + Sync {
+    /// Insert or overwrite an entry.
     fn insert(&mut self, key: Vec<u8>, entry: MemEntry);
+    /// Retrieve an entry by key.
     fn get(&self, key: &[u8]) -> Option<&MemEntry>;
+    /// Scan entries in [start, end).
     fn range<'a>(&'a self, start: &[u8], end: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)>;
+    /// Scan entries with the given prefix.
     fn prefix<'a>(&'a self, prefix: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)>;
+    /// Iterate all entries.
     fn iter(&self) -> Vec<(&[u8], &MemEntry)>;
+    /// Number of entries.
     fn len(&self) -> usize;
+    /// Clear all entries.
     fn clear(&mut self);
+    /// True if the table is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
+/// Default memtable backed by `BTreeMap`.
 pub struct BTreeMemTable {
     inner: std::collections::BTreeMap<Vec<u8>, MemEntry>,
 }
 
 impl BTreeMemTable {
+    /// Create a new empty `BTreeMemTable`.
     pub fn new() -> Self {
         BTreeMemTable {
             inner: std::collections::BTreeMap::new(),

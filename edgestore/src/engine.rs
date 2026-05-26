@@ -42,13 +42,19 @@ const AVG_ENTRY_SIZE_ESTIMATE: u64 = 256;
 /// Result of importing a remote segment via `Engine::import_segment`.
 pub enum ImportResult {
     /// Segment applied. Record-level counts reflect LWW decisions.
-    Applied { keys_written: u64, keys_skipped: u64 },
+    Applied {
+        /// Number of records written (incoming won LWW).
+        keys_written: u64,
+        /// Number of records skipped (local won LWW).
+        keys_skipped: u64,
+    },
     /// Segment already present in local manifest — no-op.
     Skipped,
     /// BLAKE3 of provided data does not match claimed hash — segment rejected.
     HashMismatch,
 }
 
+/// Single-writer KV engine with WAL, segments, compaction, and optional vector/text indexes.
 pub struct Engine {
     pub(crate) config: EdgestoreConfig,
     pub(crate) wal: WalWriter,
@@ -65,6 +71,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Open or create an Engine at the configured path.
     pub fn open(config: EdgestoreConfig) -> Result<Engine, EdgestoreError> {
         std::fs::create_dir_all(&config.path)?;
 
@@ -150,6 +157,7 @@ impl Engine {
 
     // ── Public API — each delegates to _inner and records timing ─────────────
 
+    /// Store a key-value pair in the given namespace.
     pub fn put(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.put_inner(ns, key, val);
@@ -158,6 +166,9 @@ impl Engine {
         r
     }
 
+    /// Store a key-value pair with a TTL (seconds).
+    ///
+    /// Records expire lazily during compaction based on cohort window.
     pub fn put_with_ttl(
         &mut self,
         ns: &[u8],
@@ -181,6 +192,7 @@ impl Engine {
         r
     }
 
+    /// Delete a key in the given namespace (tombstone).
     pub fn delete(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.delete_inner(ns, key);
@@ -216,6 +228,7 @@ impl Engine {
         r
     }
 
+    /// Flush the current memtable to a new segment file.
     pub fn flush_to_segments(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.flush_to_segments_inner();
@@ -224,15 +237,18 @@ impl Engine {
         r
     }
 
+    /// fsync the current WAL file.
     pub fn flush(&mut self) -> Result<(), EdgestoreError> {
         self.wal.fsync()
     }
 
+    /// Start a new multi-record transaction.
     pub fn begin(&mut self) -> crate::transaction::Transaction {
         self.txid_counter += 1;
         crate::transaction::Transaction::new(self.txid_counter)
     }
 
+    /// Commit a transaction, writing all pending records to the WAL.
     pub fn commit_transaction(&mut self, tx: crate::transaction::Transaction) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.commit_transaction_inner(tx);
@@ -241,6 +257,7 @@ impl Engine {
         r
     }
 
+    /// Roll back a transaction, discarding all pending records.
     pub fn rollback_transaction(&mut self, mut tx: crate::transaction::Transaction) {
         tx.rollback_self();
         self.metrics.transactions_rolled_back.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

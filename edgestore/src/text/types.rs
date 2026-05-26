@@ -3,19 +3,25 @@ use std::collections::HashMap;
 /// A facet value for filtering search results.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FacetValue {
+    /// String facet value.
     String(String),
+    /// Integer facet value.
     Number(i64),
+    /// Boolean facet value.
     Bool(bool),
 }
 
 /// A text document with optional facet values.
 #[derive(Debug, Clone)]
 pub struct TextRecord {
+    /// Raw text content.
     pub text: String,
+    /// Facet values for filtering.
     pub facets: HashMap<String, FacetValue>,
 }
 
 impl TextRecord {
+    /// Create a new text record with no facets.
     pub fn new(text: impl Into<String>) -> Self {
         TextRecord {
             text: text.into(),
@@ -23,6 +29,7 @@ impl TextRecord {
         }
     }
 
+    /// Add a facet value, returning self for chaining.
     pub fn with_facet(mut self, key: impl Into<String>, value: FacetValue) -> Self {
         self.facets.insert(key.into(), value);
         self

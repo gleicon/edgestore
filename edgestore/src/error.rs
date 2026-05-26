@@ -1,22 +1,59 @@
 use std::fmt;
 
+/// All error variants returned by EdgeStore operations.
 #[derive(Debug)]
 pub enum EdgestoreError {
+    /// Underlying I/O error.
     Io(std::io::Error),
-    Checksum { expected: u32, got: u32 },
+    /// CRC32C checksum mismatch.
+    Checksum {
+        /// Expected CRC32C value.
+        expected: u32,
+        /// Computed CRC32C value.
+        got: u32,
+    },
+    /// Corrupt WAL record.
     CorruptRecord(String),
+    /// Corrupt namespace-key encoding.
     CorruptKey,
+    /// WAL rotation threshold reached.
     WalFull,
+    /// Another writer holds the database lock.
     WriterBusy,
+    /// Invalid operation (e.g. transaction not active).
     InvalidOperation(String),
-    NamespaceTooLong { len: usize, max: usize },
+    /// Namespace length exceeds u16::MAX bytes.
+    NamespaceTooLong {
+        /// Actual namespace length.
+        len: usize,
+        /// Maximum allowed namespace length.
+        max: usize,
+    },
+    /// Key not found (used by storage backends).
     KeyNotFound,
-    FormatVersion { expected: u8, got: u8 },
+    /// WAL or segment format version mismatch.
+    FormatVersion {
+        /// Expected format version.
+        expected: u8,
+        /// Actual format version found in file.
+        got: u8,
+    },
+    /// Corrupt segment file.
     SegmentCorrupt(String),
+    /// Corrupt manifest file.
     ManifestCorrupt(String),
+    /// Compaction failed.
     CompactionError(String),
+    /// Replication sync failed.
     ReplicationError(String),
-    DimensionMismatch { expected: usize, actual: usize },
+    /// Vector dimension mismatch.
+    DimensionMismatch {
+        /// Expected byte count (dims * element_size).
+        expected: usize,
+        /// Actual byte count provided.
+        actual: usize,
+    },
+    /// General corrupt data error.
     CorruptData(String),
 }
 

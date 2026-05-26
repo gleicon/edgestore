@@ -117,6 +117,7 @@ impl Compactor {
     /// Zero live records are relocated (COMPACT-04 invariant).
     /// Missing files are logged and skipped — not treated as errors.
     /// Caller is responsible for ensuring no pinned segments are in the cohort.
+    /// Delete all files belonging to an expired cohort.
     pub fn collect_expired_cohort(
         &self,
         manifest: &mut Manifest,
@@ -154,6 +155,7 @@ impl Compactor {
     ///
     /// If no entries survive, the cohort is treated as fully expired (files deleted,
     /// no output segment written).
+    /// Rewrite a partially-expired cohort, keeping only live entries.
     pub fn compact_partial_cohort(
         &self,
         manifest: &mut Manifest,
@@ -266,6 +268,8 @@ impl Compactor {
     /// - Partially-expired cohorts are compacted by removing dead records.
     /// - Stops when `bytes_written >= write_budget_bytes`.
     /// - Segments in `pinned_segment_ids` are never removed or rewritten.
+    ///
+    /// Run a full compaction cycle over all cohorts.
     pub fn compact_cycle(
         &self,
         manifest: &mut Manifest,

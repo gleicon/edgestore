@@ -4,12 +4,15 @@ use crate::memtable::MemTable;
 use crate::types::{encode_key, Lsn, MemEntry, Operation};
 use crate::wal::WalReader;
 
-pub struct RecoveryResult {
-    pub records_replayed: u64,
-    pub records_skipped: u64,
-    pub max_lsn: Lsn,
-    pub max_txid: u64,
-    pub wal_files_read: usize,
+pub(crate) struct RecoveryResult {
+    #[allow(dead_code)]
+    pub(crate) records_replayed: u64,
+    #[allow(dead_code)]
+    pub(crate) records_skipped: u64,
+    pub(crate) max_lsn: Lsn,
+    pub(crate) max_txid: u64,
+    #[allow(dead_code)]
+    pub(crate) wal_files_read: usize,
 }
 
 pub(crate) fn list_wal_files(db_path: &Path) -> Result<Vec<PathBuf>, EdgestoreError> {
@@ -40,7 +43,7 @@ pub(crate) fn list_wal_files(db_path: &Path) -> Result<Vec<PathBuf>, EdgestoreEr
     Ok(files)
 }
 
-pub fn recover_from_wal(
+pub(crate) fn recover_from_wal(
     db_path: &Path,
     memtable: &mut Box<dyn MemTable>,
 ) -> Result<RecoveryResult, EdgestoreError> {

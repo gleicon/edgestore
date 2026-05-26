@@ -4,7 +4,9 @@ use crate::text::index::Posting;
 /// A filter to apply to search results based on facet values.
 #[derive(Debug, Clone)]
 pub struct FacetFilter {
+    /// Facet field name.
     pub field: String,
+    /// Facet value to match.
     pub value: FacetValue,
 }
 

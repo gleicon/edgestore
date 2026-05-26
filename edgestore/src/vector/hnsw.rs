@@ -12,17 +12,22 @@ const HNSW_VERSION: u16 = 1;
 /// A node in the HNSW graph.
 #[derive(Debug, Clone)]
 pub struct HnswNode {
+    /// Opaque vector key (e.g. raw bytes from the KV store).
     pub vector_id: Vec<u8>,
+    /// Raw vector element bytes.
     pub vector_data: Vec<u8>,
-    /// Neighbor indices per layer. neighbors[layer][i] = node index.
+    /// Neighbor indices per layer. `neighbors[layer][i] = node index`.
     pub neighbors: Vec<Vec<usize>>,
 }
 
 /// Hierarchical Navigable Small World index for approximate nearest neighbor search.
 #[derive(Debug, Clone)]
 pub struct HnswIndex {
+    /// All nodes in the graph.
     pub nodes: Vec<HnswNode>,
+    /// Index of the entry point node (top layer).
     pub entry_point: usize,
+    /// Highest layer index in the graph.
     pub max_layer: usize,
     /// Max neighbors per node per layer (M parameter).
     pub m: usize,

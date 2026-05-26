@@ -10,6 +10,7 @@ use crate::error::EdgestoreError;
 /// cohort-aware data placement on supported hardware.
 #[derive(Debug, Clone, Copy)]
 pub struct PlacementHint {
+    /// Cohort bucket mapped to an FDP placement handle.
     pub cohort_bucket: i64,
 }
 
@@ -70,6 +71,7 @@ pub trait StorageBackend: Send + Sync {
 pub struct DefaultStorageBackend;
 
 impl DefaultStorageBackend {
+    /// Create a new default filesystem backend.
     pub fn new() -> Self {
         DefaultStorageBackend
     }
@@ -120,6 +122,7 @@ impl Default for MemoryStorageBackend {
 }
 
 impl MemoryStorageBackend {
+    /// Create a new in-memory backend (isolated per instance).
     pub fn new() -> Self {
         MemoryStorageBackend {
             files: Mutex::new(HashMap::new()),

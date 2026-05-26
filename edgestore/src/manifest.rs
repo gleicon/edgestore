@@ -5,20 +5,20 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-pub const MANIFEST_MAGIC: u32 = 0x4D414E46; // "MANF"
-pub const MANIFEST_VERSION: u8 = 1;
+pub(crate) const MANIFEST_MAGIC: u32 = 0x4D414E46; // "MANF"
+pub(crate) const MANIFEST_VERSION: u8 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum ManifestEntryType {
+pub(crate) enum ManifestEntryType {
     Add,
     Remove,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ManifestEntry {
-    pub entry_type: ManifestEntryType,
-    pub segment_id: SegmentId,
-    pub meta: Option<SegmentMeta>,
+pub(crate) struct ManifestEntry {
+    pub(crate) entry_type: ManifestEntryType,
+    pub(crate) segment_id: SegmentId,
+    pub(crate) meta: Option<SegmentMeta>,
 }
 
 fn write_framed_entry(file: &mut File, entry: &ManifestEntry) -> Result<(), EdgestoreError> {
@@ -35,6 +35,7 @@ fn write_framed_entry(file: &mut File, entry: &ManifestEntry) -> Result<(), Edge
     Ok(())
 }
 
+/// On-disk manifest that tracks the set of active segments.
 pub struct Manifest {
     #[allow(dead_code)]
     path: PathBuf,
@@ -43,6 +44,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Open or create a manifest at the given path.
     pub fn open(path: &Path) -> Result<Manifest, EdgestoreError> {
         let file_exists = path.exists();
         let mut file = std::fs::OpenOptions::new()
@@ -130,6 +132,7 @@ impl Manifest {
         Ok(Manifest { path: path.to_path_buf(), file, segments })
     }
 
+    /// Append a new segment to the manifest.
     pub fn add_segment(&mut self, meta: SegmentMeta) -> Result<(), EdgestoreError> {
         let entry = ManifestEntry {
             entry_type: ManifestEntryType::Add,
@@ -142,6 +145,7 @@ impl Manifest {
         Ok(())
     }
 
+    /// Remove the given segment ids from the manifest.
     pub fn remove_segments(&mut self, ids: &[SegmentId]) -> Result<(), EdgestoreError> {
         for &id in ids {
             let entry = ManifestEntry {
@@ -156,6 +160,7 @@ impl Manifest {
         Ok(())
     }
 
+    /// Return the current list of active segments.
     pub fn list_segments(&self) -> &[SegmentMeta] {
         &self.segments
     }

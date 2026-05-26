@@ -8,6 +8,7 @@ enum TxState {
     RolledBack,
 }
 
+/// Multi-record atomic transaction batch.
 pub struct Transaction {
     pub(crate) pending: Vec<WalRecord>,
     pub(crate) txid: u64,
@@ -15,6 +16,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    /// Create a new empty transaction with the given txid.
     pub fn new(txid: u64) -> Self {
         Transaction {
             pending: Vec::new(),
@@ -23,6 +25,7 @@ impl Transaction {
         }
     }
 
+    /// Append a put operation to this transaction.
     pub fn put(&mut self, ns: &[u8], key: &[u8], val: &[u8], lsn: Lsn, timestamp: i64) -> Result<(), EdgestoreError> {
         if self.state != TxState::Active {
             return Err(EdgestoreError::InvalidOperation("transaction not active".to_string()));
@@ -43,6 +46,7 @@ impl Transaction {
         Ok(())
     }
 
+    /// Append a put-with-TTL operation to this transaction.
     pub fn put_with_ttl(&mut self, ns: &[u8], key: &[u8], val: &[u8], ttl_secs: u32, lsn: Lsn, timestamp: i64) -> Result<(), EdgestoreError> {
         if self.state != TxState::Active {
             return Err(EdgestoreError::InvalidOperation("transaction not active".to_string()));
@@ -63,6 +67,7 @@ impl Transaction {
         Ok(())
     }
 
+    /// Append a delete operation to this transaction.
     pub fn delete(&mut self, ns: &[u8], key: &[u8], lsn: Lsn, timestamp: i64) -> Result<(), EdgestoreError> {
         if self.state != TxState::Active {
             return Err(EdgestoreError::InvalidOperation("transaction not active".to_string()));
@@ -83,11 +88,13 @@ impl Transaction {
         Ok(())
     }
 
+    /// Roll back this transaction, clearing all pending records.
     pub fn rollback_self(&mut self) {
         self.state = TxState::RolledBack;
         self.pending.clear();
     }
 
+    /// Take ownership of pending records, marking this transaction committed.
     pub fn take_pending(&mut self) -> Result<Vec<WalRecord>, EdgestoreError> {
         match self.state {
             TxState::Active => {
@@ -99,15 +106,17 @@ impl Transaction {
         }
     }
 
+    /// Returns true if this transaction is still active.
     pub fn is_active(&self) -> bool {
         self.state == TxState::Active
     }
 
-    // Convenience wrappers (CORE-06)
+    /// Convenience wrapper: commit via engine.
     pub fn commit(self, engine: &mut crate::engine::Engine) -> Result<Lsn, EdgestoreError> {
         engine.commit_transaction(self)
     }
 
+    /// Convenience wrapper: rollback via engine.
     pub fn rollback(self, engine: &mut crate::engine::Engine) {
         engine.rollback_transaction(self)
     }

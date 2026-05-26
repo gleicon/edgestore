@@ -41,8 +41,11 @@ impl TryFrom<u8> for Dtype {
 /// A vector record with dimension count, data type, and raw element bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VectorRecord {
+    /// Number of dimensions.
     pub dims: u16,
+    /// Element data type (F32, F16, or I8).
     pub dtype: Dtype,
+    /// Raw element bytes (length = dims * dtype.element_size()).
     pub data: Vec<u8>,
 }
 

@@ -14,20 +14,21 @@ use crate::types::{
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-pub const SEGMENT_BLOCK_MAGIC: u32 = 0x45445347; // "EDSG"
-pub const SEGMENT_FILE_MAGIC: u32 = 0x45445347;
-pub const SEGMENT_FORMAT_VERSION: u8 = 1;
+pub(crate) const SEGMENT_BLOCK_MAGIC: u32 = 0x45445347; // "EDSG"
+pub(crate) const SEGMENT_FILE_MAGIC: u32 = 0x45445347;
+pub(crate) const SEGMENT_FORMAT_VERSION: u8 = 1;
 /// Target size for an uncompressed block before flushing
 const BLOCK_TARGET_BYTES: usize = 3900;
 /// Block alignment boundary (4 KiB)
-pub const SEGMENT_BLOCK_SIZE: usize = 4096;
+pub(crate) const SEGMENT_BLOCK_SIZE: usize = 4096;
 /// Sparse index entry every N keys
+/// How many records to skip between sparse-index entries.
 pub const SPARSE_INDEX_STRIDE: usize = 64;
 
 // ── Entry serialization ────────────────────────────────────────────────────
 
-/// Layout: [key_len:u32-le][key][val_len:u32-le][val][lsn:u64-le][timestamp:i64-le][ttl:u32-le][op:u8]
-pub fn serialize_entry(key: &[u8], entry: &MemEntry) -> Vec<u8> {
+/// Layout: `[key_len:u32-le][key][val_len:u32-le][val][lsn:u64-le][timestamp:i64-le][ttl:u32-le][op:u8]`
+pub(crate) fn serialize_entry(key: &[u8], entry: &MemEntry) -> Vec<u8> {
     let val = entry.value.as_deref().unwrap_or(&[]);
     let mut buf = Vec::with_capacity(4 + key.len() + 4 + val.len() + 21);
     buf.extend_from_slice(&(key.len() as u32).to_le_bytes());
@@ -44,7 +45,7 @@ pub fn serialize_entry(key: &[u8], entry: &MemEntry) -> Vec<u8> {
     buf
 }
 
-pub fn deserialize_entry(
+pub(crate) fn deserialize_entry(
     buf: &[u8],
     pos: &mut usize,
 ) -> Result<(Vec<u8>, MemEntry), EdgestoreError> {
@@ -94,13 +95,13 @@ fn hash_key_to_u64(key: &[u8]) -> u64 {
     u64::from_le_bytes(h.as_bytes()[0..8].try_into().unwrap())
 }
 
-pub fn build_xor_filter(keys: &[Vec<u8>]) -> Result<xorf::Xor8, EdgestoreError> {
+pub(crate) fn build_xor_filter(keys: &[Vec<u8>]) -> Result<xorf::Xor8, EdgestoreError> {
     let hashes: Vec<u64> = keys.iter().map(|k| hash_key_to_u64(k)).collect();
     Ok(xorf::Xor8::from(hashes.as_slice()))
 }
 
-/// Language-neutral binary format: [seed:u64-le][block_length:u64-le][fingerprints_len:u64-le][fingerprints]
-pub fn write_xf_file(filter: &xorf::Xor8, path: &Path) -> Result<(), EdgestoreError> {
+/// Language-neutral binary format: `[seed:u64-le][block_length:u64-le][fingerprints_len:u64-le][fingerprints]`
+pub(crate) fn write_xf_file(filter: &xorf::Xor8, path: &Path) -> Result<(), EdgestoreError> {
     let mut f = std::fs::File::create(path)?;
     f.write_all(&filter.seed.to_le_bytes())?;
     f.write_all(&(filter.block_length as u64).to_le_bytes())?;
@@ -110,7 +111,7 @@ pub fn write_xf_file(filter: &xorf::Xor8, path: &Path) -> Result<(), EdgestoreEr
     Ok(())
 }
 
-pub fn read_xf_file(path: &Path) -> Result<xorf::Xor8, EdgestoreError> {
+pub(crate) fn read_xf_file(path: &Path) -> Result<xorf::Xor8, EdgestoreError> {
     let mut f = std::fs::File::open(path)?;
     let mut buf8 = [0u8; 8];
 
@@ -142,13 +143,13 @@ pub fn read_xf_file(path: &Path) -> Result<xorf::Xor8, EdgestoreError> {
     })
 }
 
-pub fn filter_contains(filter: &xorf::Xor8, key: &[u8]) -> bool {
+pub(crate) fn filter_contains(filter: &xorf::Xor8, key: &[u8]) -> bool {
     filter.contains(&hash_key_to_u64(key))
 }
 
 // ── Sparse index I/O ───────────────────────────────────────────────────────
 
-pub fn write_idx_file(index: &[(Vec<u8>, u64)], path: &Path) -> Result<(), EdgestoreError> {
+pub(crate) fn write_idx_file(index: &[(Vec<u8>, u64)], path: &Path) -> Result<(), EdgestoreError> {
     let mut f = std::fs::File::create(path)?;
     f.write_all(&(index.len() as u64).to_le_bytes())?;
     for (key, offset) in index {
@@ -160,6 +161,7 @@ pub fn write_idx_file(index: &[(Vec<u8>, u64)], path: &Path) -> Result<(), Edges
     Ok(())
 }
 
+/// Read a sparse index file and return the sorted list of (key, offset) entries.
 pub fn read_idx_file(path: &Path) -> Result<Vec<(Vec<u8>, u64)>, EdgestoreError> {
     let mut f = std::fs::File::open(path)?;
     let mut buf8 = [0u8; 8];
@@ -188,7 +190,7 @@ pub fn read_idx_file(path: &Path) -> Result<Vec<(Vec<u8>, u64)>, EdgestoreError>
 
 // ── SegmentWriter ──────────────────────────────────────────────────────────
 
-/// Stores only the config fields SegmentWriter actually needs.
+/// Builder that writes a single segment file on disk.
 pub struct SegmentWriter {
     base_path: PathBuf,
     segment_id: SegmentId,
@@ -196,6 +198,7 @@ pub struct SegmentWriter {
 }
 
 impl SegmentWriter {
+    /// Create a new [`SegmentWriter`] for the given segment id.
     pub fn new(base_path: PathBuf, segment_id: SegmentId, cohort_window_secs: u64) -> Self {
         SegmentWriter { base_path, segment_id, cohort_window_secs }
     }
@@ -250,6 +253,7 @@ impl SegmentWriter {
         Ok((compressed_total, uncompressed_total, sparse_index))
     }
 
+    /// Write the provided entries to disk and return the resulting segment metadata.
     pub fn flush(&mut self, entries: &[(Vec<u8>, MemEntry)]) -> Result<SegmentMeta, EdgestoreError> {
         if entries.is_empty() {
             return Err(EdgestoreError::SegmentCorrupt("empty entries".to_string()));
@@ -337,9 +341,11 @@ fn flush_block_to_file(dat: &mut std::fs::File, block: &[u8]) -> Result<usize, E
 
 // ── SegmentReader ──────────────────────────────────────────────────────────
 
+/// Read-only handle for an on-disk segment file.
 pub struct SegmentReader {
     base_path: PathBuf,
     segment_id: SegmentId,
+    /// Metadata for this segment (bounds, sizes, etc.).
     pub meta: SegmentMeta,
     filter: xorf::Xor8,
 }
@@ -348,6 +354,7 @@ impl SegmentReader {
     fn dat_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.dat", self.segment_id)) }
     fn idx_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.idx", self.segment_id)) }
 
+    /// Open an existing segment from disk.
     pub fn open(base_path: PathBuf, segment_id: SegmentId) -> Result<SegmentReader, EdgestoreError> {
         let meta_path = base_path.join(format!("segment-{:08}.meta", segment_id));
         let xf_path  = base_path.join(format!("segment-{:08}.xf",   segment_id));
@@ -408,6 +415,7 @@ impl SegmentReader {
         Ok((entries, aligned_size))
     }
 
+    /// Look up a single key in this segment.
     pub fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
         if !filter_contains(&self.filter, key) {
             return Ok(None);
@@ -431,6 +439,7 @@ impl SegmentReader {
         Ok(None)
     }
 
+    /// Return all entries in the segment whose key falls in `[start, end]`.
     pub fn range_scan(
         &self,
         start: &[u8],
@@ -473,7 +482,7 @@ fn find_block_offset(index: &[(Vec<u8>, u64)], query_key: &[u8]) -> u64 {
 
 // ── SegmentStore ───────────────────────────────────────────────────────────
 
-pub struct SegmentStore {
+pub(crate) struct SegmentStore {
     base_path: PathBuf,
     manifest: Manifest,
     readers: Vec<SegmentReader>,
@@ -482,7 +491,7 @@ pub struct SegmentStore {
 }
 
 impl SegmentStore {
-    pub fn open(base_path: PathBuf, cohort_window_secs: u64) -> Result<SegmentStore, EdgestoreError> {
+    pub(crate) fn open(base_path: PathBuf, cohort_window_secs: u64) -> Result<SegmentStore, EdgestoreError> {
         let manifest_path = base_path.join("manifest.mf");
         let manifest = Manifest::open(&manifest_path)?;
 
@@ -497,7 +506,7 @@ impl SegmentStore {
         Ok(SegmentStore { base_path, manifest, readers, next_segment_id: next_id, cohort_window_secs })
     }
 
-    pub fn flush_memtable(
+    pub(crate) fn flush_memtable(
         &mut self,
         memtable: &dyn MemTable,
     ) -> Result<SegmentMeta, EdgestoreError> {
@@ -523,12 +532,12 @@ impl SegmentStore {
     }
 
     /// Return the segment IDs of all segments currently loaded in this store.
-    pub fn segment_ids(&self) -> Vec<crate::types::SegmentId> {
+    pub(crate) fn segment_ids(&self) -> Vec<crate::types::SegmentId> {
         self.readers.iter().map(|r| r.segment_id).collect()
     }
 
     /// Return all SegmentMeta entries from the manifest (used by replication API).
-    pub fn list_segment_metas(&self) -> &[SegmentMeta] {
+    pub(crate) fn list_segment_metas(&self) -> &[SegmentMeta] {
         self.manifest.list_segments()
     }
 
@@ -551,16 +560,17 @@ impl SegmentStore {
     }
 
     /// Return the base path of this segment store.
-    pub fn base_path(&self) -> &std::path::Path {
+    pub(crate) fn base_path(&self) -> &std::path::Path {
         &self.base_path
     }
 
     /// Return the cohort_window_secs for this segment store.
-    pub fn cohort_window_secs(&self) -> u64 {
+    #[allow(dead_code)]
+    pub(crate) fn cohort_window_secs(&self) -> u64 {
         self.cohort_window_secs
     }
 
-    pub fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
+    pub(crate) fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
         for reader in self.readers.iter().rev() {
             if let Some(entry) = reader.get(key)? {
                 return Ok(Some(entry));
@@ -569,7 +579,7 @@ impl SegmentStore {
         Ok(None)
     }
 
-    pub fn range_scan(
+    pub(crate) fn range_scan(
         &self,
         start: &[u8],
         end: &[u8],

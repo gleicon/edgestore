@@ -6,21 +6,29 @@ use crate::text::types::FacetValue;
 /// A posting in the inverted index.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Posting {
+    /// Document key.
     pub doc_id: Vec<u8>,
+    /// Term frequency in this document.
     pub term_freq: u32,
+    /// Total token count in this document.
     pub doc_len: u32,
+    /// Facet values attached to this document.
     pub facets: HashMap<String, FacetValue>,
 }
 
 /// In-memory inverted index for a namespace.
 #[derive(Debug, Clone, Default)]
 pub struct InvertedIndex {
+    /// Map from term to postings list.
     pub postings: HashMap<String, Vec<Posting>>,
+    /// Total number of documents in the index.
     pub total_docs: u64,
+    /// Sum of all document lengths.
     pub total_doc_len: u64,
 }
 
 impl InvertedIndex {
+    /// Create a new empty inverted index.
     pub fn new() -> Self {
         InvertedIndex {
             postings: HashMap::new(),
@@ -57,6 +65,7 @@ impl InvertedIndex {
         self.total_doc_len += doc_len as u64;
     }
 
+    /// Average document length (tokens). Returns 0.0 if no documents.
     pub fn avg_doc_len(&self) -> f32 {
         if self.total_docs == 0 {
             0.0

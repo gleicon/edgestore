@@ -1065,6 +1065,11 @@ impl Engine {
         let serialized = index.serialize();
         std::fs::write(&sidecar_path, &serialized)?;
 
+        // Persist segment-hash stamp so is_index_stale can detect staleness
+        let current_hash = self.range_merkle_root()?;
+        let stamp_path = sidecar_path.with_extension("stamp");
+        std::fs::write(&stamp_path, &current_hash)?;
+
         // Cache
         self.vector_indices.insert(ns.to_vec(), index);
 
@@ -1142,8 +1147,12 @@ impl Engine {
         if !sidecar_path.exists() {
             return Ok(true);
         }
-        // v1: assume fresh until explicit rebuild
-        Ok(false)
+        let stamp_path = sidecar_path.with_extension("stamp");
+        let Ok(stamp) = std::fs::read(&stamp_path) else {
+            return Ok(true);
+        };
+        let current = self.range_merkle_root()?;
+        Ok(stamp != current)
     }
 
     /// Search for the k closest vectors to the query in the given namespace.

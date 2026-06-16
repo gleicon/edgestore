@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-16
+
+### Fixed
+
+- **`is_index_stale()` always returned false after HNSW sidecar creation** (vector_search, `engine.rs`).
+  - **Bug:** After `build_vector_index`, subsequent `vector_put` calls added new vectors to the KV store, but `vector_search` continued to use the cached HNSW sidecar. The new vectors were present in `__vec__{ns}` records but absent from the HNSW graph. Searches silently missed them.
+  - **Fix:** `build_vector_index` now persists the `range_merkle_root` (32-byte BLAKE3 hash of the current segment set) alongside the `.hnsw` sidecar as a `.stamp` file. `is_index_stale` reads the stamp and compares it against the live `range_merkle_root`. If the stamp is missing or mismatched, the index is considered stale and rebuilt. This is deterministic across replicas and requires zero new dependencies.
+  - **Impact:** Correctness of incremental vector search after mutations. No API change.
+
 ## [1.0.0] - 2026-05-25
 
 ### Added

@@ -1,7 +1,7 @@
-/target
 edgestore_demo.db/
 *.db/
 Cargo.lock
-target
+target/
+target/debug/
 edgestore-go
 edgestore-zig

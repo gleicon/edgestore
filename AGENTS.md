@@ -4,7 +4,7 @@
 
 Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, deathtime-cohort compaction. Library-first — no mandatory server. See `prod.md` for full spec and `.planning/PROJECT.md` for project context.
 
-**Status:** v1.0 complete (all 8 phases shipped).
+**Status:** v1.0.2 (bugfix release — HNSW staleness detection fixed).
 
 ## Architecture Constraints (non-negotiable)
 
@@ -80,6 +80,20 @@ cargo run --example replication
 
 # Run benchmarks
 cargo bench --workspace
+```
+
+## Release Workflow (Makefile)
+
+```bash
+# Full release: test, tag, publish
+make release
+
+# Individual steps
+make test          # Run all tests
+make tag           # Create git tag (reads version from Cargo.toml)
+make tags-push     # Push tag to origin
+make publish       # Publish all crates to crates.io in order
+make publish-dryrun  # Verify without publishing
 ```
 
 ## Public API Surface

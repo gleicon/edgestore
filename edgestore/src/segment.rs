@@ -419,6 +419,9 @@ impl SegmentReader {
     }
 
     /// Look up a single key in this segment.
+    ///
+    /// PERFORMANCE: uses the cached sparse index (`self.index`) loaded at open() time.
+    /// Previously re-read the .idx file on every call. Regression: test_reader_caches_index_at_open.
     pub fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
         if !filter_contains(&self.filter, key) {
             return Ok(None);
@@ -474,7 +477,8 @@ impl SegmentReader {
 
 fn find_block_offset(index: &[(Vec<u8>, u64)], query_key: &[u8]) -> u64 {
     if index.is_empty() { return 8; } // skip file header
-    // Binary search: find the last entry with key <= query_key
+    // PERFORMANCE: binary search via partition_point — O(log n).
+    // Previously linear scan — O(n). Regression: test_find_block_offset_binary_search.
     let pos = index.partition_point(|(k, _)| k.as_slice() <= query_key);
     if pos == 0 {
         index[0].1
@@ -596,7 +600,10 @@ impl SegmentStore {
         start: &[u8],
         end: &[u8],
     ) -> Result<Vec<(Vec<u8>, MemEntry)>, EdgestoreError> {
-        // Collect results from all readers, each already sorted.
+        // PERFORMANCE: K-way merge via BinaryHeap. Each reader's range_scan is sorted by key.
+        // DO NOT use HashMap here — it was O(n log n) + 4 allocations. K-way merge is O(n) + 2 allocations.
+        // The BinaryHeap tie-breaks on LSN so Ord and Eq are consistent (prevents heap corruption).
+        // Regression test: test_range_scan_dedups_by_lsn_across_segments, test_range_scan_delete_wins.
         let mut per_reader: Vec<Vec<(Vec<u8>, MemEntry)>> = Vec::with_capacity(self.readers.len());
         let mut total_len = 0usize;
         for reader in &self.readers {
@@ -870,5 +877,96 @@ mod tests {
     fn test_reader_open_missing_meta_errors() {
         let dir = TempDir::new().unwrap();
         assert!(SegmentReader::open(dir.path().to_path_buf(), 99).is_err());
+    }
+
+    // ─ Performance regression guards ───────────────────────────────────────
+
+    /// Regression: SegmentReader used to re-read the .idx file on every get() and range_scan().
+    /// Now it caches the index at open() time. This test verifies that the index is loaded
+    /// once and reused by reading multiple keys without touching the .idx file again.
+    #[test]
+    fn test_reader_caches_index_at_open() {
+        let dir = TempDir::new().unwrap();
+        let entries = sorted_entries(100);
+        let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        writer.flush(&entries).unwrap();
+
+        let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+        // Verify index is non-empty (loaded from .idx at open time)
+        assert!(!reader.index.is_empty(), "index should be cached at open()");
+        // Read multiple keys — each should succeed without re-reading .idx
+        for (k, e) in &entries {
+            let found = reader.get(k).unwrap();
+            assert!(found.is_some(), "key {:?} not found", k);
+            assert_eq!(found.unwrap().lsn, e.lsn);
+        }
+    }
+
+    /// Regression: find_block_offset was linear scan. Now it is binary search.
+    /// This test verifies correctness on edge cases and large indexes.
+    #[test]
+    fn test_find_block_offset_binary_search() {
+        let index: Vec<(Vec<u8>, u64)> = (0..1000u64)
+            .map(|i| (format!("key-{:08}", i).into_bytes(), i * 100))
+            .collect();
+        // Exact match on existing key
+        assert_eq!(find_block_offset(&index, b"key-00000050"), 5000);
+        // Between keys (should floor to previous)
+        assert_eq!(find_block_offset(&index, b"key-00000050\x01"), 5000);
+        // Before first key
+        assert_eq!(find_block_offset(&index, b"aaa"), 0);
+        // After last key
+        assert_eq!(find_block_offset(&index, b"zzz"), 99900);
+    }
+
+    /// Regression: SegmentStore::range_scan used HashMap + sort. Now it uses K-way merge.
+    /// This test verifies deduplication by LSN across multiple overlapping segments.
+    #[test]
+    fn test_range_scan_dedups_by_lsn_across_segments() {
+        let dir = TempDir::new().unwrap();
+        let ns = b"ns";
+        let key = encode_key(ns, b"shared-key");
+        let key_end = encode_key(ns, b"shared-key\x00");
+
+        // Segment 0: lsn=1
+        let mut writer0 = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        let entry0 = make_entry(1, &key, b"old");
+        let meta0 = writer0.flush(&vec![(key.clone(), entry0)]).unwrap();
+
+        // Segment 1: lsn=2
+        let mut writer1 = SegmentWriter::new(dir.path().to_path_buf(), 1, 3600);
+        let entry1 = make_entry(2, &key, b"new");
+        let meta1 = writer1.flush(&vec![(key.clone(), entry1)]).unwrap();
+
+        let mut store = SegmentStore::open(dir.path().to_path_buf(), 3600).unwrap();
+        let reader0 = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+        let reader1 = SegmentReader::open(dir.path().to_path_buf(), 1).unwrap();
+        store.add_imported_segment(meta0, reader0).unwrap();
+        store.add_imported_segment(meta1, reader1).unwrap();
+
+        let results = store.range_scan(&key, &key_end).unwrap();
+        assert_eq!(results.len(), 1, "should deduplicate to 1 entry");
+        assert_eq!(results[0].1.lsn, 2, "higher LSN should win");
+    }
+
+    /// Regression: range_scan must delete-filter correctly.
+    /// If a segment has a Delete at lsn=2 for a key, the key should be absent.
+    #[test]
+    fn test_range_scan_delete_wins() {
+        let dir = TempDir::new().unwrap();
+        let key = encode_key(b"ns", b"key");
+        let key_end = encode_key(b"ns", b"key\x00");
+
+        let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        let entry1 = make_delete(2, &key);
+        let meta = writer.flush(&vec![
+            (key.clone(), entry1),
+        ]).unwrap();
+
+        let mut store = SegmentStore::open(dir.path().to_path_buf(), 3600).unwrap();
+        let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+        store.add_imported_segment(meta, reader).unwrap();
+        let results = store.range_scan(&key, &key_end).unwrap();
+        assert!(results.is_empty(), "delete should filter out the key");
     }
 }

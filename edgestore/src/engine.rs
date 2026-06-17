@@ -459,7 +459,10 @@ impl Engine {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
 
-        // Merge two sorted lists, then deduplicate by key keeping highest LSN.
+        // PERFORMANCE: merge two sorted lists, then deduplicate by key keeping highest LSN.
+        // DO NOT use HashMap here — both segment and memtable results are already sorted.
+        // HashMap + sort() is O(n log n) with 4 allocations. Merge + dedup is O(n) with 2 allocations.
+        // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
         let seg_results = self.segment_store.range_scan(&enc_start, &enc_end)?;
         let mem_results = self.memtable.range(&enc_start, &enc_end);
 
@@ -509,7 +512,10 @@ impl Engine {
     ) -> Result<KvPairs, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
 
-        // Use range scan with prefix upper bound, then merge + dedup with memtable.
+        // PERFORMANCE: use range scan with prefix upper bound, then merge + dedup with memtable.
+        // Same algorithm as range_inner — both inputs are sorted, so merge is O(n) and dedup is O(n).
+        // DO NOT use HashMap here (regression: it was O(n log n) + 4 allocations).
+        // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
         let seg_results = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
             self.segment_store.range_scan(&enc_prefix, &enc_end)?
                 .into_iter()
@@ -1702,5 +1708,74 @@ mod tests {
         assert_eq!(m.transactions_rolled_back, 1);
         assert!(m.put_nanos_total > 0);
         assert!(m.get_nanos_total > 0);
+    }
+
+    // ─ Performance regression guards ───────────────────────────────────────
+
+    /// Regression: Engine::range_inner used to use HashMap + sort(). Now it uses merge-join.
+    /// This test verifies that overlapping segments + memtable entries with the same key
+    /// are deduplicated by highest LSN (not duplicated, not silently dropped).
+    #[test]
+    fn test_range_merge_dedups_same_key() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        // Write to segment
+        engine.put(b"ns", b"key", b"old").unwrap();
+        engine.flush_to_segments().unwrap();
+        // Overwrite in memtable
+        engine.put(b"ns", b"key", b"new").unwrap();
+        // Both should be visible, deduplicated to 1 entry with the latest value
+        let results = engine.range(b"ns", b"", b"\xff").unwrap();
+        assert_eq!(results.len(), 1, "should deduplicate to 1 entry");
+        assert_eq!(results[0].1, b"new".to_vec());
+    }
+
+    /// Regression: Engine::prefix_inner used to use HashMap + sort(). Now it uses merge-join.
+    /// This test verifies that prefix scans with the same key in segment and memtable
+    /// are deduplicated by highest LSN.
+    #[test]
+    fn test_prefix_merge_dedups_same_key() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"prefix_key", b"old").unwrap();
+        engine.flush_to_segments().unwrap();
+        engine.put(b"ns", b"prefix_key", b"new").unwrap();
+        let results = engine.prefix(b"ns", b"prefix_").unwrap();
+        assert_eq!(results.len(), 1, "should deduplicate to 1 entry");
+        assert_eq!(results[0].1, b"new".to_vec());
+    }
+
+    /// Regression: Engine::range_inner must handle delete tombstones from memtable
+    /// shadowing the same key in a segment.
+    #[test]
+    fn test_range_merge_delete_tombstone_shadows_segment() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"key", b"val").unwrap();
+        engine.flush_to_segments().unwrap();
+        engine.delete(b"ns", b"key").unwrap();
+        let results = engine.range(b"ns", b"", b"\xff").unwrap();
+        assert!(results.is_empty(), "delete tombstone should shadow segment value");
+    }
+
+    /// Regression: Engine::range_inner must return sorted results even with multiple segments.
+    /// This test creates 3 segments and verifies the merge produces sorted output.
+    #[test]
+    fn test_range_merge_sorted_across_segments() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        // Segment 1
+        engine.put(b"ns", b"c", b"vc").unwrap();
+        engine.put(b"ns", b"a", b"va").unwrap();
+        engine.flush_to_segments().unwrap();
+        // Segment 2
+        engine.put(b"ns", b"b", b"vb").unwrap();
+        engine.flush_to_segments().unwrap();
+        // Segment 3
+        engine.put(b"ns", b"d", b"vd").unwrap();
+        engine.flush_to_segments().unwrap();
+        let results = engine.range(b"ns", b"", b"\xff").unwrap();
+        let keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
+        assert_eq!(keys, vec![b"a", b"b", b"c", b"d"], "must be sorted across all segments");
     }
 }

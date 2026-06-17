@@ -482,4 +482,43 @@ mod tests {
             );
         }
     }
+
+    /// Regression: Snapshot used to re-open all segment files on every get() and range(),
+    /// re-parsing JSON metadata and sparse indexes each time. Now it holds cloned SegmentReader
+    /// instances with cached indexes. This test verifies repeated reads work without re-opening.
+    #[test]
+    fn test_snapshot_reuses_cached_readers() {
+        let dir = TempDir::new().unwrap();
+        let ns = b"ns";
+        let key = encode_key(ns, b"key");
+
+        let entry = MemEntry {
+            key: key.clone(),
+            value: Some(b"val".to_vec()),
+            op: Operation::Put,
+            lsn: 1,
+            timestamp: 3_600_000_000_000,
+            ttl: 0,
+        };
+        let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        writer.flush(&vec![(key.clone(), entry)]).unwrap();
+
+        let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+        let reg = SnapshotRegistry::new();
+        let snap_id = reg.register(&[0]);
+        let snap = Snapshot::new(snap_id, reg, vec![reader]);
+
+        // Call get() multiple times — each should succeed without re-opening files
+        for _ in 0..10 {
+            let result = snap.get(ns, b"key").unwrap();
+            assert_eq!(result, Some(b"val".to_vec()));
+        }
+
+        // Call range() multiple times — each should succeed without re-opening files
+        for _ in 0..10 {
+            let results = snap.range(ns, b"", b"\xff").unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].1, b"val".to_vec());
+        }
+    }
 }

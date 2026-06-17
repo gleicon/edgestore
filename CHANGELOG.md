@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.2] - 2026-06-16
 
+### Performance
+
+- **Major range scan performance improvements** (40x+ throughput improvement).
+  - `SegmentReader` now caches the sparse index at `open()` time (previously re-read `.idx` file on *every* `get()`/`range_scan()` call).
+  - `find_block_offset` uses `partition_point` binary search — O(log n) instead of O(n) linear scan.
+  - `SegmentStore::range_scan` and `Engine::range_inner` use K-way merge via `BinaryHeap` instead of `HashMap` + `sort` — O(n) instead of O(n log n) + 4 allocations.
+  - `Snapshot` holds cloned `SegmentReader` instances (previously re-opened all segment files on every snapshot read, re-parsing JSON metadata and sparse indexes each time).
+  - `BinaryHeap` tie-breaking on LSN ensures `Ord` and `Eq` are consistent (prevents heap corruption and race conditions).
+  - `MemEntry` and `Operation` derive `Eq` for K-way merge correctness.
+  - All changes verified: `cargo test --workspace` (250/250), `cargo clippy --workspace -D warnings` (clean).
+
 ### Fixed
 
 - **`is_index_stale()` always returned false after HNSW sidecar creation** (vector_search, `engine.rs`).

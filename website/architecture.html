@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture — EdgeStore</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          colors: {
+            edge: {
+              50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
+              400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
+              800: '#075985', 900: '#0c4a6e'
+            },
+            rust: { 500: '#dea584', 600: '#c56c3a' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .code-block { background: #1e293b; border-radius: 0.5rem; overflow-x: auto; }
+    .code-block code { color: #e2e8f0; }
+    .diagram { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; }
+    .diagram-box { background: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; }
+    .diagram-box-header { background: #f1f5f9; border-bottom: 1px solid #e2e8f0; padding: 0.5rem 1rem; font-weight: 600; }
+    .arrow { display: flex; align-items: center; justify-content: center; color: #94a3b8; }
+    .arrow-line { width: 2px; height: 1.5rem; background: #cbd5e1; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+
+  <!-- Navigation -->
+  <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center">
+            <span class="text-white font-bold text-sm">E</span>
+          </div>
+          <a href="index.html" class="font-bold text-xl text-slate-800">EdgeStore</a>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Home</a>
+          <a href="features.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Features</a>
+          <a href="architecture.html" class="text-edge-600 font-medium">Architecture</a>
+          <a href="examples.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Examples</a>
+          <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
+          <a href="api.html" class="text-slate-600 hover:text-edge-600 font-medium transition">API</a>
+        </div>
+        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+
+    <h1 class="text-4xl font-bold text-slate-900 mb-4">Architecture</h1>
+    <p class="text-lg text-slate-600 mb-12 max-w-3xl">
+      EdgeStore is built around three principles: <strong>append-only writes</strong>, <strong>SSD-aware deathtime-cohort compaction</strong>, and <strong>layered purity</strong> (vector/text on top of KV, never inside it).
+    </p>
+
+    <!-- Crate Dependency -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">Crate Dependency</h2>
+      <p class="text-slate-600 mb-6">EdgeStore ships as a Cargo workspace. Each crate has a distinct purpose and audience.</p>
+      <div class="diagram p-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="diagram-box">
+            <div class="diagram-box-header text-slate-900 flex items-center justify-between">
+              <span>edgestore</span>
+              <span class="text-xs bg-rust-500 text-white px-2 py-0.5 rounded-full">core</span>
+            </div>
+            <div class="p-4">
+              <p class="text-sm text-slate-600 mb-2">KV + vector + text engine. Sync core. No async runtime dependency.</p>
+              <div class="flex flex-wrap gap-2">
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">Engine</span>
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">WAL</span>
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">SegmentStore</span>
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">Compactor</span>
+              </div>
+            </div>
+          </div>
+          <div class="diagram-box">
+            <div class="diagram-box-header text-slate-900 flex items-center justify-between">
+              <span>edgestore-tokio</span>
+              <span class="text-xs bg-edge-500 text-white px-2 py-0.5 rounded-full">async</span>
+            </div>
+            <div class="p-4">
+              <p class="text-sm text-slate-600 mb-2">Async wrapper. Every operation runs in <code>spawn_blocking</code>. Thin layer.</p>
+              <div class="flex flex-wrap gap-2">
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">AsyncEngine</span>
+              </div>
+            </div>
+          </div>
+          <div class="diagram-box">
+            <div class="diagram-box-header text-slate-900 flex items-center justify-between">
+              <span>edgestore-repl</span>
+              <span class="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">network</span>
+            </div>
+            <div class="p-4">
+              <p class="text-sm text-slate-600 mb-2">HTTP replication + S3 remote store. <strong>Not a REPL</strong> — "repl" = replication.</p>
+              <div class="flex flex-wrap gap-2">
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">HttpReplicationServer</span>
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">HttpReplicationClient</span>
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">AntiEntropyLoop</span>
+              </div>
+            </div>
+          </div>
+          <div class="diagram-box">
+            <div class="diagram-box-header text-slate-900 flex items-center justify-between">
+              <span>edgestore-cli</span>
+              <span class="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">admin</span>
+            </div>
+            <div class="p-4">
+              <p class="text-sm text-slate-600 mb-2">Administrative CLI tool. Create, put, get, stats, compact, export/import.</p>
+              <div class="flex flex-wrap gap-2">
+                <span class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">clap</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mt-4 flex items-center justify-center text-sm text-slate-500">
+          <span class="mr-2">edgestore</span>
+          <span class="text-slate-400">← used by all downstream crates</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- High-Level Architecture -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">High-Level Architecture</h2>
+      <div class="diagram p-6">
+        <div class="flex flex-col items-center gap-3">
+          <!-- Application Layer -->
+          <div class="w-full bg-slate-900 text-white rounded-lg p-4 text-center font-semibold">
+            Application
+          </div>
+          <div class="arrow-line"></div>
+          <!-- APIs -->
+          <div class="grid grid-cols-4 gap-2 w-full">
+            <div class="bg-edge-100 text-edge-800 rounded-lg p-3 text-center text-sm font-medium">KV API</div>
+            <div class="bg-edge-100 text-edge-800 rounded-lg p-3 text-center text-sm font-medium">Vector API</div>
+            <div class="bg-edge-100 text-edge-800 rounded-lg p-3 text-center text-sm font-medium">Text API</div>
+            <div class="bg-edge-100 text-edge-800 rounded-lg p-3 text-center text-sm font-medium">Replication</div>
+          </div>
+          <div class="arrow-line"></div>
+          <!-- Engine -->
+          <div class="w-full bg-edge-600 text-white rounded-lg p-4 text-center">
+            <div class="font-semibold mb-1">Engine</div>
+            <div class="text-sm text-blue-100">Single-writer + group commit + snapshot RAII</div>
+          </div>
+          <div class="arrow-line"></div>
+          <!-- WAL / Memtable -->
+          <div class="grid grid-cols-2 gap-4 w-full">
+            <div class="bg-rust-500 text-white rounded-lg p-4">
+              <div class="font-semibold mb-1">WAL</div>
+              <div class="text-sm text-orange-100">LZ4 + CRC32C, rotated 64 MB / 60s</div>
+            </div>
+            <div class="bg-rust-500 text-white rounded-lg p-4">
+              <div class="font-semibold mb-1">Memtable</div>
+              <div class="text-sm text-orange-100">BTreeMap, swappable trait</div>
+            </div>
+          </div>
+          <div class="arrow-line"></div>
+          <!-- Segments -->
+          <div class="w-full bg-rust-600 text-white rounded-lg p-4">
+            <div class="font-semibold mb-1">Segment Store</div>
+            <div class="text-sm text-orange-100">.dat (ZSTD) + .idx (sparse) + .xf (xor filter) + .meta (JSON)</div>
+          </div>
+          <div class="arrow-line"></div>
+          <!-- Storage -->
+          <div class="w-full bg-green-600 text-white rounded-lg p-4 text-center">
+            <div class="font-semibold mb-1">Storage Backend</div>
+            <div class="text-sm text-green-100">NVMe / SSD / S3 / FDP / Memory</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Write Path -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">Write Path</h2>
+      <div class="diagram p-6">
+        <div class="flex flex-col items-center gap-3">
+          <div class="bg-slate-800 text-white rounded-lg px-6 py-2 text-sm font-mono">put(key, value, ttl?)</div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-rust-500 text-white rounded-lg px-6 py-2 text-sm font-mono">append WAL record (LZ4, CRC32C)</div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-rust-500 text-white rounded-lg px-6 py-2 text-sm font-mono">insert into Memtable (BTreeMap)</div>
+          <div class="text-slate-400 text-sm">↓ flush triggered by size threshold</div>
+          <div class="bg-slate-700 text-white rounded-lg p-4 text-sm font-mono">
+            <div class="mb-1">write sorted run → segment-{id}.dat (ZSTD)</div>
+            <div class="mb-1">build sparse index → segment-{id}.idx</div>
+            <div class="mb-1">build xor filter → segment-{id}.xf</div>
+            <div class="mb-1">write metadata → segment-{id}.meta</div>
+            <div>append to manifest → manifest file</div>
+          </div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-slate-800 text-white rounded-lg px-6 py-2 text-sm font-mono">remove flushed keys from memtable</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Read Path -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">Read Path</h2>
+      <div class="diagram p-6">
+        <div class="flex flex-col items-center gap-3">
+          <div class="bg-slate-800 text-white rounded-lg px-6 py-2 text-sm font-mono">get(namespace, key)</div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-edge-500 text-white rounded-lg px-6 py-2 text-sm font-mono">search Memtable first</div>
+          <div class="text-green-600 text-sm font-semibold">hit → return value</div>
+          <div class="text-slate-400 text-sm">miss → continue</div>
+          <div class="bg-slate-700 text-white rounded-lg p-4 text-sm font-mono">
+            <div class="mb-1">for each live segment (newest → oldest):</div>
+            <div class="mb-1 pl-4">xor filter check → if absent, skip</div>
+            <div class="mb-1 pl-4">sparse index seek → locate block</div>
+            <div class="mb-1 pl-4">decompress block → scan for key</div>
+            <div class="pl-4">hit → return value with highest LSN</div>
+          </div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-slate-800 text-white rounded-lg px-6 py-2 text-sm font-mono">not found → return None</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Compaction Path -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">Compaction Path</h2>
+      <div class="diagram p-6">
+        <div class="flex flex-col items-center gap-3">
+          <div class="bg-slate-800 text-white rounded-lg px-6 py-2 text-sm font-mono">compact_once(write_budget)</div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-purple-600 text-white rounded-lg px-6 py-2 text-sm font-mono">identify cohorts where max(death_time) < now</div>
+          <div class="text-slate-400 text-sm">↓ fully expired cohorts first</div>
+          <div class="bg-slate-700 text-white rounded-lg p-4 text-sm font-mono">
+            <div class="mb-1">for each selected cohort within budget:</div>
+            <div class="mb-1 pl-4">read all segments in cohort</div>
+            <div class="mb-1 pl-4">merge-sort by key, keep highest-LSN</div>
+            <div class="mb-1 pl-4">write new segments with updated cohort buckets</div>
+            <div class="mb-1 pl-4">recompute Merkle roots + BLAKE3 hashes</div>
+            <div class="mb-1 pl-4">update manifest (append new, mark old obsolete)</div>
+            <div class="pl-4">delete obsolete files (if not pinned by snapshot)</div>
+          </div>
+          <div class="text-slate-400 text-sm">↓</div>
+          <div class="bg-slate-800 text-white rounded-lg px-6 py-2 text-sm font-mono">return CompactionStats</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- File Formats -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">File Formats</h2>
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div class="diagram-box">
+          <div class="diagram-box-header">WAL Record</div>
+          <div class="p-4 text-sm font-mono text-slate-700">
+            <div class="grid grid-cols-3 gap-2">
+              <div class="bg-slate-100 p-2 rounded">txid<br><span class="text-xs text-slate-500">u64</span></div>
+              <div class="bg-slate-100 p-2 rounded">lsn<br><span class="text-xs text-slate-500">u64</span></div>
+              <div class="bg-slate-100 p-2 rounded">timestamp<br><span class="text-xs text-slate-500">i64</span></div>
+              <div class="bg-slate-100 p-2 rounded">ttl<br><span class="text-xs text-slate-500">u32</span></div>
+              <div class="bg-slate-100 p-2 rounded">namespace<br><span class="text-xs text-slate-500">bytes</span></div>
+              <div class="bg-slate-100 p-2 rounded">key<br><span class="text-xs text-slate-500">bytes</span></div>
+              <div class="bg-slate-100 p-2 rounded">operation<br><span class="text-xs text-slate-500">u8</span></div>
+              <div class="bg-slate-100 p-2 rounded">value_hash<br><span class="text-xs text-slate-500">[u8;32]</span></div>
+              <div class="bg-slate-100 p-2 rounded">value_bytes<br><span class="text-xs text-slate-500">bytes</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="diagram-box">
+          <div class="diagram-box-header">Segment Files</div>
+          <div class="p-4 text-sm">
+            <div class="space-y-2">
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-8 bg-rust-500 rounded flex items-center justify-center text-white text-xs font-bold">dat</div>
+                <span class="text-slate-700">ZSTD data blocks (4 KiB aligned)</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-8 bg-edge-500 rounded flex items-center justify-center text-white text-xs font-bold">idx</div>
+                <span class="text-slate-700">Sparse offset index (key → block)</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-8 bg-purple-500 rounded flex items-center justify-center text-white text-xs font-bold">xf</div>
+                <span class="text-slate-700">Xor filter (~8 bits/key, 1% FPR)</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-12 h-8 bg-slate-600 rounded flex items-center justify-center text-white text-xs font-bold">meta</div>
+                <span class="text-slate-700">JSON metadata (bounds, hash, cohort)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Namespace Encoding -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">Namespace Encoding</h2>
+      <p class="text-slate-600 mb-4">Single flat keyspace. No ColumnFamily complexity.</p>
+      <div class="diagram p-6">
+        <div class="flex items-center justify-center gap-0 text-sm font-mono">
+          <div class="bg-edge-100 border border-edge-300 p-4 text-center rounded-l-lg">
+            <div class="font-bold text-edge-800">ns_len</div>
+            <div class="text-xs text-slate-500">2 bytes</div>
+          </div>
+          <div class="bg-edge-200 border border-edge-300 p-4 text-center">
+            <div class="font-bold text-edge-800">namespace</div>
+            <div class="text-xs text-slate-500">variable</div>
+          </div>
+          <div class="bg-edge-300 border border-edge-400 p-4 text-center rounded-r-lg">
+            <div class="font-bold text-edge-900">user_key</div>
+            <div class="text-xs text-slate-700">variable</div>
+          </div>
+        </div>
+        <div class="mt-4 text-center text-sm text-slate-600">
+          Enables: prefix scans, range queries, time-series, secondary indexes — all within one sorted keyspace.
+        </div>
+      </div>
+    </section>
+
+    <!-- Concurrency Model -->
+    <section class="mb-16">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">Concurrency Model</h2>
+      <div class="diagram p-6">
+        <div class="grid grid-cols-3 gap-4 text-center">
+          <div class="bg-red-100 border border-red-300 rounded-lg p-4">
+            <div class="font-bold text-red-800 mb-2">Single Writer</div>
+            <div class="text-sm text-red-700">One active write tx at a time</div>
+          </div>
+          <div class="bg-green-100 border border-green-300 rounded-lg p-4">
+            <div class="font-bold text-green-800 mb-2">Multiple Readers</div>
+            <div class="text-sm text-green-700">Never block writers; snapshot manifest</div>
+          </div>
+          <div class="bg-blue-100 border border-blue-300 rounded-lg p-4">
+            <div class="font-bold text-blue-800 mb-2">Group Commit</div>
+            <div class="text-sm text-blue-700">Batch tx commits into one fsync</div>
+          </div>
+        </div>
+        <div class="mt-4 text-center text-sm text-slate-600">
+          No MVCC in v1. WAL <code>txid</code> field reserved for future layering.
+        </div>
+      </div>
+    </section>
+
+    <!-- References -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4">References</h2>
+      <div class="grid md:grid-cols-2 gap-4">
+        <a href="../prod.md" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+          <div class="font-semibold text-slate-900">prod.md</div>
+          <div class="text-sm text-slate-600">Full technical specification (source of truth)</div>
+        </a>
+        <a href="../AGENTS.md" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+          <div class="font-semibold text-slate-900">AGENTS.md</div>
+          <div class="text-sm text-slate-600">Developer quick-start, API surface, GSD workflow</div>
+        </a>
+        <a href="../CHANGELOG.md" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+          <div class="font-semibold text-slate-900">CHANGELOG.md</div>
+          <div class="text-sm text-slate-600">Release history and fixes</div>
+        </a>
+        <a href="papers.html" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+          <div class="font-semibold text-slate-900">Research Papers</div>
+          <div class="text-sm text-slate-600">VLDB 2026, SSD WAF, SlateDB, NVMe+S3</div>
+        </a>
+      </div>
+    </section>
+
+  </div>
+
+  <footer class="bg-slate-900 text-slate-400 py-8 mt-12">
+    <div class="max-w-7xl mx-auto px-4 text-center text-sm">
+      <p><a href="index.html" class="hover:text-white transition">EdgeStore</a> — Local-first embedded database</p>
+    </div>
+  </footer>
+
+</body>
+</html>

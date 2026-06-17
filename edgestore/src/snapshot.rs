@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::error::EdgestoreError;
@@ -90,15 +89,16 @@ impl Default for SnapshotRegistry {
 ///
 /// The snapshot holds a reference to the `SnapshotRegistry` and automatically
 /// releases its pins when dropped.
+///
+/// Holds cloned `SegmentReader` instances with cached indexes, so reads
+/// reuse the Engine's already-opened segment metadata without re-parsing files.
 pub struct Snapshot {
     /// Unique ID assigned by `SnapshotRegistry::register`.
     pub snapshot_id: u64,
     /// Shared registry used to release pins on drop.
     registry: SnapshotRegistry,
-    /// The segment IDs visible to this snapshot.
-    pub segment_ids: Vec<SegmentId>,
-    /// Base path of the database (used to open segment files for reads).
-    pub base_path: PathBuf,
+    /// The segment readers visible to this snapshot (cloned from Engine's store).
+    readers: Vec<SegmentReader>,
 }
 
 impl Snapshot {
@@ -106,10 +106,9 @@ impl Snapshot {
     pub fn new(
         snapshot_id: u64,
         registry: SnapshotRegistry,
-        segment_ids: Vec<SegmentId>,
-        base_path: PathBuf,
+        readers: Vec<SegmentReader>,
     ) -> Self {
-        Snapshot { snapshot_id, registry, segment_ids, base_path }
+        Snapshot { snapshot_id, registry, readers }
     }
 
     /// Look up a single key in the snapshot.
@@ -121,8 +120,7 @@ impl Snapshot {
         let encoded = encode_key(ns, key);
         let mut best: Option<MemEntry> = None;
 
-        for &seg_id in &self.segment_ids {
-            let reader = SegmentReader::open(self.base_path.clone(), seg_id)?;
+        for reader in &self.readers {
             if let Some(entry) = reader.get(&encoded)? {
                 let is_better = best.as_ref().is_none_or(|b| entry.lsn > b.lsn);
                 if is_better {
@@ -151,31 +149,88 @@ impl Snapshot {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
 
-        // Merge entries from all segments using LWW by LSN.
-        let mut merged: HashMap<Vec<u8>, MemEntry> = HashMap::new();
+        // K-way merge using a binary heap (same algorithm as SegmentStore::range_scan)
+        let mut per_reader: Vec<Vec<(Vec<u8>, MemEntry)>> = Vec::with_capacity(self.readers.len());
+        let mut total_len = 0usize;
+        for reader in &self.readers {
+            let mut seg = reader.range_scan(&enc_start, &enc_end)?;
+            seg.sort_by(|(a, _), (b, _)| a.cmp(b));
+            total_len += seg.len();
+            per_reader.push(seg);
+        }
 
-        for &seg_id in &self.segment_ids {
-            let reader = SegmentReader::open(self.base_path.clone(), seg_id)?;
-            for (raw_key, entry) in reader.range_scan(&enc_start, &enc_end)? {
-                let existing_lsn = merged.get(&raw_key).map(|e| e.lsn).unwrap_or(0);
-                if entry.lsn > existing_lsn {
-                    merged.insert(raw_key, entry);
+        use std::collections::BinaryHeap;
+        #[derive(Eq, PartialEq)]
+        struct Item<'a> {
+            key: &'a [u8],
+            entry: &'a MemEntry,
+            reader_idx: usize,
+            elem_idx: usize,
+        }
+        impl<'a> Ord for Item<'a> {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                let key_cmp = other.key.cmp(self.key);
+                if key_cmp != std::cmp::Ordering::Equal {
+                    return key_cmp;
+                }
+                other.entry.lsn.cmp(&self.entry.lsn)
+            }
+        }
+        impl<'a> PartialOrd for Item<'a> {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        let mut heap = BinaryHeap::new();
+        for (ri, seg) in per_reader.iter().enumerate() {
+            if let Some((k, e)) = seg.first() {
+                heap.push(Item { key: k, entry: e, reader_idx: ri, elem_idx: 0 });
+            }
+        }
+        let mut results: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_len);
+        let mut last_key: Option<Vec<u8>> = None;
+        let mut last_entry: Option<MemEntry> = None;
+        while let Some(item) = heap.pop() {
+            let seg = &per_reader[item.reader_idx];
+            let next_idx = item.elem_idx + 1;
+            if next_idx < seg.len() {
+                let (k, e) = &seg[next_idx];
+                heap.push(Item { key: k, entry: e, reader_idx: item.reader_idx, elem_idx: next_idx });
+            }
+            match last_key {
+                Some(ref lk) if lk == item.key => {
+                    if let Some(ref le) = last_entry {
+                        if item.entry.lsn > le.lsn {
+                            last_entry = Some(item.entry.clone());
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(e) = last_entry.take() {
+                        if e.op != Operation::Delete {
+                            if let Some(lk) = last_key {
+                                let (_, user_key) = decode_key(&lk)?;
+                                if let Some(val) = e.value {
+                                    results.push((user_key, val));
+                                }
+                            }
+                        }
+                    }
+                    last_key = Some(item.key.to_vec());
+                    last_entry = Some(item.entry.clone());
                 }
             }
         }
-
-        // Filter deletes, decode keys, sort.
-        let mut results: Vec<(Vec<u8>, Vec<u8>)> = merged
-            .into_iter()
-            .filter(|(_, e)| e.op == Operation::Put)
-            .filter_map(|(raw_key, e)| {
-                let (_, user_key) = decode_key(&raw_key).ok()?;
-                let value = e.value?;
-                Some((user_key, value))
-            })
-            .collect();
-
-        results.sort_by(|(a, _), (b, _)| a.cmp(b));
+        if let Some(e) = last_entry {
+            if e.op != Operation::Delete {
+                if let Some(lk) = last_key {
+                    let (_, user_key) = decode_key(&lk)?;
+                    if let Some(val) = e.value {
+                        results.push((user_key, val));
+                    }
+                }
+            }
+        }
         Ok(results)
     }
 }
@@ -244,7 +299,7 @@ mod tests {
         let snap_id = reg.register(&[42]);
 
         let dir = TempDir::new().unwrap();
-        let snapshot = Snapshot::new(snap_id, reg.clone(), vec![42], dir.path().to_path_buf());
+        let snapshot = Snapshot::new(snap_id, reg.clone(), vec![]);
 
         assert!(reg.is_pinned(42));
         drop(snapshot);
@@ -286,7 +341,8 @@ mod tests {
         // Register segment and create snapshot.
         let reg = SnapshotRegistry::new();
         let snap_id = reg.register(&[segment_id]);
-        let snapshot = Snapshot::new(snap_id, reg.clone(), vec![segment_id], dir.path().to_path_buf());
+        let reader = SegmentReader::open(dir.path().to_path_buf(), segment_id).unwrap();
+        let snapshot = Snapshot::new(snap_id, reg.clone(), vec![reader]);
 
         // get() should return the stored value.
         let result = snapshot.get(ns, user_key).unwrap();
@@ -311,7 +367,8 @@ mod tests {
 
         let reg = SnapshotRegistry::new();
         let snap_id = reg.register(&[0]);
-        let snapshot = Snapshot::new(snap_id, reg, vec![0], dir.path().to_path_buf());
+        let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+        let snapshot = Snapshot::new(snap_id, reg, vec![reader]);
 
         // SegmentReader::range_scan is [start, end) exclusive on the end key.
         let results = snapshot.range(ns, b"key-0002", b"key-0007").unwrap();
@@ -339,7 +396,8 @@ mod tests {
 
         let reg = SnapshotRegistry::new();
         let snap_id = reg.register(&[0]);
-        let snapshot = Snapshot::new(snap_id, reg, vec![0], dir.path().to_path_buf());
+        let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+        let snapshot = Snapshot::new(snap_id, reg, vec![reader]);
         let result = snapshot.get(ns, b"not-present").unwrap();
         assert!(result.is_none());
     }
@@ -398,7 +456,9 @@ mod tests {
         {
             let reg = SnapshotRegistry::new();
             let snap_id = reg.register(&[0, 1]);
-            let snap = Snapshot::new(snap_id, reg, vec![0, 1], dir.path().to_path_buf());
+            let reader0 = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+            let reader1 = SegmentReader::open(dir.path().to_path_buf(), 1).unwrap();
+            let snap = Snapshot::new(snap_id, reg, vec![reader0, reader1]);
             let result = snap.get(ns, b"shared_key").unwrap();
             assert_eq!(
                 result,
@@ -411,7 +471,9 @@ mod tests {
         {
             let reg = SnapshotRegistry::new();
             let snap_id = reg.register(&[1, 0]);
-            let snap2 = Snapshot::new(snap_id, reg, vec![1, 0], dir.path().to_path_buf());
+            let reader1 = SegmentReader::open(dir.path().to_path_buf(), 1).unwrap();
+            let reader0 = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
+            let snap2 = Snapshot::new(snap_id, reg, vec![reader1, reader0]);
             let result = snap2.get(ns, b"shared_key").unwrap();
             assert_eq!(
                 result,

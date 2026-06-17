@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -342,29 +341,33 @@ fn flush_block_to_file(dat: &mut std::fs::File, block: &[u8]) -> Result<usize, E
 // ── SegmentReader ──────────────────────────────────────────────────────────
 
 /// Read-only handle for an on-disk segment file.
+#[derive(Clone)]
 pub struct SegmentReader {
     base_path: PathBuf,
     segment_id: SegmentId,
     /// Metadata for this segment (bounds, sizes, etc.).
     pub meta: SegmentMeta,
     filter: xorf::Xor8,
+    /// Cached sparse index to avoid re-reading .idx file on every operation.
+    index: Vec<(Vec<u8>, u64)>,
 }
 
 impl SegmentReader {
     fn dat_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.dat", self.segment_id)) }
-    fn idx_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.idx", self.segment_id)) }
 
     /// Open an existing segment from disk.
     pub fn open(base_path: PathBuf, segment_id: SegmentId) -> Result<SegmentReader, EdgestoreError> {
         let meta_path = base_path.join(format!("segment-{:08}.meta", segment_id));
         let xf_path  = base_path.join(format!("segment-{:08}.xf",   segment_id));
+        let idx_path = base_path.join(format!("segment-{:08}.idx",  segment_id));
 
         let meta_file = std::fs::File::open(&meta_path)?;
         let meta: SegmentMeta = serde_json::from_reader(meta_file)
             .map_err(|e| EdgestoreError::SegmentCorrupt(format!("meta parse: {}", e)))?;
 
         let filter = read_xf_file(&xf_path)?;
-        Ok(SegmentReader { base_path, segment_id, meta, filter })
+        let index = read_idx_file(&idx_path)?;
+        Ok(SegmentReader { base_path, segment_id, meta, filter, index })
     }
 
     #[allow(clippy::type_complexity)]
@@ -420,8 +423,7 @@ impl SegmentReader {
         if !filter_contains(&self.filter, key) {
             return Ok(None);
         }
-        let index = read_idx_file(&self.idx_path())?;
-        let start_offset = find_block_offset(&index, key);
+        let start_offset = find_block_offset(&self.index, key);
         let mut dat = std::fs::File::open(self.dat_path())?;
         let dat_len = dat.metadata()?.len();
         let mut current_offset = start_offset;
@@ -448,8 +450,7 @@ impl SegmentReader {
         if end < self.meta.min_key.as_slice() || start > self.meta.max_key.as_slice() {
             return Ok(vec![]);
         }
-        let index = read_idx_file(&self.idx_path())?;
-        let start_offset = find_block_offset(&index, start);
+        let start_offset = find_block_offset(&self.index, start);
         let mut dat = std::fs::File::open(self.dat_path())?;
         let dat_len = dat.metadata()?.len();
         let mut current_offset = start_offset;
@@ -473,11 +474,13 @@ impl SegmentReader {
 
 fn find_block_offset(index: &[(Vec<u8>, u64)], query_key: &[u8]) -> u64 {
     if index.is_empty() { return 8; } // skip file header
-    let mut best = index[0].1;
-    for (k, offset) in index {
-        if k.as_slice() <= query_key { best = *offset; } else { break; }
+    // Binary search: find the last entry with key <= query_key
+    let pos = index.partition_point(|(k, _)| k.as_slice() <= query_key);
+    if pos == 0 {
+        index[0].1
+    } else {
+        index[pos - 1].1
     }
-    best
 }
 
 // ── SegmentStore ───────────────────────────────────────────────────────────
@@ -536,6 +539,15 @@ impl SegmentStore {
         self.readers.iter().map(|r| r.segment_id).collect()
     }
 
+    /// Clone readers for the given segment IDs (used by snapshots).
+    pub(crate) fn clone_readers_for(&self, ids: &[SegmentId]) -> Vec<SegmentReader> {
+        let id_set: std::collections::HashSet<SegmentId> = ids.iter().copied().collect();
+        self.readers.iter()
+            .filter(|r| id_set.contains(&r.segment_id))
+            .cloned()
+            .collect()
+    }
+
     /// Return all SegmentMeta entries from the manifest (used by replication API).
     pub(crate) fn list_segment_metas(&self) -> &[SegmentMeta] {
         self.manifest.list_segments()
@@ -584,20 +596,89 @@ impl SegmentStore {
         start: &[u8],
         end: &[u8],
     ) -> Result<Vec<(Vec<u8>, MemEntry)>, EdgestoreError> {
-        let mut merged: HashMap<Vec<u8>, MemEntry> = HashMap::new();
+        // Collect results from all readers, each already sorted.
+        let mut per_reader: Vec<Vec<(Vec<u8>, MemEntry)>> = Vec::with_capacity(self.readers.len());
+        let mut total_len = 0usize;
         for reader in &self.readers {
-            for (key, entry) in reader.range_scan(start, end)? {
-                let existing_lsn = merged.get(&key).map(|e| e.lsn).unwrap_or(0);
-                if entry.lsn > existing_lsn {
-                    merged.insert(key, entry);
+            let mut seg = reader.range_scan(start, end)?;
+            // Sort by key within segment (already sorted, but ensure)
+            seg.sort_by(|(a, _), (b, _)| a.cmp(b));
+            total_len += seg.len();
+            per_reader.push(seg);
+        }
+        // K-way merge: keep highest-LSN per key, filter deletes.
+        use std::collections::BinaryHeap;
+        #[derive(Eq, PartialEq)]
+        struct Item<'a> {
+            key: &'a [u8],
+            entry: &'a MemEntry,
+            reader_idx: usize,
+            elem_idx: usize,
+        }
+        impl<'a> Ord for Item<'a> {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                // Reverse so BinaryHeap is a min-heap on key
+                let key_cmp = other.key.cmp(self.key);
+                if key_cmp != std::cmp::Ordering::Equal {
+                    return key_cmp;
+                }
+                // Tie-break by lsn (reverse) so higher LSN is considered "smaller"
+                // (popped first when keys are equal, which doesn't matter for correctness)
+                other.entry.lsn.cmp(&self.entry.lsn)
+            }
+        }
+        impl<'a> PartialOrd for Item<'a> {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        let mut heap = BinaryHeap::new();
+        for (ri, seg) in per_reader.iter().enumerate() {
+            if let Some((k, e)) = seg.first() {
+                heap.push(Item { key: k, entry: e, reader_idx: ri, elem_idx: 0 });
+            }
+        }
+        let mut results: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(total_len);
+        let mut last_key: Option<Vec<u8>> = None;
+        let mut last_entry: Option<MemEntry> = None;
+        while let Some(item) = heap.pop() {
+            let seg = &per_reader[item.reader_idx];
+            let next_idx = item.elem_idx + 1;
+            if next_idx < seg.len() {
+                let (k, e) = &seg[next_idx];
+                heap.push(Item { key: k, entry: e, reader_idx: item.reader_idx, elem_idx: next_idx });
+            }
+            match last_key {
+                Some(ref lk) if lk == item.key => {
+                    // Same key: keep highest LSN
+                    if let Some(ref le) = last_entry {
+                        if item.entry.lsn > le.lsn {
+                            last_entry = Some(item.entry.clone());
+                        }
+                    }
+                }
+                _ => {
+                    // New key: flush previous
+                    if let Some(e) = last_entry.take() {
+                        if e.op != Operation::Delete {
+                            if let Some(lk) = last_key {
+                                results.push((lk, e));
+                            }
+                        }
+                    }
+                    last_key = Some(item.key.to_vec());
+                    last_entry = Some(item.entry.clone());
                 }
             }
         }
-        let mut results: Vec<(Vec<u8>, MemEntry)> = merged
-            .into_iter()
-            .filter(|(_, e)| e.op != Operation::Delete)
-            .collect();
-        results.sort_by(|(a, _), (b, _)| a.cmp(b));
+        // Flush final entry
+        if let Some(e) = last_entry {
+            if e.op != Operation::Delete {
+                if let Some(lk) = last_key {
+                    results.push((lk, e));
+                }
+            }
+        }
         Ok(results)
     }
 }

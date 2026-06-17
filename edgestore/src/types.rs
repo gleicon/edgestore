@@ -9,7 +9,7 @@ pub type SegmentId = u64;
 
 /// KV operation type stored in WAL and memtable.
 #[repr(u8)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
     /// Insert or update a key-value pair.
     Put = 1,
@@ -17,7 +17,7 @@ pub enum Operation {
     Delete = 2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// In-memory representation of a single record (key + metadata).
 pub struct MemEntry {
     /// Namespace-prefixed key bytes.

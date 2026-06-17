@@ -285,12 +285,12 @@ impl Engine {
     /// releases its pins automatically when dropped.
     pub fn snapshot(&self) -> Result<crate::snapshot::Snapshot, EdgestoreError> {
         let ids = self.segment_store.segment_ids();
+        let readers = self.segment_store.clone_readers_for(&ids);
         let sid = self.snapshot_registry.register(&ids);
         Ok(crate::snapshot::Snapshot::new(
             sid,
             self.snapshot_registry.clone(),
-            ids,
-            self.config.path.clone(),
+            readers,
         ))
     }
 
@@ -459,35 +459,44 @@ impl Engine {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
 
-        let mut merged: std::collections::HashMap<Vec<u8>, crate::types::MemEntry> =
-            std::collections::HashMap::new();
+        // Merge two sorted lists, then deduplicate by key keeping highest LSN.
+        let seg_results = self.segment_store.range_scan(&enc_start, &enc_end)?;
+        let mem_results = self.memtable.range(&enc_start, &enc_end);
 
-        for (k, entry) in self.segment_store.range_scan(&enc_start, &enc_end)? {
-            merged.insert(k, entry);
+        let mut merged: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(seg_results.len() + mem_results.len());
+        let mut si = 0usize;
+        let mut mi = 0usize;
+        while si < seg_results.len() || mi < mem_results.len() {
+            let (k, e) = if si < seg_results.len()
+                && (mi >= mem_results.len() || seg_results[si].0.as_slice() <= mem_results[mi].0)
+            {
+                let (k, e) = &seg_results[si];
+                si += 1;
+                (k.clone(), e.clone())
+            } else {
+                let (k, e) = mem_results[mi];
+                mi += 1;
+                (k.to_vec(), e.clone())
+            };
+            merged.push((k, e));
         }
 
-        for (k, entry) in self.memtable.range(&enc_start, &enc_end) {
-            let k_vec = k.to_vec();
-            let existing_lsn = merged.get(&k_vec).map(|e| e.lsn).unwrap_or(0);
-            if entry.lsn >= existing_lsn {
-                if entry.op == Operation::Delete {
-                    merged.remove(&k_vec);
-                } else {
-                    merged.insert(k_vec, entry.clone());
-                }
-            }
-        }
-
-        let mut keys: Vec<Vec<u8>> = merged.keys().cloned().collect();
-        keys.sort();
         let mut out = Vec::new();
-        for k in keys {
-            if let Some(entry) = merged.get(&k) {
-                if entry.op == Operation::Delete { continue; }
-                if let Some(val) = &entry.value {
-                    let (_, raw_key) = decode_key(&k)?;
-                    out.push((raw_key, val.clone()));
+        let mut i = 0usize;
+        while i < merged.len() {
+            let (k, e) = &merged[i];
+            let mut best_entry = e.clone();
+            i += 1;
+            while i < merged.len() && &merged[i].0 == k {
+                if merged[i].1.lsn > best_entry.lsn {
+                    best_entry = merged[i].1.clone();
                 }
+                i += 1;
+            }
+            if best_entry.op == Operation::Delete { continue; }
+            if let Some(val) = &best_entry.value {
+                let (_, raw_key) = decode_key(k)?;
+                out.push((raw_key, val.clone()));
             }
         }
         Ok(out)
@@ -500,9 +509,7 @@ impl Engine {
     ) -> Result<KvPairs, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
 
-        let mut merged: std::collections::HashMap<Vec<u8>, crate::types::MemEntry> =
-            std::collections::HashMap::new();
-
+        // Use range scan with prefix upper bound, then merge + dedup with memtable.
         let seg_results = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
             self.segment_store.range_scan(&enc_prefix, &enc_end)?
                 .into_iter()
@@ -511,33 +518,42 @@ impl Engine {
         } else {
             vec![]
         };
+        let mem_results = self.memtable.prefix(&enc_prefix);
 
-        for (k, entry) in seg_results {
-            merged.insert(k, entry);
+        let mut merged: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(seg_results.len() + mem_results.len());
+        let mut si = 0usize;
+        let mut mi = 0usize;
+        while si < seg_results.len() || mi < mem_results.len() {
+            let (k, e) = if si < seg_results.len()
+                && (mi >= mem_results.len() || seg_results[si].0.as_slice() <= mem_results[mi].0)
+            {
+                let (k, e) = &seg_results[si];
+                si += 1;
+                (k.clone(), e.clone())
+            } else {
+                let (k, e) = mem_results[mi];
+                mi += 1;
+                (k.to_vec(), e.clone())
+            };
+            merged.push((k, e));
         }
 
-        for (k, entry) in self.memtable.prefix(&enc_prefix) {
-            let k_vec = k.to_vec();
-            let existing_lsn = merged.get(&k_vec).map(|e| e.lsn).unwrap_or(0);
-            if entry.lsn >= existing_lsn {
-                if entry.op == Operation::Delete {
-                    merged.remove(&k_vec);
-                } else {
-                    merged.insert(k_vec, entry.clone());
-                }
-            }
-        }
-
-        let mut keys: Vec<Vec<u8>> = merged.keys().cloned().collect();
-        keys.sort();
         let mut out = Vec::new();
-        for k in keys {
-            if let Some(entry) = merged.get(&k) {
-                if entry.op == Operation::Delete { continue; }
-                if let Some(val) = &entry.value {
-                    let (_, raw_key) = decode_key(&k)?;
-                    out.push((raw_key, val.clone()));
+        let mut i = 0usize;
+        while i < merged.len() {
+            let (k, e) = &merged[i];
+            let mut best_entry = e.clone();
+            i += 1;
+            while i < merged.len() && &merged[i].0 == k {
+                if merged[i].1.lsn > best_entry.lsn {
+                    best_entry = merged[i].1.clone();
                 }
+                i += 1;
+            }
+            if best_entry.op == Operation::Delete { continue; }
+            if let Some(val) = &best_entry.value {
+                let (_, raw_key) = decode_key(k)?;
+                out.push((raw_key, val.clone()));
             }
         }
         Ok(out)
@@ -1068,7 +1084,7 @@ impl Engine {
         // Persist segment-hash stamp so is_index_stale can detect staleness
         let current_hash = self.range_merkle_root()?;
         let stamp_path = sidecar_path.with_extension("stamp");
-        std::fs::write(&stamp_path, &current_hash)?;
+        std::fs::write(&stamp_path, current_hash)?;
 
         // Cache
         self.vector_indices.insert(ns.to_vec(), index);

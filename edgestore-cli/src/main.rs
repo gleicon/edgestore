@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "edgestore-cli")]
 #[command(about = "EdgeStore database administration tool")]
-#[command(version = "1.0.0")]
+#[command(version = "1.0.3")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

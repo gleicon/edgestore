@@ -9,17 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.5] - 2026-06-29
 
-### Added
-
 ### Changed
 
-### Deprecated
-
-### Removed
+- **MSRV raised to Rust 1.95.0** (all crates).
+  - `rust-version = "1.95.0"` added to workspace `Cargo.toml` and inherited by all member crates.
+  - This ensures the `fdp_backend.rs` fix and other modern Rust APIs are available.
 
 ### Fixed
 
-### Security
+- **`fdp_backend.rs:43` — `as_raw_fd()` type mismatch on Rust 1.88+** (`fdp_backend.rs`).
+  - **Bug:** `if let Ok(_fd) = std::os::fd::AsRawFd::as_raw_fd(...)` — `as_raw_fd()` returns `RawFd` (`i32`), not `Result`. This pattern compiled as a soft warning in Rust ≤1.87 but became a hard error in Rust 1.88+.
+  - **Fix:** Removed the `if let Ok(...)` pattern. The `?` on `open(path)?` already handles the error case; `as_raw_fd()` is called directly on the resulting `File`.
+  - **Impact:** EdgeStore now compiles on Rust 1.88+ on Linux. No API change.
 
 ## [1.0.4] - 2026-06-17
 

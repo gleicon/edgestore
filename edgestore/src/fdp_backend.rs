@@ -40,12 +40,14 @@ impl StorageBackend for FdpStorageBackend {
         {
             // Attempt to emit FDP hint via fcntl on the target file descriptor.
             // Actual FDP ioctl constants vary by filesystem; this is a stub.
-            let _fd = std::os::fd::AsRawFd::as_raw_fd(
-                &std::fs::OpenOptions::new().write(true).open(path)?,
-            );
-            // FDP hint would be emitted here via fcntl(fd, F_SET_FILE_DATA_PLACEMENT_HINT, ...)
-            // For now, just log the hint.
-            log::info!("FDP hint: cohort_bucket={} for {:?}", hint.cohort_bucket, path);
+            // Best-effort: if the file is not yet on disk (e.g. in-memory test backend),
+            // skip the hint silently.
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+                let _fd = std::os::fd::AsRawFd::as_raw_fd(&file);
+                // FDP hint would be emitted here via fcntl(fd, F_SET_FILE_DATA_PLACEMENT_HINT, ...)
+                // For now, just log the hint.
+                log::info!("FDP hint: cohort_bucket={} for {:?}", hint.cohort_bucket, path);
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {

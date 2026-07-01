@@ -17,10 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`fdp_backend.rs:43` — `as_raw_fd()` type mismatch on Rust 1.88+** (`fdp_backend.rs`).
+- **`fdp_backend.rs:43` — `as_raw_fd()` type mismatch on Rust 1.88+ + cross-platform failure** (`fdp_backend.rs`).
   - **Bug:** `if let Ok(_fd) = std::os::fd::AsRawFd::as_raw_fd(...)` — `as_raw_fd()` returns `RawFd` (`i32`), not `Result`. This pattern compiled as a soft warning in Rust ≤1.87 but became a hard error in Rust 1.88+.
-  - **Fix:** Removed the `if let Ok(...)` pattern. The `?` on `open(path)?` already handles the error case; `as_raw_fd()` is called directly on the resulting `File`.
-  - **Impact:** EdgeStore now compiles on Rust 1.88+ on Linux. No API change.
+  - **Fix v1:** Removed the `if let Ok(...)` pattern and called `as_raw_fd()` directly. But this left `open(path)?` which failed on Linux when the file didn't exist (e.g. `MemoryStorageBackend` tests).
+  - **Fix v2 (final):** Best-effort `if let Ok(file) = open(path) { as_raw_fd(&file); log!(...); }`. Silently skips hint if file not on disk. Verified on macOS ARM, Linux x86_64, Linux ARM64.
+  - **Impact:** EdgeStore compiles and tests pass on Rust 1.88+ on all platforms. No API change.
 
 ## [1.0.4] - 2026-06-17
 

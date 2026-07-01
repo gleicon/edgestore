@@ -130,7 +130,9 @@ endef
 bump-patch:
 	$(call update_all_versions,$(VERSION),$(NEW_PATCH))
 	$(call add_changelog_section,$(NEW_PATCH))
-	@git add -A
+	@git add Cargo.toml Cargo.lock \
+		edgestore-cli/Cargo.toml edgestore-repl/Cargo.toml edgestore-tokio/Cargo.toml \
+		edgestore-cli/src/main.rs website/index.html AGENTS.md CHANGELOG.md
 	@git diff --cached --quiet || git commit -m "chore: bump version to $(NEW_PATCH)"
 	@echo ""
 	@echo "Version bumped to $(NEW_PATCH) and committed."
@@ -139,7 +141,9 @@ bump-patch:
 bump-minor:
 	$(call update_all_versions,$(VERSION),$(NEW_MINOR))
 	$(call add_changelog_section,$(NEW_MINOR))
-	@git add -A
+	@git add Cargo.toml Cargo.lock \
+		edgestore-cli/Cargo.toml edgestore-repl/Cargo.toml edgestore-tokio/Cargo.toml \
+		edgestore-cli/src/main.rs website/index.html AGENTS.md CHANGELOG.md
 	@git diff --cached --quiet || git commit -m "chore: bump version to $(NEW_MINOR)"
 	@echo ""
 	@echo "Version bumped to $(NEW_MINOR) and committed."
@@ -148,7 +152,9 @@ bump-minor:
 bump-major:
 	$(call update_all_versions,$(VERSION),$(NEW_MAJOR))
 	$(call add_changelog_section,$(NEW_MAJOR))
-	@git add -A
+	@git add Cargo.toml Cargo.lock \
+		edgestore-cli/Cargo.toml edgestore-repl/Cargo.toml edgestore-tokio/Cargo.toml \
+		edgestore-cli/src/main.rs website/index.html AGENTS.md CHANGELOG.md
 	@git diff --cached --quiet || git commit -m "chore: bump version to $(NEW_MAJOR)"
 	@echo ""
 	@echo "Version bumped to $(NEW_MAJOR) and committed."

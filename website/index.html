@@ -94,7 +94,7 @@
         <div>
           <div class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 text-sm font-medium mb-6 border border-white/20">
             <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
-            v1.0.5 Released
+            v1.0.6 Released
           </div>
           <h1 class="text-4xl lg:text-6xl font-bold leading-tight mb-6">
             Local-First Embedded<br>
@@ -138,13 +138,14 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       <div class="bg-edge-50 rounded-xl border border-edge-200 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center space-x-2 mb-2">
-            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.0.2</span>
-            <span class="text-sm text-slate-600 font-medium">2026-06-16</span>
+            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.0.5</span>
+            <span class="text-sm text-slate-600 font-medium">2026-06-29</span>
           </div>
-          <h3 class="font-semibold text-slate-900">Fix: HNSW index staleness detection</h3>
+          <h3 class="font-semibold text-slate-900">MSRV 1.95.0 + Cross-platform FDP fix + Performance</h3>
           <p class="text-sm text-slate-600 mt-1">
-            <code>is_index_stale()</code> now correctly detects when new vectors are added after <code>build_vector_index</code>.
-            Uses a BLAKE3 segment-set stamp (32 bytes) alongside the sidecar — zero new dependencies, deterministic across replicas.
+            Minimum Rust version raised to 1.95.0. FDP backend now compiles and passes tests on macOS, Linux x86_64, and Linux ARM64.
+            Segment index caching, BinaryHeap K-way merge, and merge-join for range/prefix scans improve read performance.
+            HNSW staleness detection uses BLAKE3 segment-set stamps.
           </p>
         </div>
         <a href="../CHANGELOG.md" class="px-4 py-2 bg-white border border-edge-300 text-edge-700 rounded-lg font-medium hover:bg-edge-50 transition text-sm whitespace-nowrap">Read Changelog</a>

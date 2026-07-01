@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["compactor","config","engine","error","fdp_backend","manifest","memtable","merkle","metrics","recovery","remote_store","replication","segment","snapshot","storage_backend","text","transaction","types","vector","wal"]};

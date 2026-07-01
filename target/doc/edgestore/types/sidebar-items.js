@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Compression","Operation"],"fn":["encode_key"],"struct":["MemEntry","SegmentMeta","WalRecord"],"type":["Lsn","SegmentId"]};

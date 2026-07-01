@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["SPARSE_INDEX_STRIDE"],"fn":["read_idx_file"],"struct":["SegmentReader","SegmentWriter"]};

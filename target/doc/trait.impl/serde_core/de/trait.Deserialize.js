@@ -1,9 +1,0 @@
-(function() {
-    const implementors = Object.fromEntries([["edgestore",[["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"struct\" href=\"edgestore/replication/struct.HostId.html\" title=\"struct edgestore::replication::HostId\">HostId</a>",0],["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"struct\" href=\"edgestore/replication/struct.SegmentRef.html\" title=\"struct edgestore::replication::SegmentRef\">SegmentRef</a>",0],["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"struct\" href=\"edgestore/types/struct.SegmentMeta.html\" title=\"struct edgestore::types::SegmentMeta\">SegmentMeta</a>",0]]],["edgestore_repl",[["impl&lt;'de&gt; <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\" title=\"trait serde_core::de::Deserialize\">Deserialize</a>&lt;'de&gt; for <a class=\"struct\" href=\"edgestore_repl/anti_entropy/struct.PeerCursor.html\" title=\"struct edgestore_repl::anti_entropy::PeerCursor\">PeerCursor</a>",0]]]]);
-    if (window.register_implementors) {
-        window.register_implementors(implementors);
-    } else {
-        window.pending_implementors = implementors;
-    }
-})()
-//{"start":59,"fragment_lengths":[1008,371]}

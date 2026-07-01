@@ -298,7 +298,6 @@ mod tests {
         let reg = SnapshotRegistry::new();
         let snap_id = reg.register(&[42]);
 
-        let dir = TempDir::new().unwrap();
         let snapshot = Snapshot::new(snap_id, reg.clone(), vec![]);
 
         assert!(reg.is_pinned(42));

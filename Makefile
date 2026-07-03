@@ -95,8 +95,10 @@ define update_all_versions
 	done
 	@# CLI binary version
 	@sed -i '' 's/#\[command(version = "[^"]*")/#\[command(version = "$(2)")/' edgestore-cli/src/main.rs
-	@# Website badge
+	@# Website hero badge
 	@sed -i '' "s/v$(1) Released/v$(2) Released/" website/index.html
+	@# Website release section badge
+	@sed -i '' "s/>v$(1)</>v$(2)</" website/index.html
 	@# AGENTS.md status line
 	@sed -i '' "s/v$(1)/v$(2)/" AGENTS.md
 	@# Cargo.lock

@@ -41,25 +41,26 @@ impl InvertedIndex {
     /// Returns true if the document was found and removed.
     pub fn remove_document(&mut self, doc_id: &[u8]) -> bool {
         let mut removed = false;
-        let mut total_len_removed = 0u64;
+        let mut doc_len_removed: Option<u64> = None;
 
-        // Remove postings for this doc from all terms
         self.postings.retain(|_term, postings| {
             postings.retain(|p| {
                 if p.doc_id == doc_id {
                     removed = true;
-                    total_len_removed = p.doc_len as u64;
+                    if doc_len_removed.is_none() {
+                        doc_len_removed = Some(p.doc_len as u64);
+                    }
                     false
                 } else {
                     true
                 }
             });
-            !postings.is_empty() // Remove empty term entries
+            !postings.is_empty()
         });
 
-        if removed {
+        if let Some(len) = doc_len_removed {
             self.total_docs -= 1;
-            self.total_doc_len -= total_len_removed;
+            self.total_doc_len -= len;
         }
 
         removed

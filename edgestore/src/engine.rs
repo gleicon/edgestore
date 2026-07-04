@@ -1263,15 +1263,13 @@ use crate::text::index::InvertedIndex;
 use crate::text::types::{encode_text_record, FacetValue};
 
 impl Engine {
-    /// Shared search logic used by both cached and fallback paths.
     fn search_in_index(
         index: &InvertedIndex,
         query_tokens: &[crate::text::tokenizer::Token],
         options: &crate::text::engine::SearchOptions,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        // Collect terms to search (exact + typo-tolerant variants)
         let mut search_terms: Vec<String> = query_tokens.iter().map(|t| t.term.clone()).collect();
-        
+
         if options.typo_tolerance {
             for token in query_tokens {
                 for term in index.postings.keys() {
@@ -1285,7 +1283,6 @@ impl Engine {
             }
         }
 
-        // Collect unique doc IDs from query term postings, with facet filtering
         let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
         let avg_doc_len = index.avg_doc_len();
         for term in &search_terms {
@@ -1296,12 +1293,11 @@ impl Engine {
                 } else {
                     postings.to_vec()
                 };
-                
+
                 let is_fuzzy = !query_tokens.iter().any(|t| &t.term == term);
-                let weight = if is_fuzzy { 0.5 } else { 1.0 }; // Fuzzy matches get half weight
-                
+                let weight = if is_fuzzy { 0.5 } else { 1.0 };
+
                 for posting in &filtered {
-                    // Compute BM25 score inline (avoids redundant HashMap lookups in score_document)
                     let score = crate::text::index::bm25_score(
                         index.total_docs,
                         doc_freq,
@@ -1316,7 +1312,6 @@ impl Engine {
             }
         }
 
-        // Sort by score descending, return top-k
         let mut results: Vec<TextSearchResult> = doc_scores
             .into_iter()
             .map(|(doc_id, score)| TextSearchResult { doc_id, score })
@@ -1324,7 +1319,7 @@ impl Engine {
         results.sort_by(|a, b| {
             let score_cmp = crate::vector::distance::total_cmp_f32(b.score, a.score);
             if score_cmp == std::cmp::Ordering::Equal {
-                a.doc_id.cmp(&b.doc_id) // Tiebreaker: lexicographic doc_id
+                a.doc_id.cmp(&b.doc_id)
             } else {
                 score_cmp
             }
@@ -1347,19 +1342,13 @@ impl TextEngine for Engine {
         let doc_len = tokens.len() as u32;
         let text_ns = text_namespace(ns);
 
-        // Load from disk first (outside entry to avoid borrow conflict)
         let loaded_index = match self.get(&text_ns, b"__index__") {
             Ok(Some(bytes)) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
             _ => InvertedIndex::new(),
         };
 
-        // Get or create the in-memory index for this namespace
         let index = self.text_indices.entry(text_ns.clone()).or_insert(loaded_index);
-
-        // Remove old postings for this doc if re-indexing
         index.remove_document(key);
-
-        // Add new document to the merged index
         index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
 
         // Serialize and store the merged inverted index to disk
@@ -1405,18 +1394,15 @@ impl TextEngine for Engine {
 
         let text_ns = text_namespace(ns);
 
-        // Use the in-memory cached index (O(1) HashMap lookup, no deserialize)
         let index = match self.text_indices.get(&text_ns) {
             Some(idx) => idx,
             None => {
-                // Fallback: load from disk if not in cache (e.g. after recovery or snapshot)
                 match self.get(&text_ns, b"__index__")? {
                     Some(bytes) => {
                         let idx = InvertedIndex::deserialize(&bytes)?;
                         if idx.total_docs == 0 {
                             return Ok(vec![]);
                         }
-                        // We can't insert into &self, so search the deserialized index directly
                         return Self::search_in_index(&idx, &query_tokens, options);
                     }
                     None => return Ok(vec![]),
@@ -1434,7 +1420,6 @@ impl TextEngine for Engine {
     fn delete_text(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         let text_ns = text_namespace(ns);
 
-        // Remove index from cache first to avoid borrow conflicts, modify, then do disk ops
         if let Some(mut index) = self.text_indices.remove(&text_ns) {
             index.remove_document(key);
             if index.total_docs == 0 {
@@ -1445,7 +1430,6 @@ impl TextEngine for Engine {
                 self.text_indices.insert(text_ns.clone(), index);
             }
         } else {
-            // Fallback: load from disk, update, write back
             let mut index = match self.get(&text_ns, b"__index__")? {
                 Some(bytes) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
                 None => InvertedIndex::new(),
@@ -1458,6 +1442,7 @@ impl TextEngine for Engine {
             } else {
                 let index_bytes = index.serialize();
                 self.put(&text_ns, b"__index__", &index_bytes)?;
+                self.text_indices.insert(text_ns.clone(), index);
             }
         }
 

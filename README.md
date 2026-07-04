@@ -1,6 +1,6 @@
 # EdgeStore
 
-[![CI](https://github.com/edgestore/edgestore/workflows/CI/badge.svg)](https://github.com/edgestore/edgestore/actions)
+[![CI](https://github.com/gleicon/edgestore/workflows/CI/badge.svg)](https://github.com/gleicon/edgestore/actions)
 [![Crates.io](https://img.shields.io/crates/v/edgestore.svg)](https://crates.io/crates/edgestore)
 [![docs.rs](https://docs.rs/edgestore/badge.svg)](https://docs.rs/edgestore)
 

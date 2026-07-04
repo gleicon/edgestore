@@ -229,6 +229,7 @@ impl InvertedIndex {
 
 /// Default BM25 parameters used by EdgeStore.
 pub const BM25_K1: f32 = 1.2;
+/// BM25 length normalization parameter.
 pub const BM25_B: f32 = 0.75;
 
 /// Compute BM25 score for a single term-document pair.

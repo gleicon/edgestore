@@ -242,13 +242,14 @@ fn test_search_performance_at_scale() {
     let elapsed = start.elapsed();
     let avg_us = elapsed.as_micros() as f64 / 100.0;
 
-    // Search should be under 5ms per query at 10K docs with merged index
-    // (old per-doc micro-index impl was ~165ms at 10K docs = ~6 QPS)
-    // With merged index + in-memory cache + inline scoring: ~3ms = ~300 QPS
+    // Threshold depends on build profile:
+    //   release: ~3-5 ms (BENCHMARKS.md claim: ~3.2 ms at 10K docs)
+    //   debug:   ~15-25 ms (debug overhead; still 6-10x faster than old ~165 ms)
+    let threshold_us = if cfg!(debug_assertions) { 50_000.0 } else { 5_000.0 };
     assert!(
-        avg_us < 5000.0,
-        "search too slow: {:.1} µs at {} docs (merged index should be < 5ms)",
-        avg_us, n
+        avg_us < threshold_us,
+        "search too slow: {:.1} µs at {} docs (threshold: {:.0} µs)",
+        avg_us, n, threshold_us
     );
 }
 

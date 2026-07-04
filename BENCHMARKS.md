@@ -129,6 +129,8 @@ BM25-based full-text search over indexed documents. Uses a single merged inverte
 index per namespace, cached in memory. Search reads the cached index directly —
 O(1) HashMap lookup with no per-query deserialization.
 
+**All numbers are release mode (`cargo bench`).** Debug mode is ~3-5x slower.
+
 | Document Count | Search QPS | Latency per query | Notes |
 |----------------|-----------|-------------------|-------|
 | 100 docs       | ~30,000   | ~33 µs            | Warm cache |

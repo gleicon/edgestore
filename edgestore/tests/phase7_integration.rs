@@ -251,3 +251,105 @@ fn test_search_performance_at_scale() {
         avg_us, n
     );
 }
+
+#[test]
+fn test_cold_cache_search() {
+    let dir = TempDir::new().unwrap();
+
+    // Phase 1: index docs with one engine instance
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine.index_text(b"ns", b"doc2", "hello foo", std::collections::HashMap::new()).unwrap();
+        engine.flush().unwrap();
+    }
+
+    // Phase 2: drop engine, reopen — cache is cold. Search should still work
+    // via fallback disk read.
+    {
+        let engine = open_engine(&dir);
+        let results = engine.search_text(b"ns", "hello", 5).unwrap();
+        assert_eq!(results.len(), 2, "cold-cache search should find both docs via disk fallback");
+    }
+}
+
+#[test]
+fn test_typo_tolerance() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    engine.index_text(b"ns", b"doc2", "helo there", std::collections::HashMap::new()).unwrap();
+
+    // Exact search finds both ("hello" exact, "helo" is one edit away)
+    let exact = engine.search_text_with_options(
+        b"ns",
+        "hello",
+        &edgestore::SearchOptions { k: 5, typo_tolerance: true, ..Default::default() },
+    ).unwrap();
+    assert!(
+        exact.iter().any(|r| r.doc_id == b"doc1"),
+        "exact match doc1 should be found"
+    );
+    assert!(
+        exact.iter().any(|r| r.doc_id == b"doc2"),
+        "typo-tolerant match doc2 ('helo' ~ 'hello') should be found"
+    );
+}
+
+#[test]
+fn test_delete_fallback_cache_miss() {
+    let dir = TempDir::new().unwrap();
+
+    // Index with engine 1
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine.flush().unwrap();
+    }
+
+    // Delete with engine 2 (cold cache — simulates cache miss)
+    {
+        let mut engine = open_engine(&dir);
+        let results_before = engine.search_text(b"ns", "hello", 5).unwrap();
+        assert_eq!(results_before.len(), 1);
+
+        engine.delete_text(b"ns", b"doc1").unwrap();
+
+        let results_after = engine.search_text(b"ns", "hello", 5).unwrap();
+        assert!(results_after.is_empty(), "delete from cold cache should remove doc");
+    }
+}
+
+#[test]
+fn test_reindex_with_facets() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    let mut facets1 = std::collections::HashMap::new();
+    facets1.insert("category".to_string(), FacetValue::String("news".to_string()));
+    engine.index_text(b"ns", b"doc1", "breaking news today", facets1).unwrap();
+
+    // Re-index with different facets
+    let mut facets2 = std::collections::HashMap::new();
+    facets2.insert("category".to_string(), FacetValue::String("sports".to_string()));
+    engine.index_text(b"ns", b"doc1", "sports update today", facets2).unwrap();
+
+    // Old text should not match "breaking"
+    let results = engine.search_text(b"ns", "breaking", 5).unwrap();
+    assert!(results.is_empty(), "old text 'breaking' should not match after re-index");
+
+    // New text should match "sports"
+    let results2 = engine.search_text(b"ns", "sports", 5).unwrap();
+    assert_eq!(results2.len(), 1);
+    assert_eq!(results2[0].doc_id, b"doc1");
+
+    // Verify raw record has new facets
+    let text_ns = edgestore::text_namespace(b"ns");
+    let raw = engine.get(&text_ns, b"doc1").unwrap().unwrap();
+    let record = edgestore::decode_text_record(&raw).unwrap();
+    assert_eq!(
+        record.facets.get("category"),
+        Some(&FacetValue::String("sports".to_string()))
+    );
+}

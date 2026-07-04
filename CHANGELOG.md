@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.10] - 2026-07-04
+## [1.0.11] - 2026-07-04
 
 ### Added
 
@@ -21,23 +21,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-## [1.0.9] - 2026-07-04
+## [1.0.11] - 2026-07-04
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
 
 ### Fixed
 
-- **Text search: write amplification on every `index_text`** (`engine.rs`).
-  - **Bug:** The v1.0.8 merged-index fix eliminated O(N) search reads, but `index_text` still re-serialized and re-wrote the entire merged inverted index blob on every single document write. Write cost scaled with cumulative index size, not per-document size.
-  - **Fix:** Merged index is no longer persisted on every `index_text`. It stays in memory (`Engine::text_indices`) and is only written to disk on `flush()` or when the engine is dropped. Raw text records are still durable via normal WAL → segment path.
-  - **Crash recovery:** `Engine::open()` detects stale sidecars via LSN watermark. Each persisted merged index stores the LSN of its `flush()` in `InvertedIndex::sidecar_lsn`. On open, if `sidecar_lsn < max_recovered_lsn`, the sidecar is stale and is automatically rebuilt from raw text records — self-healing, no silent omissions.
+### Security
+
+## [1.0.10] - 2026-07-04
+
+### Fixed
+
+- **Text search: write amplification on every `index_text` + self-healing crash recovery** (`engine.rs`, `text/index.rs`).
+  - **Bug (write amplification):** The v1.0.8 merged-index fix eliminated O(N) search reads, but `index_text` still re-serialized and re-wrote the entire merged inverted index blob on every single document write. Write cost scaled with cumulative index size, not per-document size.
+  - **Fix (write amplification):** Merged index is no longer persisted on every `index_text`. It stays in memory (`Engine::text_indices`) and is only written to disk on `flush()` or when the engine is dropped. Raw text records are still durable via normal WAL → segment path.
+  - **Bug (crash recovery):** After a crash, `rebuild_text_indices()` only rebuilt when the `__index__` sidecar was missing. Documents indexed since the last `flush()` had raw text WAL-backed but were silently missing from BM25 search.
+  - **Fix (crash recovery):** `InvertedIndex` gained `sidecar_lsn: u64` (serialization bumped to v2, backward compatible with v1 sidecars). `rebuild_text_indices()` compares `sidecar_lsn >= lsn_counter`; stale sidecars fall through to full rebuild from raw records. Self-healing, no silent omissions.
+  - **Note:** Staleness recovery is a full rebuild of the namespace (re-tokenizes every raw record), not an incremental replay of the gap. Open-time cost is proportional to total retained raw doc count, not just the lost gap. This is bounded by the per-namespace design.
   - **New API:** `Engine::rebuild_text_indices()` rebuilds merged indices from raw records on open. `Engine::persist_text_indices()` writes all dirty text indices to disk (called from `flush()` and `Drop`).
-  - **Tests:** Added `test_cold_cache_search`, `test_typo_tolerance`, `test_delete_fallback_cache_miss`, `test_reindex_with_facets`, `test_crash_recovery_rebuilds_stale_sidecar`, `test_no_rebuild_when_sidecar_fresh`. Added `bench_index_throughput` and `bench_index_large` benchmarks (100–100K docs).
+  - **Tests:** Added `test_cold_cache_search`, `test_typo_tolerance`, `test_delete_fallback_cache_miss`, `test_reindex_with_facets`, `test_crash_recovery_rebuilds_stale_sidecar`, `test_no_rebuild_when_sidecar_fresh`.
   - **Impact:** Indexing throughput is now constant per-document regardless of namespace size. Search remains O(1). No API change.
 
 ### Changed
 
 - `flush()` now also calls `persist_text_indices()` — call `flush()` before closing to ensure text search indexes are durable.
+- Performance test `test_search_performance_at_scale` now uses profile-aware thresholds: 50 ms in debug mode, 5 ms in release mode. BENCHMARKS.md numbers are release-only (`cargo bench`).
 
 ### Security
+
+## [1.0.9] - 2026-07-04
+
+Already published. No changes.
 
 ## [1.0.8] - 2026-07-04
 

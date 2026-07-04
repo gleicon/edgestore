@@ -12,7 +12,7 @@ keywords = ["edgestore", "repl", "database", "http", "server"]
 categories = ["database-implementations"]
 
 [dependencies]
-edgestore = { path = "../edgestore", version = "1.0.10" }
+edgestore = { path = "../edgestore", version = "1.0.11" }
 ureq = { version = "2", features = [] }
 tiny_http = "0.12"
 serde = { version = "1", features = ["derive"] }

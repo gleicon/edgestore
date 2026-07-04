@@ -3,7 +3,7 @@ members = ["edgestore", "edgestore-cli", "edgestore-repl", "edgestore-tokio"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.10"
+version = "1.0.11"
 rust-version = "1.95.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"

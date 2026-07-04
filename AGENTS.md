@@ -4,7 +4,7 @@
 
 Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, deathtime-cohort compaction. Library-first — no mandatory server. See `prod.md` for full spec and `.planning/PROJECT.md` for project context.
 
-**Status:** v1.0.8 (bugfix release — text search incremental index + HNSW staleness detection + Rust 1.95.0 MSRV + FDP compilation fix).
+**Status:** v1.0.9 (bugfix release — text search incremental index + HNSW staleness detection + Rust 1.95.0 MSRV + FDP compilation fix).
 
 ## Architecture Constraints (non-negotiable)
 

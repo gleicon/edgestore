@@ -138,7 +138,7 @@ O(1) HashMap lookup with no per-query deserialization.
 | 100,000 docs   | ~30       | ~33 ms            | Warm cache |
 
 **Previous (buggy) implementation:** Per-document micro-indexes caused O(N)
-deserialize+merge, collapsing to ~6 QPS at 10K docs. Fixed in v1.0.7.
+deserialize+merge, collapsing to ~6 QPS at 10K docs. Fixed in v1.0.8.
 
 | Index Throughput | Measured |
 |------------------|----------|

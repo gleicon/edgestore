@@ -17,17 +17,6 @@ GIT_TAG := v$(VERSION)
 # Crates in dependency order (publish from root to leaves)
 CRATES := edgestore edgestore-tokio edgestore-repl edgestore-cli
 
-# ── Docker detection ──────────────────────────────────────────────────────
-# Some environments (e.g. Colima) run a newer Docker daemon than the host
-# Docker client supports. We detect this and fall back to `colima ssh -- docker`
-# when the local client is too old.
-DOCKER_OK := $(shell docker ps >/dev/null 2>&1 && echo 1 || echo 0)
-ifeq ($(DOCKER_OK),1)
-  DOCKER := docker
-else
-  DOCKER := colima ssh -- docker
-endif
-
 # ── Default ─────────────────────────────────────────────────────────────────
 
 all: test build
@@ -85,10 +74,9 @@ bench:
 
 s3-up: ## Start LocalStack container for S3 testing
 	@echo "Starting LocalStack..."
-	@echo "Using docker command: $(DOCKER)"
-	@$(DOCKER) stop edgestore-localstack >/dev/null 2>&1 || true
-	@$(DOCKER) rm edgestore-localstack >/dev/null 2>&1 || true
-	$(DOCKER) run -d \
+	@docker stop edgestore-localstack >/dev/null 2>&1 || true
+	@docker rm edgestore-localstack >/dev/null 2>&1 || true
+	docker run -d \
 		--name edgestore-localstack \
 		-p 4566:4566 \
 		-e SERVICES=s3 \
@@ -106,8 +94,8 @@ s3-up: ## Start LocalStack container for S3 testing
 
 s3-down: ## Stop and remove LocalStack container
 	@echo "Stopping LocalStack..."
-	$(DOCKER) stop edgestore-localstack >/dev/null 2>&1 || true
-	$(DOCKER) rm edgestore-localstack >/dev/null 2>&1 || true
+	docker stop edgestore-localstack >/dev/null 2>&1 || true
+	docker rm edgestore-localstack >/dev/null 2>&1 || true
 
 s3-test: s3-up ## Run S3 integration tests against LocalStack
 	@echo "Running S3 integration tests..."

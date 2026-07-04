@@ -30,7 +30,7 @@ Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, d
 | Conflict resolution | LWW by wall clock (`timestamp` in WAL record) |
 | Vector index v1 | Flat SIMD scan — HNSW in Phase 6 |
 | Vector header | `{dims:u16}{dtype:u8}{data}` |
-| Text index | Single merged inverted index per namespace (key `__index__`), incrementally updated on write. O(1) search read. |
+| Text index | Single merged inverted index per namespace (key `__index__`), incrementally updated on write. O(1) search read. **Crash recovery:** merged index is only persisted on `flush()` / `Drop`; after a crash, `Engine::open()` rebuilds from raw records only if the sidecar is missing. Call `flush()` every 1–5 s to bound the loss window. |
 | Content addressing | BLAKE3 |
 
 ## Academic Foundations

@@ -138,13 +138,14 @@ O(1) HashMap lookup with no per-query deserialization.
 | 100,000 docs   | ~30       | ~33 ms            | Warm cache |
 
 **Previous (buggy) implementation:** Per-document micro-indexes caused O(N)
-deserialize+merge, collapsing to ~6 QPS at 10K docs. Fixed in v1.0.8.
+deserialize+merge, collapsing to ~6 QPS at 10K docs. Fixed in v1.0.9.
 
-| Index Throughput | Measured |
-|------------------|----------|
-| 100 docs         | ~250 docs/sec (~4 ms/doc, includes disk write) |
+| Index Throughput | Claim | Measured |
+|------------------|-------|----------|
+| Per-document     | O(1) regardless of namespace size (lazy index persistence) | Not yet measured |
 
-> Measurement: `cargo bench --bench text_search`
+> Search measurement: `cargo bench --bench text_search`
+> Index measurement: `cargo bench --bench text_search -- index` (run numbers pending)
 > Warm cache: run search once before benchmarking to populate in-memory index cache.
 
 ### f) Compaction Overhead (WAF)

@@ -9,15 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.7] - 2026-07-03
 
-### Added
+### Fixed
+
+- **Text search: per-document micro-index bug causing O(N) search deserialize+merge** (`engine.rs`, `text/index.rs`).
+  - **Bug:** `index_text` built a brand-new one-document `InvertedIndex` per write and stored it under `idx:{doc_key}`. `search_text_with_options` did `self.prefix(&text_ns, b"idx:")` — pulled and deserialized every single per-document micro-index on every query, then merged them all into one aggregated index in memory before scoring. This was O(total_docs) deserialize+merge work per search, collapsing to ~6 QPS at 10K docs.
+  - **Fix:** `index_text` now reads the existing merged inverted index from key `__index__`, incrementally adds the new document's postings, and writes back. `search_text` reads the single merged index directly — O(1) single-record deserialize instead of O(N) per-document merging. `delete_text` removes the document from the merged index.
+  - **New API:** `InvertedIndex::remove_document()` removes all postings for a doc_id and updates total_docs/total_doc_len.
+  - **Tests:** Added `test_reindex_updates_merged_index`, `test_incremental_index_many_docs`, `test_namespace_isolation`, `test_delete_all_docs_removes_index`, `test_search_performance_at_scale` (asserts < 1ms/search at 10K docs).
+  - **Impact:** Text search QPS improves from ~6 to thousands at 10K docs. No API change.
 
 ### Changed
 
-### Deprecated
-
-### Removed
-
-### Fixed
+- **Makefile bump targets** now explicitly `git add` only known version files instead of `git add -A`, preventing accidental commits of build artifacts.
 
 ### Security
 

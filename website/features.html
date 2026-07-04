@@ -194,7 +194,7 @@ db.build_vector_index(<span class="string">b"embeddings"</span>, <span class="nu
       </div>
       <div class="grid lg:grid-cols-2 gap-8">
         <div class="prose text-slate-600">
-          <p>Embedded Algolia-like search with BM25 relevance scoring. Inverted index stored in segments, merged during compaction. No separate server process.</p>
+          <p>Embedded Algolia-like search with BM25 relevance scoring. Single merged inverted index per namespace, incrementally updated on write. Search reads the merged index directly — O(1) single-record deserialize, not O(N) per-document merging. No separate server process.</p>
           <ul class="list-disc pl-5 space-y-1 mt-3">
             <li><strong>BM25 ranking</strong> — k1=1.2, b=0.75, configurable</li>
             <li><strong>Tokenization</strong> — English with stopwords and simple stemming</li>

@@ -4,7 +4,7 @@
 
 Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, deathtime-cohort compaction. Library-first — no mandatory server. See `prod.md` for full spec and `.planning/PROJECT.md` for project context.
 
-**Status:** v1.0.7 (bugfix release — HNSW staleness detection + Rust 1.95.0 MSRV + FDP compilation fix).
+**Status:** v1.0.7 (bugfix release — text search incremental index + HNSW staleness detection + Rust 1.95.0 MSRV + FDP compilation fix).
 
 ## Architecture Constraints (non-negotiable)
 
@@ -30,6 +30,7 @@ Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, d
 | Conflict resolution | LWW by wall clock (`timestamp` in WAL record) |
 | Vector index v1 | Flat SIMD scan — HNSW in Phase 6 |
 | Vector header | `{dims:u16}{dtype:u8}{data}` |
+| Text index | Single merged inverted index per namespace (key `__index__`), incrementally updated on write. O(1) search read. |
 | Content addressing | BLAKE3 |
 
 ## Academic Foundations

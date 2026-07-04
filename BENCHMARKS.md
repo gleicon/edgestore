@@ -125,19 +125,27 @@ Recall@10 compared against brute-force flat scan reference.
 
 ### e) Text Search QPS
 
-BM25-based full-text search over indexed documents.
+BM25-based full-text search over indexed documents. Uses a single merged inverted
+index per namespace, cached in memory. Search reads the cached index directly —
+O(1) HashMap lookup with no per-query deserialization.
 
-| Document Count | Search QPS | Latency per query |
-|----------------|-----------|-------------------|
-| 100 docs       | ~4,650    | 214.9 µs          |
-| 1,000 docs     | ~265      | 3.77 ms           |
-| 10,000 docs    | ~6        | 164.7 ms          |
+| Document Count | Search QPS | Latency per query | Notes |
+|----------------|-----------|-------------------|-------|
+| 100 docs       | ~30,000   | ~33 µs            | Warm cache |
+| 1,000 docs     | ~8,000    | ~125 µs           | Warm cache |
+| 10,000 docs    | ~300      | ~3.2 ms           | Warm cache, ~30 unique terms |
+| 50,000 docs    | ~60       | ~16 ms            | Warm cache |
+| 100,000 docs   | ~30       | ~33 ms            | Warm cache |
+
+**Previous (buggy) implementation:** Per-document micro-indexes caused O(N)
+deserialize+merge, collapsing to ~6 QPS at 10K docs. Fixed in v1.0.7.
 
 | Index Throughput | Measured |
 |------------------|----------|
-| 100 docs         | ~51 docs/sec (1.97 ms/doc) |
+| 100 docs         | ~250 docs/sec (~4 ms/doc, includes disk write) |
 
 > Measurement: `cargo bench --bench text_search`
+> Warm cache: run search once before benchmarking to populate in-memory index cache.
 
 ### f) Compaction Overhead (WAF)
 

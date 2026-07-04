@@ -129,9 +129,12 @@ not break KV compilation or tests.
 
 ### TextIndex / TextEngine
 Full-text search API (v2) layered on KV. Tokenization produces posting lists
-stored in segments. BM25 scoring, faceting, and typo-tolerant search (1-edit
-Levenshtein) are supported. Posting lists merge during compaction; tombstone
-semantics differ from KV deletions.
+stored in a single merged inverted index per namespace (key `__index__` in the
+synthetic text namespace). `index_text` incrementally updates this merged index
+(read-modify-write). `search_text` reads the single merged index directly —
+O(1) deserialize, not O(N) per-document micro-index merging. BM25 scoring,
+faceting, and typo-tolerant search (1-edit Levenshtein) are supported. The merged
+index is a regular KV record, so compaction handles it naturally.
 
 ---
 

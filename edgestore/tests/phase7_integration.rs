@@ -134,3 +134,120 @@ fn test_index_text_record_retrieval() {
     assert_eq!(record.facets.get("views"), Some(&FacetValue::Number(42)));
     assert_eq!(record.facets.get("published"), Some(&FacetValue::Bool(true)));
 }
+
+#[test]
+fn test_reindex_updates_merged_index() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    // Index doc1 with "hello world"
+    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    let results = engine.search_text(b"ns", "hello", 5).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].doc_id, b"doc1");
+
+    // Re-index doc1 with "foo bar" — old terms should be gone
+    engine.index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new()).unwrap();
+    let results_hello = engine.search_text(b"ns", "hello", 5).unwrap();
+    assert!(results_hello.is_empty(), "old term 'hello' should not find re-indexed doc");
+
+    let results_foo = engine.search_text(b"ns", "foo", 5).unwrap();
+    assert_eq!(results_foo.len(), 1);
+    assert_eq!(results_foo[0].doc_id, b"doc1");
+}
+
+#[test]
+fn test_incremental_index_many_docs() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    // Index 100 docs incrementally
+    for i in 0..100 {
+        let text = format!("document number {} contains quick brown fox", i);
+        let key = format!("doc{:04}", i);
+        engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
+    }
+
+    // Search should find all docs with "quick brown"
+    let results = engine.search_text(b"ns", "quick brown", 200).unwrap();
+    assert_eq!(results.len(), 100, "all 100 docs should match 'quick brown'");
+
+    // Delete every other doc
+    for i in (0..100).step_by(2) {
+        let key = format!("doc{:04}", i);
+        engine.delete_text(b"ns", key.as_bytes()).unwrap();
+    }
+
+    // Search should find only remaining 50 docs
+    let results_after = engine.search_text(b"ns", "quick brown", 200).unwrap();
+    assert_eq!(results_after.len(), 50, "50 docs should remain after deletion");
+}
+
+#[test]
+fn test_namespace_isolation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    engine.index_text(b"ns1", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    engine.index_text(b"ns2", b"doc1", "foo bar", std::collections::HashMap::new()).unwrap();
+
+    let results1 = engine.search_text(b"ns1", "hello", 5).unwrap();
+    assert_eq!(results1.len(), 1);
+
+    let results2 = engine.search_text(b"ns2", "hello", 5).unwrap();
+    assert!(results2.is_empty(), "ns2 should not find ns1 terms");
+
+    let results3 = engine.search_text(b"ns2", "foo", 5).unwrap();
+    assert_eq!(results3.len(), 1);
+}
+
+#[test]
+fn test_delete_all_docs_removes_index() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    engine.index_text(b"ns", b"doc2", "hello world", std::collections::HashMap::new()).unwrap();
+
+    engine.delete_text(b"ns", b"doc1").unwrap();
+    engine.delete_text(b"ns", b"doc2").unwrap();
+
+    // Merged index should be deleted when empty
+    let text_ns = edgestore::text_namespace(b"ns");
+    let index_bytes = engine.get(&text_ns, b"__index__").unwrap();
+    assert!(index_bytes.is_none(), "merged index should be deleted when all docs removed");
+}
+
+#[test]
+fn test_search_performance_at_scale() {
+    use std::time::Instant;
+
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    // Index 10,000 documents
+    let n = 10_000;
+    for i in 0..n {
+        let text = format!("document number {} contains quick brown fox jumps over lazy dog", i);
+        let key = format!("doc{:08}", i);
+        engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
+    }
+
+    // Benchmark 100 searches
+    let start = Instant::now();
+    for _ in 0..100 {
+        let results = engine.search_text(b"ns", "quick brown fox", 10).unwrap();
+        assert!(!results.is_empty());
+    }
+    let elapsed = start.elapsed();
+    let avg_us = elapsed.as_micros() as f64 / 100.0;
+
+    // Search should be under 5ms per query at 10K docs with merged index
+    // (old per-doc micro-index impl was ~165ms at 10K docs = ~6 QPS)
+    // With merged index + in-memory cache + inline scoring: ~3ms = ~300 QPS
+    assert!(
+        avg_us < 5000.0,
+        "search too slow: {:.1} µs at {} docs (merged index should be < 5ms)",
+        avg_us, n
+    );
+}

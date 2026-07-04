@@ -37,6 +37,34 @@ impl InvertedIndex {
         }
     }
 
+    /// Remove a document from the index.
+    /// Returns true if the document was found and removed.
+    pub fn remove_document(&mut self, doc_id: &[u8]) -> bool {
+        let mut removed = false;
+        let mut total_len_removed = 0u64;
+
+        // Remove postings for this doc from all terms
+        self.postings.retain(|_term, postings| {
+            postings.retain(|p| {
+                if p.doc_id == doc_id {
+                    removed = true;
+                    total_len_removed = p.doc_len as u64;
+                    false
+                } else {
+                    true
+                }
+            });
+            !postings.is_empty() // Remove empty term entries
+        });
+
+        if removed {
+            self.total_docs -= 1;
+            self.total_doc_len -= total_len_removed;
+        }
+
+        removed
+    }
+
     /// Add a document to the index.
     pub fn add_document(
         &mut self,
@@ -323,5 +351,53 @@ mod tests {
         ];
         let score2 = score_document(&index, &[1], &query2);
         assert_eq!(score2, 0.0);
+    }
+
+    #[test]
+    fn test_remove_document() {
+        let mut index = InvertedIndex::new();
+        let tokens1 = vec![
+            Token { term: "hello".to_string(), position: 0 },
+            Token { term: "world".to_string(), position: 1 },
+        ];
+        let tokens2 = vec![
+            Token { term: "hello".to_string(), position: 0 },
+            Token { term: "foo".to_string(), position: 1 },
+        ];
+        index.add_document(vec![1], &tokens1, 2, HashMap::new());
+        index.add_document(vec![2], &tokens2, 2, HashMap::new());
+
+        assert_eq!(index.total_docs, 2);
+        assert_eq!(index.postings.get("hello").unwrap().len(), 2);
+        assert_eq!(index.postings.get("world").unwrap().len(), 1);
+        assert_eq!(index.postings.get("foo").unwrap().len(), 1);
+
+        // Remove doc 1
+        assert!(index.remove_document(&[1]));
+        assert_eq!(index.total_docs, 1);
+        assert_eq!(index.total_doc_len, 2);
+        assert_eq!(index.postings.get("hello").unwrap().len(), 1);
+        assert!(index.postings.get("world").is_none()); // term removed when empty
+        assert_eq!(index.postings.get("foo").unwrap().len(), 1);
+
+        // Removing same doc again returns false
+        assert!(!index.remove_document(&[1]));
+
+        // Remove doc 2, index should be empty
+        assert!(index.remove_document(&[2]));
+        assert_eq!(index.total_docs, 0);
+        assert_eq!(index.total_doc_len, 0);
+        assert!(index.postings.is_empty());
+    }
+
+    #[test]
+    fn test_remove_document_updates_avg_len() {
+        let mut index = InvertedIndex::new();
+        index.add_document(vec![1], &[Token { term: "a".to_string(), position: 0 }], 10, HashMap::new());
+        index.add_document(vec![2], &[Token { term: "a".to_string(), position: 0 }], 20, HashMap::new());
+        assert_eq!(index.avg_doc_len(), 15.0);
+
+        index.remove_document(&[1]);
+        assert_eq!(index.avg_doc_len(), 20.0);
     }
 }

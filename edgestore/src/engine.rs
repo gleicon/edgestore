@@ -68,6 +68,9 @@ pub struct Engine {
     pub(crate) snapshot_registry: crate::snapshot::SnapshotRegistry,
     metrics: EngineMetrics,
     vector_indices: HashMap<Vec<u8>, HnswIndex>,
+    /// In-memory cache of deserialized text indexes per namespace.
+    /// Updated incrementally on index_text/delete_text. Avoids O(N) deserialize per search.
+    text_indices: HashMap<Vec<u8>, crate::text::index::InvertedIndex>,
 }
 
 impl Engine {
@@ -134,6 +137,7 @@ impl Engine {
             snapshot_registry: crate::snapshot::SnapshotRegistry::new(),
             metrics: EngineMetrics::new(),
             vector_indices: HashMap::new(),
+            text_indices: HashMap::new(),
         })
     }
 
@@ -1255,8 +1259,81 @@ impl VectorEngine for Engine {
 
 use crate::text::engine::{TextEngine, TextSearchResult, text_namespace};
 use crate::text::tokenizer::tokenize;
-use crate::text::index::{InvertedIndex, score_document};
+use crate::text::index::InvertedIndex;
 use crate::text::types::{encode_text_record, FacetValue};
+
+impl Engine {
+    /// Shared search logic used by both cached and fallback paths.
+    fn search_in_index(
+        index: &InvertedIndex,
+        query_tokens: &[crate::text::tokenizer::Token],
+        options: &crate::text::engine::SearchOptions,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+        // Collect terms to search (exact + typo-tolerant variants)
+        let mut search_terms: Vec<String> = query_tokens.iter().map(|t| t.term.clone()).collect();
+        
+        if options.typo_tolerance {
+            for token in query_tokens {
+                for term in index.postings.keys() {
+                    if term != &token.term
+                        && crate::text::typo::is_one_edit_away(term, &token.term)
+                        && !search_terms.contains(term)
+                    {
+                        search_terms.push(term.clone());
+                    }
+                }
+            }
+        }
+
+        // Collect unique doc IDs from query term postings, with facet filtering
+        let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
+        let avg_doc_len = index.avg_doc_len();
+        for term in &search_terms {
+            if let Some(postings) = index.postings.get(term) {
+                let doc_freq = postings.len() as u64;
+                let filtered = if !options.facet_filters.is_empty() {
+                    crate::text::facet::filter_by_facets(postings, &options.facet_filters)
+                } else {
+                    postings.to_vec()
+                };
+                
+                let is_fuzzy = !query_tokens.iter().any(|t| &t.term == term);
+                let weight = if is_fuzzy { 0.5 } else { 1.0 }; // Fuzzy matches get half weight
+                
+                for posting in &filtered {
+                    // Compute BM25 score inline (avoids redundant HashMap lookups in score_document)
+                    let score = crate::text::index::bm25_score(
+                        index.total_docs,
+                        doc_freq,
+                        posting.term_freq,
+                        posting.doc_len,
+                        avg_doc_len,
+                        1.2,
+                        0.75,
+                    ) * weight;
+                    *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
+                }
+            }
+        }
+
+        // Sort by score descending, return top-k
+        let mut results: Vec<TextSearchResult> = doc_scores
+            .into_iter()
+            .map(|(doc_id, score)| TextSearchResult { doc_id, score })
+            .collect();
+        results.sort_by(|a, b| {
+            let score_cmp = crate::vector::distance::total_cmp_f32(b.score, a.score);
+            if score_cmp == std::cmp::Ordering::Equal {
+                a.doc_id.cmp(&b.doc_id) // Tiebreaker: lexicographic doc_id
+            } else {
+                score_cmp
+            }
+        });
+        results.truncate(options.k);
+
+        Ok(results)
+    }
+}
 
 impl TextEngine for Engine {
     fn index_text(
@@ -1268,16 +1345,26 @@ impl TextEngine for Engine {
     ) -> Result<Lsn, EdgestoreError> {
         let tokens = tokenize(text);
         let doc_len = tokens.len() as u32;
-
-        // Build/update the per-namespace inverted index
         let text_ns = text_namespace(ns);
-        let mut index = InvertedIndex::new();
+
+        // Load from disk first (outside entry to avoid borrow conflict)
+        let loaded_index = match self.get(&text_ns, b"__index__") {
+            Ok(Some(bytes)) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
+            _ => InvertedIndex::new(),
+        };
+
+        // Get or create the in-memory index for this namespace
+        let index = self.text_indices.entry(text_ns.clone()).or_insert(loaded_index);
+
+        // Remove old postings for this doc if re-indexing
+        index.remove_document(key);
+
+        // Add new document to the merged index
         index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
 
-        // Serialize and store the inverted index entry
+        // Serialize and store the merged inverted index to disk
         let index_bytes = index.serialize();
-        let index_key = format!("idx:{}", std::str::from_utf8(key).unwrap_or(""));
-        self.put(&text_ns, index_key.as_bytes(), &index_bytes)?;
+        self.put(&text_ns, b"__index__", &index_bytes)?;
 
         // Store the raw text record for retrieval
         let record = crate::text::types::TextRecord {
@@ -1318,85 +1405,63 @@ impl TextEngine for Engine {
 
         let text_ns = text_namespace(ns);
 
-        // Load all inverted index entries for this namespace
-        let all_entries = self.prefix(&text_ns, b"idx:")?;
-        if all_entries.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Aggregate postings from all index entries
-        let mut aggregated = InvertedIndex::new();
-        for (_, val_bytes) in &all_entries {
-            if let Ok(idx) = InvertedIndex::deserialize(val_bytes) {
-                aggregated.total_docs += idx.total_docs;
-                aggregated.total_doc_len += idx.total_doc_len;
-                for (term, postings) in idx.postings {
-                    aggregated.postings.entry(term).or_default().extend(postings);
-                }
-            }
-        }
-
-        if aggregated.total_docs == 0 {
-            return Ok(vec![]);
-        }
-
-        // Collect terms to search (exact + typo-tolerant variants)
-        let mut search_terms: Vec<String> = query_tokens.iter().map(|t| t.term.clone()).collect();
-        
-        if options.typo_tolerance {
-            for token in &query_tokens {
-                for term in aggregated.postings.keys() {
-                    if term != &token.term
-                        && crate::text::typo::is_one_edit_away(term, &token.term)
-                        && !search_terms.contains(term)
-                    {
-                        search_terms.push(term.clone());
+        // Use the in-memory cached index (O(1) HashMap lookup, no deserialize)
+        let index = match self.text_indices.get(&text_ns) {
+            Some(idx) => idx,
+            None => {
+                // Fallback: load from disk if not in cache (e.g. after recovery or snapshot)
+                match self.get(&text_ns, b"__index__")? {
+                    Some(bytes) => {
+                        let idx = InvertedIndex::deserialize(&bytes)?;
+                        if idx.total_docs == 0 {
+                            return Ok(vec![]);
+                        }
+                        // We can't insert into &self, so search the deserialized index directly
+                        return Self::search_in_index(&idx, &query_tokens, options);
                     }
+                    None => return Ok(vec![]),
                 }
             }
+        };
+
+        if index.total_docs == 0 {
+            return Ok(vec![]);
         }
 
-        // Collect unique doc IDs from query term postings, with facet filtering
-        let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
-        for term in &search_terms {
-            if let Some(postings) = aggregated.postings.get(term) {
-                let filtered = if !options.facet_filters.is_empty() {
-                    crate::text::facet::filter_by_facets(postings, &options.facet_filters)
-                } else {
-                    postings.to_vec()
-                };
-                
-                for posting in &filtered {
-                    let is_fuzzy = !query_tokens.iter().any(|t| &t.term == term);
-                    let weight = if is_fuzzy { 0.5 } else { 1.0 }; // Fuzzy matches get half weight
-                    let score = score_document(&aggregated, &posting.doc_id, &[crate::text::tokenizer::Token { term: term.clone(), position: 0 }]) * weight;
-                    *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
-                }
-            }
-        }
-
-        // Sort by score descending, return top-k
-        let mut results: Vec<TextSearchResult> = doc_scores
-            .into_iter()
-            .map(|(doc_id, score)| TextSearchResult { doc_id, score })
-            .collect();
-        results.sort_by(|a, b| {
-            let score_cmp = crate::vector::distance::total_cmp_f32(b.score, a.score);
-            if score_cmp == std::cmp::Ordering::Equal {
-                a.doc_id.cmp(&b.doc_id) // Tiebreaker: lexicographic doc_id
-            } else {
-                score_cmp
-            }
-        });
-        results.truncate(options.k);
-
-        Ok(results)
+        Self::search_in_index(index, &query_tokens, options)
     }
 
     fn delete_text(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         let text_ns = text_namespace(ns);
-        let index_key = format!("idx:{}", std::str::from_utf8(key).unwrap_or(""));
-        self.delete(&text_ns, index_key.as_bytes())?;
+
+        // Remove index from cache first to avoid borrow conflicts, modify, then do disk ops
+        if let Some(mut index) = self.text_indices.remove(&text_ns) {
+            index.remove_document(key);
+            if index.total_docs == 0 {
+                self.delete(&text_ns, b"__index__")?;
+            } else {
+                let index_bytes = index.serialize();
+                self.put(&text_ns, b"__index__", &index_bytes)?;
+                self.text_indices.insert(text_ns.clone(), index);
+            }
+        } else {
+            // Fallback: load from disk, update, write back
+            let mut index = match self.get(&text_ns, b"__index__")? {
+                Some(bytes) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
+                None => InvertedIndex::new(),
+            };
+
+            index.remove_document(key);
+
+            if index.total_docs == 0 {
+                self.delete(&text_ns, b"__index__")?;
+            } else {
+                let index_bytes = index.serialize();
+                self.put(&text_ns, b"__index__", &index_bytes)?;
+            }
+        }
+
+        // Delete the raw text record
         self.delete(&text_ns, key)
     }
 }

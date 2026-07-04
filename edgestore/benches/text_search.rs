@@ -120,26 +120,62 @@ fn bench_delete_and_search(c: &mut Criterion) {
 fn bench_index_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("index_throughput");
 
-    group.bench_function("index_100_docs", |b| {
-        b.iter_batched(
-            || {
-                let dir = TempDir::new().unwrap();
-                Engine::open(EdgestoreConfig::new(dir.path())).unwrap()
+    for &n in &[100, 1000, 10000] {
+        group.bench_with_input(
+            BenchmarkId::new("index", n),
+            &n,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        let dir = TempDir::new().unwrap();
+                        Engine::open(EdgestoreConfig::new(dir.path())).unwrap()
+                    },
+                    |mut engine| {
+                        for i in 0..n {
+                            let text = generate_text(i as u64 * 12345, 50);
+                            let key = format!("doc{:08}", i);
+                            engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
+                        }
+                        black_box(engine);
+                    },
+                    criterion::BatchSize::PerIteration,
+                );
             },
-            |mut engine| {
-                for i in 0..100 {
-                    let text = generate_text(i as u64 * 12345, 50);
-                    let key = format!("doc{:08}", i);
-                    engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
-                }
-                black_box(engine);
-            },
-            criterion::BatchSize::PerIteration,
         );
-    });
+    }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_text_search, bench_text_search_large, bench_index_throughput, bench_delete_and_search);
+fn bench_index_large(c: &mut Criterion) {
+    let mut group = c.benchmark_group("index_large");
+
+    for &n in &[50_000, 100_000] {
+        group.bench_with_input(
+            BenchmarkId::new("index", n),
+            &n,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        let dir = TempDir::new().unwrap();
+                        Engine::open(EdgestoreConfig::new(dir.path())).unwrap()
+                    },
+                    |mut engine| {
+                        for i in 0..n {
+                            let text = generate_text(i as u64 * 12345, 50);
+                            let key = format!("doc{:08}", i);
+                            engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
+                        }
+                        black_box(engine);
+                    },
+                    criterion::BatchSize::PerIteration,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_text_search, bench_text_search_large, bench_index_throughput, bench_index_large, bench_delete_and_search);
 criterion_main!(benches);

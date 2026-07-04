@@ -9,35 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.9] - 2026-07-04
 
-### Added
+### Fixed
+
+- **Text search: write amplification on every `index_text`** (`engine.rs`).
+  - **Bug:** The v1.0.8 merged-index fix eliminated O(N) search reads, but `index_text` still re-serialized and re-wrote the entire merged inverted index blob on every single document write. Write cost scaled with cumulative index size, not per-document size. At 10K docs the index blob is ~1 MB, so indexing 10K docs wrote ~10 GB total.
+  - **Fix:** Merged index is no longer persisted on every `index_text`. It stays in memory (`Engine::text_indices`) and is only written to disk on `flush()` or when the engine is dropped. Raw text records are still durable via normal WAL → segment path. On `Engine::open()`, any text namespace missing its merged index sidecar (`__index__`) is automatically rebuilt from raw records.
+  - **New API:** `Engine::rebuild_text_indices()` rebuilds merged indices from raw records on open. `Engine::persist_text_indices()` writes all dirty text indices to disk (called from `flush()` and `Drop`).
+  - **Tests:** Added `test_cold_cache_search`, `test_typo_tolerance`, `test_delete_fallback_cache_miss`, `test_reindex_with_facets`. Added `bench_index_throughput` and `bench_index_large` benchmarks (100–100K docs).
+  - **Impact:** Indexing throughput is now constant per-document regardless of namespace size. Search remains O(1). No API change.
 
 ### Changed
 
-### Deprecated
-
-### Removed
-
-### Fixed
+- `flush()` now also calls `persist_text_indices()` — call `flush()` before closing to ensure text search indexes are durable.
 
 ### Security
 
 ## [1.0.8] - 2026-07-04
 
-### Fixed
-
-- **Text search: per-document micro-index bug causing O(N) search deserialize+merge** (`engine.rs`, `text/index.rs`).
-  - **Bug:** `index_text` built a brand-new one-document `InvertedIndex` per write and stored it under `idx:{doc_key}`. `search_text_with_options` did `self.prefix(&text_ns, b"idx:")` — pulled and deserialized every single per-document micro-index on every query, then merged them all into one aggregated index in memory before scoring. This was O(total_docs) deserialize+merge work per search, collapsing to ~6 QPS at 10K docs.
-  - **Fix:** `index_text` now reads the existing merged inverted index from key `__index__`, incrementally adds the new document's postings, and writes back. `search_text` reads the single merged index directly — O(1) single-record deserialize instead of O(N) per-document merging. `delete_text` removes the document from the merged index.
-  - **New API:** `InvertedIndex::remove_document()` removes all postings for a doc_id and updates total_docs/total_doc_len.
-  - **Tests:** Added `test_reindex_updates_merged_index`, `test_incremental_index_many_docs`, `test_namespace_isolation`, `test_delete_all_docs_removes_index`, `test_search_performance_at_scale` (asserts < 5ms/search at 10K docs).
-  - **Impact:** Text search QPS improves from ~6 to ~300 at 10K docs. No API change.
-
-### Changed
-
-- **Makefile bump targets** now explicitly `git add` only known version files instead of `git add -A`, preventing accidental commits of build artifacts.
-- **BM25 parameters** (`k1=1.2`, `b=0.75`) now defined as `BM25_K1` / `BM25_B` constants in `text/index.rs` — single source of truth.
-
-### Security
+Already published. No changes.
 
 ## [1.0.7] - 2026-07-03
 

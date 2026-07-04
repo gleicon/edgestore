@@ -127,7 +127,7 @@ impl Engine {
         let segment_store =
             crate::segment::SegmentStore::open(config.path.clone(), config.cohort_window_secs)?;
 
-        Ok(Engine {
+        let mut engine = Engine {
             config,
             wal,
             memtable,
@@ -139,7 +139,76 @@ impl Engine {
             metrics: EngineMetrics::new(),
             vector_indices: HashMap::new(),
             text_indices: HashMap::new(),
-        })
+        };
+
+        // Rebuild any text indices that are missing their merged index sidecar.
+        // Raw text records are durable (WAL-backed), but the merged inverted index
+        // is only persisted on flush() / drop. After a crash, rebuild from raw records.
+        if let Err(e) = engine.rebuild_text_indices() {
+            log::warn!("Failed to rebuild text indices on open: {}", e);
+        }
+
+        Ok(engine)
+    }
+
+    /// Scan all text namespaces and rebuild merged indices from raw records
+    /// when the merged index sidecar (`__index__`) is missing.
+    fn rebuild_text_indices(&mut self) -> Result<(), EdgestoreError> {
+        // Collect all text namespaces by scanning for the synthetic prefix.
+        // A text namespace key looks like: __text__{user_ns} / {doc_key}
+        let all = self.prefix_inner(b"", b"__text__")?;
+
+        type KeyValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
+        let mut namespaces: HashMap<Vec<u8>, KeyValuePairs> = HashMap::new();
+        for (full_key, value) in all {
+            // Decode the namespace from the full key
+            if let Ok((ns, key)) = decode_key(&full_key) {
+                if ns.starts_with(b"__text__") {
+                    namespaces.entry(ns).or_default().push((key, value));
+                }
+            }
+        }
+
+        for (text_ns, entries) in namespaces {
+            // Check if merged index already exists
+            if self.get(&text_ns, TEXT_INDEX_KEY)?.is_some() {
+                continue;
+            }
+
+            // Rebuild merged index from raw records
+            let mut index = InvertedIndex::new();
+            for (key, val_bytes) in entries {
+                if key == TEXT_INDEX_KEY {
+                    continue; // skip the merged index entry itself
+                }
+                if let Some(record) = crate::text::types::decode_text_record(&val_bytes) {
+                    let tokens = tokenize(&record.text);
+                    let doc_len = tokens.len() as u32;
+                    index.add_document(key, &tokens, doc_len, record.facets);
+                }
+            }
+
+            if index.total_docs > 0 {
+                let index_bytes = index.serialize();
+                self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
+                self.text_indices.insert(text_ns, index);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Persist all in-memory text indices to disk.
+    fn persist_text_indices(&mut self) -> Result<(), EdgestoreError> {
+        let to_persist: Vec<(Vec<u8>, Vec<u8>)> = self
+            .text_indices
+            .iter()
+            .map(|(ns, index)| (ns.clone(), index.serialize()))
+            .collect();
+        for (ns, bytes) in to_persist {
+            self.put(&ns, TEXT_INDEX_KEY, &bytes)?;
+        }
+        Ok(())
     }
 
     fn now_nanos() -> i64 {
@@ -242,8 +311,13 @@ impl Engine {
         r
     }
 
-    /// fsync the current WAL file.
+    /// fsync the current WAL file and persist text indices.
+    ///
+    /// Text indices are kept in memory and only written to disk on flush
+    /// or when the engine is dropped. Call flush() before closing to ensure
+    /// text search indexes are durable.
     pub fn flush(&mut self) -> Result<(), EdgestoreError> {
+        self.persist_text_indices()?;
         self.wal.fsync()
     }
 
@@ -1354,10 +1428,8 @@ impl TextEngine for Engine {
         index.remove_document(key);
         index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
 
-        let index_bytes = index.serialize();
-        self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
-
-        // Store the raw text record for retrieval
+        // Merged index is NOT written here — only on flush() / drop.
+        // Raw text record goes through normal WAL → segment path (durable).
         let record = crate::text::types::TextRecord {
             text: text.to_string(),
             facets,
@@ -1422,34 +1494,35 @@ impl TextEngine for Engine {
     fn delete_text(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         let text_ns = text_namespace(ns);
 
-        if let Some(mut index) = self.text_indices.remove(&text_ns) {
-            index.remove_document(key);
-            if index.total_docs == 0 {
-                self.delete(&text_ns, TEXT_INDEX_KEY)?;
-            } else {
-                let index_bytes = index.serialize();
-                self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
-                self.text_indices.insert(text_ns.clone(), index);
-            }
-        } else {
-            let mut index = match self.get(&text_ns, TEXT_INDEX_KEY)? {
+        let mut index = match self.text_indices.remove(&text_ns) {
+            Some(idx) => idx,
+            None => match self.get(&text_ns, TEXT_INDEX_KEY)? {
                 Some(bytes) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
                 None => InvertedIndex::new(),
-            };
+            },
+        };
 
-            index.remove_document(key);
+        index.remove_document(key);
 
-            if index.total_docs == 0 {
-                self.delete(&text_ns, TEXT_INDEX_KEY)?;
-            } else {
-                let index_bytes = index.serialize();
-                self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
-                self.text_indices.insert(text_ns.clone(), index);
-            }
+        if index.total_docs == 0 {
+            self.text_indices.remove(&text_ns);
+            self.delete(&text_ns, TEXT_INDEX_KEY)?;
+        } else {
+            let index_bytes = index.serialize();
+            self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
+            self.text_indices.insert(text_ns.clone(), index);
         }
 
-        // Delete the raw text record
+        // Delete the raw text record (durable via WAL)
         self.delete(&text_ns, key)
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Err(e) = self.persist_text_indices() {
+            log::warn!("Failed to persist text indices on drop: {}", e);
+        }
     }
 }
 

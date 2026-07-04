@@ -25,6 +25,9 @@ pub struct InvertedIndex {
     pub total_docs: u64,
     /// Sum of all document lengths.
     pub total_doc_len: u64,
+    /// LSN of the `flush()` / `persist_text_indices()` that wrote this sidecar.
+    /// Used for staleness detection on crash recovery. 0 = unknown / treat as stale.
+    pub sidecar_lsn: u64,
 }
 
 impl InvertedIndex {
@@ -34,6 +37,7 @@ impl InvertedIndex {
             postings: HashMap::new(),
             total_docs: 0,
             total_doc_len: 0,
+            sidecar_lsn: 0,
         }
     }
 
@@ -107,7 +111,8 @@ impl InvertedIndex {
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"INVX");
-        buf.extend_from_slice(&1u16.to_le_bytes()); // version
+        buf.extend_from_slice(&2u16.to_le_bytes()); // version 2: includes sidecar_lsn
+        buf.extend_from_slice(&self.sidecar_lsn.to_le_bytes());
         buf.extend_from_slice(&self.total_docs.to_le_bytes());
         buf.extend_from_slice(&self.total_doc_len.to_le_bytes());
         buf.extend_from_slice(&(self.postings.len() as u32).to_le_bytes());
@@ -152,7 +157,7 @@ impl InvertedIndex {
 
     /// Deserialize from bytes.
     pub fn deserialize(bytes: &[u8]) -> Result<Self, EdgestoreError> {
-        if bytes.len() < 22 {
+        if bytes.len() < 6 {
             return Err(EdgestoreError::CorruptData("inverted index: truncated header".to_string()));
         }
         let mut pos = 0usize;
@@ -173,9 +178,11 @@ impl InvertedIndex {
             return Err(EdgestoreError::CorruptData("inverted index: invalid magic".to_string()));
         }
         let version = u16::from_le_bytes(read!(2).try_into().unwrap());
-        if version != 1 {
-            return Err(EdgestoreError::CorruptData(format!("inverted index: unsupported version {}", version)));
-        }
+        let sidecar_lsn = match version {
+            1 => 0, // v1 had no sidecar_lsn field
+            2 => u64::from_le_bytes(read!(8).try_into().unwrap()),
+            _ => return Err(EdgestoreError::CorruptData(format!("inverted index: unsupported version {}", version))),
+        };
         let total_docs = u64::from_le_bytes(read!(8).try_into().unwrap());
         let total_doc_len = u64::from_le_bytes(read!(8).try_into().unwrap());
         let term_count = u32::from_le_bytes(read!(4).try_into().unwrap()) as usize;
@@ -223,7 +230,7 @@ impl InvertedIndex {
             postings.insert(term, posting_vec);
         }
 
-        Ok(InvertedIndex { postings, total_docs, total_doc_len })
+        Ok(InvertedIndex { postings, total_docs, total_doc_len, sidecar_lsn })
     }
 }
 

@@ -13,11 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Text search: write amplification on every `index_text`** (`engine.rs`).
   - **Bug:** The v1.0.8 merged-index fix eliminated O(N) search reads, but `index_text` still re-serialized and re-wrote the entire merged inverted index blob on every single document write. Write cost scaled with cumulative index size, not per-document size.
-  - **Fix:** Merged index is no longer persisted on every `index_text`. It stays in memory (`Engine::text_indices`) and is only written to disk on `flush()` or when the engine is dropped. Raw text records are still durable via normal WAL → segment path. On `Engine::open()`, any text namespace missing its merged index sidecar (`__index__`) is automatically rebuilt from raw records.
-  - **Known limitation:** `rebuild_text_indices()` skips a namespace if the `__index__` sidecar already exists — it has no staleness check. After a crash, documents indexed since the last `flush()` have their raw text durably WAL-written but are silently missing from the merged BM25 index. **Mitigation:** call `engine.flush()` on a short timer (e.g. every 1–5 s) to bound the loss window, matching the existing WAL fsync cadence. This is a bounded-loss model, not self-healing.
+  - **Fix:** Merged index is no longer persisted on every `index_text`. It stays in memory (`Engine::text_indices`) and is only written to disk on `flush()` or when the engine is dropped. Raw text records are still durable via normal WAL → segment path.
+  - **Crash recovery:** `Engine::open()` detects stale sidecars via LSN watermark. Each persisted merged index stores the LSN of its `flush()` in `InvertedIndex::sidecar_lsn`. On open, if `sidecar_lsn < max_recovered_lsn`, the sidecar is stale and is automatically rebuilt from raw text records — self-healing, no silent omissions.
   - **New API:** `Engine::rebuild_text_indices()` rebuilds merged indices from raw records on open. `Engine::persist_text_indices()` writes all dirty text indices to disk (called from `flush()` and `Drop`).
-  - **Tests:** Added `test_cold_cache_search`, `test_typo_tolerance`, `test_delete_fallback_cache_miss`, `test_reindex_with_facets`. Added `bench_index_throughput` and `bench_index_large` benchmarks (100–100K docs).
-  - **Impact:** Indexing throughput is now constant per-document regardless of namespace size (design claim; measured numbers pending). Search remains O(1). No API change.
+  - **Tests:** Added `test_cold_cache_search`, `test_typo_tolerance`, `test_delete_fallback_cache_miss`, `test_reindex_with_facets`, `test_crash_recovery_rebuilds_stale_sidecar`, `test_no_rebuild_when_sidecar_fresh`. Added `bench_index_throughput` and `bench_index_large` benchmarks (100–100K docs).
+  - **Impact:** Indexing throughput is now constant per-document regardless of namespace size. Search remains O(1). No API change.
 
 ### Changed
 

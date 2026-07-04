@@ -170,9 +170,16 @@ impl Engine {
         }
 
         for (text_ns, entries) in namespaces {
-            // Check if merged index already exists
-            if self.get(&text_ns, TEXT_INDEX_KEY)?.is_some() {
-                continue;
+            // Check if merged index exists and is fresh (sidecar_lsn >= current max lsn).
+            // sidecar_lsn == 0 means "unknown / v1 sidecar" — treat as stale and rebuild.
+            if let Some(bytes) = self.get(&text_ns, TEXT_INDEX_KEY)? {
+                if let Ok(index) = InvertedIndex::deserialize(&bytes) {
+                    if index.sidecar_lsn >= self.lsn_counter {
+                        self.text_indices.insert(text_ns, index);
+                        continue;
+                    }
+                    // sidecar is stale — fall through to rebuild
+                }
             }
 
             // Rebuild merged index from raw records
@@ -190,7 +197,8 @@ impl Engine {
 
             if index.total_docs > 0 {
                 let index_bytes = index.serialize();
-                self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
+                let lsn = self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
+                index.sidecar_lsn = lsn;
                 self.text_indices.insert(text_ns, index);
             }
         }
@@ -200,13 +208,23 @@ impl Engine {
 
     /// Persist all in-memory text indices to disk.
     fn persist_text_indices(&mut self) -> Result<(), EdgestoreError> {
+        // Step 1: serialize all indices (immutable borrow)
         let to_persist: Vec<(Vec<u8>, Vec<u8>)> = self
             .text_indices
             .iter()
             .map(|(ns, index)| (ns.clone(), index.serialize()))
             .collect();
+        // Step 2: write to disk and capture LSNS (no text_indices borrow)
+        let mut lsns: Vec<(Vec<u8>, u64)> = Vec::with_capacity(to_persist.len());
         for (ns, bytes) in to_persist {
-            self.put(&ns, TEXT_INDEX_KEY, &bytes)?;
+            let lsn = self.put(&ns, TEXT_INDEX_KEY, &bytes)?;
+            lsns.push((ns, lsn));
+        }
+        // Step 3: update sidecar_lsn on each index (mutable borrow)
+        for (ns, lsn) in lsns {
+            if let Some(index) = self.text_indices.get_mut(&ns) {
+                index.sidecar_lsn = lsn;
+            }
         }
         Ok(())
     }

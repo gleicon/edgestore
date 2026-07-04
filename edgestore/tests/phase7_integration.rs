@@ -353,3 +353,55 @@ fn test_reindex_with_facets() {
         Some(&FacetValue::String("sports".to_string()))
     );
 }
+
+#[test]
+fn test_crash_recovery_rebuilds_stale_sidecar() {
+    let dir = TempDir::new().unwrap();
+
+    // Phase 1: index doc1, flush() → sidecar gets LSN X
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine.flush().unwrap();
+    }
+
+    // Phase 2: reopen, index doc2 (no flush), drop (simulates crash)
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc2", "hello foo", std::collections::HashMap::new()).unwrap();
+        // NO flush — sidecar still has LSN X, but doc2 has LSN > X
+    }
+
+    // Phase 3: reopen after "crash"
+    // rebuild_text_indices() must detect sidecar is stale (sidecar_lsn < max_lsn)
+    // and rebuild from raw records so both doc1 and doc2 are searchable.
+    {
+        let engine = open_engine(&dir);
+        let results = engine.search_text(b"ns", "hello", 5).unwrap();
+        assert_eq!(results.len(), 2, "crash recovery must rebuild stale sidecar so both docs are searchable");
+        assert!(results.iter().any(|r| r.doc_id == b"doc1"));
+        assert!(results.iter().any(|r| r.doc_id == b"doc2"));
+    }
+}
+
+#[test]
+fn test_no_rebuild_when_sidecar_fresh() {
+    let dir = TempDir::new().unwrap();
+
+    // Phase 1: index doc1, flush(), index doc2, flush()
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine.flush().unwrap();
+        engine.index_text(b"ns", b"doc2", "hello foo", std::collections::HashMap::new()).unwrap();
+        engine.flush().unwrap();
+    }
+
+    // Phase 2: reopen — sidecar should be fresh (sidecar_lsn == max_lsn)
+    // No rebuild needed; both docs searchable immediately.
+    {
+        let engine = open_engine(&dir);
+        let results = engine.search_text(b"ns", "hello", 5).unwrap();
+        assert_eq!(results.len(), 2, "fresh sidecar should contain both docs without rebuild");
+    }
+}

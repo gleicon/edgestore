@@ -69,7 +69,8 @@ pub struct Engine {
     metrics: EngineMetrics,
     vector_indices: HashMap<Vec<u8>, HnswIndex>,
     /// In-memory cache of deserialized text indexes per namespace.
-    /// Updated incrementally on index_text/delete_text. Avoids O(N) deserialize per search.
+    /// Warmed on write (index_text / delete_text); read-only searches fall back to disk
+    /// because TextEngine::search takes &self. Still O(1) single-record deserialize.
     text_indices: HashMap<Vec<u8>, crate::text::index::InvertedIndex>,
 }
 
@@ -1259,8 +1260,10 @@ impl VectorEngine for Engine {
 
 use crate::text::engine::{TextEngine, TextSearchResult, text_namespace};
 use crate::text::tokenizer::tokenize;
-use crate::text::index::InvertedIndex;
+use crate::text::index::{InvertedIndex, BM25_K1, BM25_B};
 use crate::text::types::{encode_text_record, FacetValue};
+
+const TEXT_INDEX_KEY: &[u8] = b"__index__";
 
 impl Engine {
     fn search_in_index(
@@ -1304,8 +1307,8 @@ impl Engine {
                         posting.term_freq,
                         posting.doc_len,
                         avg_doc_len,
-                        1.2,
-                        0.75,
+                        BM25_K1,
+                        BM25_B,
                     ) * weight;
                     *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
                 }
@@ -1342,7 +1345,7 @@ impl TextEngine for Engine {
         let doc_len = tokens.len() as u32;
         let text_ns = text_namespace(ns);
 
-        let loaded_index = match self.get(&text_ns, b"__index__") {
+        let loaded_index = match self.get(&text_ns, TEXT_INDEX_KEY) {
             Ok(Some(bytes)) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
             _ => InvertedIndex::new(),
         };
@@ -1351,9 +1354,8 @@ impl TextEngine for Engine {
         index.remove_document(key);
         index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
 
-        // Serialize and store the merged inverted index to disk
         let index_bytes = index.serialize();
-        self.put(&text_ns, b"__index__", &index_bytes)?;
+        self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
 
         // Store the raw text record for retrieval
         let record = crate::text::types::TextRecord {
@@ -1397,7 +1399,7 @@ impl TextEngine for Engine {
         let index = match self.text_indices.get(&text_ns) {
             Some(idx) => idx,
             None => {
-                match self.get(&text_ns, b"__index__")? {
+                match self.get(&text_ns, TEXT_INDEX_KEY)? {
                     Some(bytes) => {
                         let idx = InvertedIndex::deserialize(&bytes)?;
                         if idx.total_docs == 0 {
@@ -1423,14 +1425,14 @@ impl TextEngine for Engine {
         if let Some(mut index) = self.text_indices.remove(&text_ns) {
             index.remove_document(key);
             if index.total_docs == 0 {
-                self.delete(&text_ns, b"__index__")?;
+                self.delete(&text_ns, TEXT_INDEX_KEY)?;
             } else {
                 let index_bytes = index.serialize();
-                self.put(&text_ns, b"__index__", &index_bytes)?;
+                self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
                 self.text_indices.insert(text_ns.clone(), index);
             }
         } else {
-            let mut index = match self.get(&text_ns, b"__index__")? {
+            let mut index = match self.get(&text_ns, TEXT_INDEX_KEY)? {
                 Some(bytes) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
                 None => InvertedIndex::new(),
             };
@@ -1438,10 +1440,10 @@ impl TextEngine for Engine {
             index.remove_document(key);
 
             if index.total_docs == 0 {
-                self.delete(&text_ns, b"__index__")?;
+                self.delete(&text_ns, TEXT_INDEX_KEY)?;
             } else {
                 let index_bytes = index.serialize();
-                self.put(&text_ns, b"__index__", &index_bytes)?;
+                self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
                 self.text_indices.insert(text_ns.clone(), index);
             }
         }

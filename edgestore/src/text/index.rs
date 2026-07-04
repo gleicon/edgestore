@@ -227,6 +227,10 @@ impl InvertedIndex {
     }
 }
 
+/// Default BM25 parameters used by EdgeStore.
+pub const BM25_K1: f32 = 1.2;
+pub const BM25_B: f32 = 0.75;
+
 /// Compute BM25 score for a single term-document pair.
 ///
 /// k1 and b are the standard BM25 parameters.
@@ -269,8 +273,8 @@ pub fn score_document(
                     posting.term_freq,
                     posting.doc_len,
                     avg_doc_len,
-                    1.2,
-                    0.75,
+                    BM25_K1,
+                    BM25_B,
                 );
             }
         }

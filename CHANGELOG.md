@@ -9,20 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.11] - 2026-07-04
 
-### Added
-
-### Changed
-
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
-
-## [1.0.10] - 2026-07-04
-
 ### Fixed
 
 - **Text search: write amplification on every `index_text` + self-healing crash recovery** (`engine.rs`, `text/index.rs`).
@@ -30,7 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Fix (write amplification):** Merged index is no longer persisted on every `index_text`. It stays in memory (`Engine::text_indices`) and is only written to disk on `flush()` or when the engine is dropped. Raw text records are still durable via normal WAL → segment path.
   - **Bug (crash recovery):** After a crash, `rebuild_text_indices()` only rebuilt when the `__index__` sidecar was missing. Documents indexed since the last `flush()` had raw text WAL-backed but were silently missing from BM25 search.
   - **Fix (crash recovery):** `InvertedIndex` gained `sidecar_lsn: u64` (serialization bumped to v2, backward compatible with v1 sidecars). `rebuild_text_indices()` compares `sidecar_lsn >= lsn_counter`; stale sidecars fall through to full rebuild from raw records. Self-healing, no silent omissions.
-  - **Note:** Staleness recovery is a full rebuild of the namespace (re-tokenizes every raw record), not an incremental replay of the gap. Open-time cost is proportional to total retained raw doc count, not just the lost gap. This is bounded by the per-namespace design.
   - **New API:** `Engine::rebuild_text_indices()` rebuilds merged indices from raw records on open. `Engine::persist_text_indices()` writes all dirty text indices to disk (called from `flush()` and `Drop`).
   - **Tests:** Added `test_cold_cache_search`, `test_typo_tolerance`, `test_delete_fallback_cache_miss`, `test_reindex_with_facets`, `test_crash_recovery_rebuilds_stale_sidecar`, `test_no_rebuild_when_sidecar_fresh`.
   - **Impact:** Indexing throughput is now constant per-document regardless of namespace size. Search remains O(1). No API change.
@@ -40,7 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `flush()` now also calls `persist_text_indices()` — call `flush()` before closing to ensure text search indexes are durable.
 - Performance test `test_search_performance_at_scale` now uses profile-aware thresholds: 50 ms in debug mode, 5 ms in release mode. BENCHMARKS.md numbers are release-only (`cargo bench`).
 
+### Known Issues
+
+- **Unbenchmarked:** Full-rebuild-on-staleness cost scales with total namespace size (re-tokenizes every raw record), not just the lost gap. This determines worst-case "search unavailable after restart" duration. Benchmark needed before locking time-bucket size (FR-11) or flush interval (FR-23).
+
 ### Security
+
+## [1.0.10] - 2026-07-04
+
+Already published. No changes.
 
 ## [1.0.9] - 2026-07-04
 

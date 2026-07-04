@@ -230,16 +230,19 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       </div>
       <div class="grid lg:grid-cols-2 gap-8">
         <div class="prose text-slate-600">
-          <p>Merkle-based delta sync compares range-level Merkle trees between nodes to identify divergent segments. Only missing segments are transferred — not full copies.</p>
+          <p>Merkle-based delta sync compares range-level Merkle trees between nodes to identify divergent segments. Only missing segments are transferred — not full copies. Lives in <code>edgestore-repl</code>, not the core crate.</p>
           <ul class="list-disc pl-5 space-y-1 mt-3">
             <li><strong>Content-addressed</strong> — BLAKE3 hashes guarantee integrity</li>
             <li><strong>LWW conflict resolution</strong> — wall-clock timestamp wins</li>
             <li><strong>Resume-friendly</strong> — interrupted sync resumes from last Ack(lsn)</li>
-            <li><strong>S3 backend</strong> — cold archive and replication mailbox</li>
+            <li><strong>S3 backend</strong> — cold archive and replication mailbox (enable <code>s3</code> feature)</li>
           </ul>
         </div>
         <div class="code-block p-4">
-          <pre><code><span class="comment">// Primary: export manifest</span>
+          <pre><code><span class="comment">// Requires edgestore-repl crate</span>
+<span class="keyword">use</span> edgestore_repl::{AntiEntropyLoop, S3RemoteStore};
+
+<span class="comment">// Primary: export manifest</span>
 <span class="keyword">let</span> segments = primary.export_manifest()?;
 
 <span class="comment">// Replica: compare and find missing</span>

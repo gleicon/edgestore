@@ -38,20 +38,35 @@ For a rich documentation site with feature guides and paper references, open [`w
 
 ## Feature Matrix
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| **KV store** (put/get/delete/range/prefix) | ✅ v1.0 | Ordered byte keys, namespaced |
-| **Transactions** (begin/commit/rollback) | ✅ v1.0 | Single-writer, group commit |
-| **TTL / Lazy expiry** | ✅ v1.0 | `put_with_ttl`; expired data removed at compaction |
-| **Snapshots** | ✅ v1.0 | RAII point-in-time reads |
-| **Vector search** (flat SIMD) | ✅ v1.0 | Cosine, dot, euclidean; f32/f16/i8 |
-| **HNSW index** | ✅ v1.0 | Approximate search for large collections |
-| **Full-text search** (BM25) | ✅ v1.0 | Tokenization, faceting, typo tolerance |
-| **Replication** (Merkle delta sync) | ✅ v1.0 | Transport-agnostic; HTTP + S3 backends |
-| **S3 cold storage** | ✅ v1.0 | Archive + replication mailbox |
-| **SSD optimization** | ✅ v1.0 | FDP placement hints, deathtime-cohort WAF≈1 |
+| Feature | Crate | Status | Notes |
+|---------|-------|--------|-------|
+| **KV store** (put/get/delete/range/prefix) | `edgestore` | ✅ v1.0 | Ordered byte keys, namespaced |
+| **Transactions** (begin/commit/rollback) | `edgestore` | ✅ v1.0 | Single-writer, group commit |
+| **TTL / Lazy expiry** | `edgestore` | ✅ v1.0 | `put_with_ttl`; expired data removed at compaction |
+| **Snapshots** | `edgestore` | ✅ v1.0 | RAII point-in-time reads |
+| **Vector search** (flat SIMD) | `edgestore` | ✅ v1.0 | Cosine, dot, euclidean; f32/f16/i8 |
+| **HNSW index** | `edgestore` | ✅ v1.0 | Approximate search for large collections |
+| **Full-text search** (BM25) | `edgestore` | ✅ v1.0 | Tokenization, faceting, typo tolerance |
+| **Replication** (Merkle delta sync) | `edgestore-repl` | ✅ v1.0 | Transport-agnostic; HTTP + S3 backends |
+| **S3 cold storage** | `edgestore-repl` | ✅ v1.0 | Archive + replication mailbox (`s3` feature) |
+| **SSD optimization** | `edgestore` | ✅ v1.0 | FDP placement hints, deathtime-cohort WAF≈1 |
 
 ---
+
+## Crate Overview
+
+EdgeStore is organized as a Cargo workspace. Each crate has a distinct scope:
+
+| Crate | What it is | What it is NOT |
+|-------|-----------|----------------|
+| **`edgestore`** | Core sync KV + vector + text engine. `Engine`, `WAL`, `SegmentStore`, `Compactor`. | Not a server. Not async. |
+| **`edgestore-tokio`** | Async wrapper. Every call runs in `tokio::task::spawn_blocking`. Thin layer. | Does not re-implement storage logic. |
+| **`edgestore-repl`** | **REPLication** transport — HTTP client/server + `RemoteStore` backends (filesystem, S3). Network and durability tier. | **Not a REPL shell.** "repl" = replication, not read-eval-print-loop. |
+| **`edgestore-cli`** | Administrative CLI binary. `put`, `get`, `compact`, `stats`, `export`, `import`. | Not a database server. Not a SQL client. |
+
+The core crate (`edgestore`) is **library-first**: you embed it in your application, call `Engine::open()`, and use it directly. No daemon, no port binding, no async runtime required.
+
+`edgestore-repl` adds network and remote durability when you need it — Merkle delta sync between nodes, HTTP replication, or S3 cold archive. It is an **optional addition**, not a requirement.
 
 ## Installation
 
@@ -80,7 +95,13 @@ Optional replication transport:
 edgestore-repl = "1.0"
 ```
 
-Minimum supported Rust version: **1.85** (2024 edition).
+With S3 backend (adds `aws-sdk-s3` + `tokio`):
+
+```toml
+edgestore-repl = { version = "1.0", features = ["s3"] }
+```
+
+Minimum supported Rust version: **1.95.0**.
 
 ### CLI Installation
 

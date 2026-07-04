@@ -10,7 +10,13 @@ pub mod filesystem_remote_store;
 pub mod http_client;
 pub mod http_server;
 
+#[cfg(feature = "s3")]
+pub mod s3_remote_store;
+
 pub use anti_entropy::{AntiEntropyLoop, PeerCursor};
 pub use filesystem_remote_store::FilesystemRemoteStore;
 pub use http_client::HttpReplicationClient;
 pub use http_server::HttpReplicationServer;
+
+#[cfg(feature = "s3")]
+pub use s3_remote_store::S3RemoteStore;

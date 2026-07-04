@@ -9,6 +9,9 @@ EdgeStore is built around three architectural principles:
    toward 1.0.
 3. **Layered purity.** The KV layer is pure byte storage. Vector and full-text APIs
    sit on top as typed wrappers; they never pollute the core keyspace.
+4. **Crate separation.** `edgestore` is the sync core. `edgestore-repl` adds network
+   and remote durability (HTTP replication, S3). You can use `edgestore` alone
+   without ever pulling in `edgestore-repl`.
 
 For the full technical specification, see [`prod.md`](../prod.md).
 
@@ -68,7 +71,7 @@ For the full technical specification, see [`prod.md`](../prod.md).
             │                        │
             ▼                        ▼
 ┌──────────────────────┐  ┌──────────────────────────────────────────────┐
-│  Compactor           │  │  Replication Sidecar                         │
+│  Compactor           │  │  Replication Sidecar (edgestore-repl)      │
 │  • Identifies cohorts│  │  • Merkle tree over segments & ranges        │
 │  • Zero-reloc when   │  │  • Delta exchange (transport-agnostic)       │
 │    fully expired     │  │  • S3 object log + mailbox                   │
@@ -78,10 +81,10 @@ For the full technical specification, see [`prod.md`](../prod.md).
                         │
                         ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  StorageBackend abstraction (NVMe / FDP / ZNS / S3 / Memory)           │
+│  StorageBackend abstraction (NVMe / FDP / ZNS / Memory)                │
 │  • Default: pread/pwrite on local filesystem                             │
 │  • FDP: placement hints per segment write (NVMe 2.0)                     │
-│  • S3: cold archive + replication mailbox via RemoteStore                │
+│  • S3: cold archive + replication mailbox via `edgestore-repl::RemoteStore`│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 

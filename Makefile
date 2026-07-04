@@ -4,6 +4,7 @@
 .PHONY: all help clean test build clippy doc lint
 .PHONY: tag tag-force tags-push publish publish-dryrun release
 .PHONY: bump-patch bump-minor bump-major
+.PHONY: s3-test s3-up s3-down
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
@@ -15,6 +16,17 @@ GIT_TAG := v$(VERSION)
 
 # Crates in dependency order (publish from root to leaves)
 CRATES := edgestore edgestore-tokio edgestore-repl edgestore-cli
+
+# ── Docker detection ──────────────────────────────────────────────────────
+# Some environments (e.g. Colima) run a newer Docker daemon than the host
+# Docker client supports. We detect this and fall back to `colima ssh -- docker`
+# when the local client is too old.
+DOCKER_OK := $(shell docker ps >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(DOCKER_OK),1)
+  DOCKER := docker
+else
+  DOCKER := colima ssh -- docker
+endif
 
 # ── Default ─────────────────────────────────────────────────────────────────
 
@@ -68,6 +80,44 @@ doc:
 
 bench:
 	cargo bench --workspace
+
+# ── S3 / LocalStack integration tests ─────────────────────────────────────
+
+s3-up: ## Start LocalStack container for S3 testing
+	@echo "Starting LocalStack..."
+	@echo "Using docker command: $(DOCKER)"
+	@$(DOCKER) stop edgestore-localstack >/dev/null 2>&1 || true
+	@$(DOCKER) rm edgestore-localstack >/dev/null 2>&1 || true
+	$(DOCKER) run -d \
+		--name edgestore-localstack \
+		-p 4566:4566 \
+		-e SERVICES=s3 \
+		-e AWS_ACCESS_KEY_ID=test \
+		-e AWS_SECRET_ACCESS_KEY=test \
+		-e AWS_DEFAULT_REGION=us-east-1 \
+		-v "$(PWD)/scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh:ro" \
+		localstack/localstack:3
+	@echo "Waiting for LocalStack to be ready..."
+	@sleep 3
+	@until curl -sf http://localhost:4566/_localstack/health >/dev/null 2>&1; do \
+		echo "  ...waiting"; sleep 2; \
+	done
+	@echo "LocalStack ready."
+
+s3-down: ## Stop and remove LocalStack container
+	@echo "Stopping LocalStack..."
+	$(DOCKER) stop edgestore-localstack >/dev/null 2>&1 || true
+	$(DOCKER) rm edgestore-localstack >/dev/null 2>&1 || true
+
+s3-test: s3-up ## Run S3 integration tests against LocalStack
+	@echo "Running S3 integration tests..."
+	EDGESTORE_S3_ENDPOINT_URL=http://localhost:4566 \
+	EDGESTORE_S3_BUCKET=edgestore-test \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_DEFAULT_REGION=us-east-1 \
+	cargo test --package edgestore-repl --features s3 -- --nocapture
+	$(MAKE) s3-down
 
 # ── Version bump helpers ──────────────────────────────────────────────────
 

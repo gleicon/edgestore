@@ -403,6 +403,13 @@ impl Engine {
         self.metrics.snapshot()
     }
 
+    /// Return metadata for all live segments.
+    ///
+    /// Used by `edgestore-tier` to build archived-segment indexes.
+    pub fn list_segment_metas(&self) -> Vec<crate::types::SegmentMeta> {
+        self.segment_store.list_segment_metas().to_vec()
+    }
+
     // ── Private implementations ───────────────────────────────────────────────
 
     fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {

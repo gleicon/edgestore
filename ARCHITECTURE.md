@@ -350,9 +350,31 @@ This keeps `edgestore` pure and lets you control:
 - When to evict (LRU, TTL, size threshold)
 - Whether to pre-warm before a query
 
-### Future: `edgestore-tier` crate
+### `edgestore-tier` (Shipped in v1.1)
 
-A future optional crate (`edgestore-tier`) may provide a reference implementation of this pattern — a per-namespace index in S3, LRU local cache, and transparent `get()` fallback. It would sit **beside** `edgestore-repl`, not inside it. Until then, the primitives in `edgestore-repl` are sufficient to build your own.
+`edgestore-tier` provides a reference implementation of transparent read-through:
+
+```rust
+use edgestore::{Engine, EdgestoreConfig};
+use edgestore_repl::S3RemoteStore;
+use edgestore_tier::TieredEngine;
+
+let local = Engine::open(EdgestoreConfig::new("/tmp/db")).unwrap();
+let remote = S3RemoteStore::new("bucket", Some("prefix/"), None).unwrap();
+let mut tiered = TieredEngine::new(local, Box::new(remote));
+```
+
+What it does:
+- `put`/`delete` — pass through to local engine (hot path unchanged)
+- `get` — local first; on miss, scan archived segments by key bounds, download from S3 via `RemoteStore`, import via `Engine::import_segment` (LWW merge), retry
+- `archive_segments` — upload a list of local segments to remote and register them for read-through
+
+What it does **not** do:
+- Decide when to archive or evict (application policy)
+- Background prefetch or warming
+- Range scan read-through (local only — call `fetch_all_archived()` first if needed)
+
+It is a thin orchestration layer sitting between `edgestore` (core) and `edgestore-repl` (transport). You can use it directly, wrap it with your own policy, or ignore it and build your own using the same primitives.
 
 ---
 

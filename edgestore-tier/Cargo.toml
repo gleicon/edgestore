@@ -1,0 +1,27 @@
+[package]
+name = "edgestore-tier"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Tiered storage for EdgeStore — local hot cache + S3 cold archive"
+keywords = ["edgestore", "tiered", "storage", "s3", "cache"]
+categories = ["database-implementations", "caching"]
+
+[dependencies]
+edgestore = { path = "../edgestore", version = "1.1.0" }
+edgestore-repl = { path = "../edgestore-repl", version = "1.1.0", features = ["s3"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "tiered_get"
+harness = false

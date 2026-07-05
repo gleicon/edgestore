@@ -57,7 +57,8 @@ and call directly — no daemon, no port binding, no server process.
 |-------|-------|
 | **`edgestore`** | Core engine: `Engine`, WAL, `SegmentStore`, `Compactor`, vector search, full-text search. Pure sync. |
 | **`edgestore-tokio`** | Thin async wrapper. Every call runs inside `tokio::task::spawn_blocking`. No storage logic duplicated. |
-| **`edgestore-repl`** | Replication transport: HTTP client/server, anti-entropy loop, `RemoteStore` trait implementations (filesystem, S3). |
+| **`edgestore-repl`** | Replication transport: HTTP client/server, anti-entropy loop, `RemoteStore` implementations (filesystem, S3). |
+| **`edgestore-tier`** | Tiered storage: local hot cache + transparent read-through to S3 cold archive. Optional — only if your data exceeds local disk. |
 | **`edgestore-cli`** | Administrative binary: `create`, `put`, `get`, `compact`, `stats`, `export`, `import`. |
 
 ---
@@ -75,6 +76,7 @@ and call directly — no daemon, no port binding, no server process.
 | **Full-text search** (BM25) | `edgestore` | ✅ v1.0 | Tokenization, faceting, typo tolerance |
 | **Replication** (Merkle delta sync) | `edgestore-repl` | ✅ v1.0 | Transport-agnostic; HTTP + S3 backends |
 | **S3 cold storage** | `edgestore-repl` | ✅ v1.0 | Archive + replication mailbox (`s3` feature) |
+| **Tiered storage** (local + S3 read-through) | `edgestore-tier` | ✅ v1.1 | Transparent fallback to S3 on cache miss |
 | **SSD optimization** | `edgestore` | ✅ v1.0 | FDP placement hints, deathtime-cohort WAF≈1 |
 
 ---
@@ -166,7 +168,7 @@ s3://{bucket}/{prefix}segments/{blake3_hash_hex}.dat
 
 **It does:** provide `upload`/`download`/`list`/`delete` primitives so you can move segments to/from S3.
 
-**It does not:** implement tiering policy, cache eviction, or transparent `get()` fallback to S3. Those are application-level decisions. You can build them yourself using `S3RemoteStore` + `Engine::import_segment`, or wait for a future `edgestore-tier` crate. See [ARCHITECTURE.md](ARCHITECTURE.md#cold-storage--tiering-patterns) for the full pattern.
+**It does not:** implement tiering policy, cache eviction, or transparent `get()` fallback to S3. For that, use `edgestore-tier` below.
 
 ### Environment variables
 
@@ -185,6 +187,40 @@ make s3-test
 ```
 
 This starts a LocalStack container, runs all S3 integration tests, and tears it down.
+
+---
+
+## Tiered Storage (Optional)
+
+Use `edgestore-tier` when your dataset exceeds local disk and you need transparent read-through to S3:
+
+```toml
+[dependencies]
+edgestore-tier = "1.1"
+```
+
+```rust
+use edgestore::{Engine, EdgestoreConfig};
+use edgestore_repl::S3RemoteStore;
+use edgestore_tier::TieredEngine;
+
+let local = Engine::open(EdgestoreConfig::new("/tmp/db")).unwrap();
+let remote = S3RemoteStore::new("bucket", Some("prefix/"), None).unwrap();
+let mut tiered = TieredEngine::new(local, Box::new(remote));
+
+// Writes go to local only
+tiered.put(b"ns", b"key", b"val").unwrap();
+
+// Reads try local first; on miss, check archived segments in S3
+tiered.get(b"ns", b"key").unwrap();
+
+// Archive local segments to S3, then delete locally to reclaim space
+let metas = tiered.local().list_segment_metas();
+tiered.archive_segments(&metas).unwrap();
+// (caller deletes local .dat files if desired)
+```
+
+`edgestore-tier` is a thin orchestration layer. It does not decide when to archive or evict — those are application-level policies. It simply provides the read-through mechanism using the `RemoteStore` primitives from `edgestore-repl` and the `import_segment` path from `edgestore`.
 
 ---
 

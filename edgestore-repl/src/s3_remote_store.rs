@@ -54,11 +54,13 @@ use edgestore::RemoteStore;
 /// let data = b"hello edgestore";
 /// store.upload(&hash, data).expect("upload");
 /// ```
-pub struct S3RemoteStore {
+    pub struct S3RemoteStore {
     client: aws_sdk_s3::Client,
     bucket: String,
     prefix: String,
-    runtime: Arc<tokio::runtime::Runtime>,
+    /// Runtime we created ourselves. `None` if we are re-using the caller's
+    /// runtime — avoids drop-from-async-context panics.
+    owned_runtime: Option<Arc<tokio::runtime::Runtime>>,
 }
 
 impl S3RemoteStore {
@@ -72,47 +74,73 @@ impl S3RemoteStore {
     /// * `endpoint_url` — Optional custom endpoint URL. Use
     ///   `Some("http://localhost:4566")` for LocalStack. Pass `None` to use
     ///   the standard AWS endpoint for the resolved region.
+    ///
+    /// # Async context safety
+    ///
+    /// This function may be called from inside an existing Tokio runtime
+    /// (e.g. `#[tokio::main]`) or from a purely synchronous context. In
+    /// both cases it will not panic.
     pub fn new(
         bucket: impl Into<String>,
         prefix: Option<&str>,
         endpoint_url: Option<&str>,
     ) -> Result<Self, EdgestoreError> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                EdgestoreError::ReplicationError(format!(
-                    "failed to create Tokio runtime: {e}"
-                ))
-            })?;
-
-        let client = runtime.block_on(async {
-            let region_provider =
-                RegionProviderChain::default_provider().or_else("us-east-1");
-
-            let mut config_loader =
-                aws_config::defaults(BehaviorVersion::latest())
-                    .region(region_provider);
-
-            if let Some(url) = endpoint_url {
-                config_loader = config_loader.endpoint_url(url.to_string());
+        // Build the AWS client. If we are inside an existing Tokio runtime we
+        // borrow it via `block_in_place` and do not create our own — this
+        // prevents the "cannot start a runtime from within a runtime" panic
+        // and the "drop runtime from async context" panic.
+        let (client, owned_runtime) = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let client = tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        Self::build_client(endpoint_url).await
+                    })
+                });
+                (client, None)
             }
-
-            let sdk_config = config_loader.load().await;
-            let mut s3_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
-            if endpoint_url.is_some() {
-                // LocalStack and MinIO need path-style addressing.
-                s3_builder = s3_builder.force_path_style(true);
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        EdgestoreError::ReplicationError(format!(
+                            "failed to create Tokio runtime: {e}"
+                        ))
+                    })?;
+                let client = rt.block_on(async {
+                    Self::build_client(endpoint_url).await
+                });
+                (client, Some(Arc::new(rt)))
             }
-            aws_sdk_s3::Client::from_conf(s3_builder.build())
-        });
+        };
 
         Ok(Self {
             client,
             bucket: bucket.into(),
             prefix: prefix.unwrap_or("").to_string(),
-            runtime: Arc::new(runtime),
+            owned_runtime,
         })
+    }
+
+    async fn build_client(endpoint_url: Option<&str>) -> aws_sdk_s3::Client {
+        let region_provider =
+            RegionProviderChain::default_provider().or_else("us-east-1");
+
+        let mut config_loader =
+            aws_config::defaults(BehaviorVersion::latest())
+                .region(region_provider);
+
+        if let Some(url) = endpoint_url {
+            config_loader = config_loader.endpoint_url(url.to_string());
+        }
+
+        let sdk_config = config_loader.load().await;
+        let mut s3_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+        if endpoint_url.is_some() {
+            // LocalStack and MinIO need path-style addressing.
+            s3_builder = s3_builder.force_path_style(true);
+        }
+        aws_sdk_s3::Client::from_conf(s3_builder.build())
     }
 
     /// Encode a 32-byte hash as a 64-character lowercase hex string.
@@ -142,7 +170,13 @@ impl S3RemoteStore {
             Ok(handle) => {
                 tokio::task::block_in_place(|| handle.block_on(future))
             }
-            Err(_) => self.runtime.block_on(future),
+            Err(_) => {
+                // We are not inside a runtime, so we must own one.
+                self.owned_runtime
+                    .as_ref()
+                    .expect("S3RemoteStore created without a runtime and called outside a runtime")
+                    .block_on(future)
+            }
         }
     }
 }
@@ -376,5 +410,29 @@ mod tests {
 
         let hash = [0xDDu8; 32];
         assert!(store.download(&hash).is_err());
+    }
+
+    /// Regression: S3RemoteStore::new() must not panic when called from
+    /// inside an existing Tokio runtime (e.g. #[tokio::main]).
+    /// Previously it called Runtime::block_on() directly, which panics.
+    #[test]
+    fn test_new_from_async_context() {
+        let endpoint = match std::env::var("EDGESTORE_S3_ENDPOINT_URL") {
+            Ok(u) => u,
+            Err(_) => {
+                eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
+                return;
+            }
+        };
+        let bucket = std::env::var("EDGESTORE_S3_BUCKET")
+            .unwrap_or_else(|_| "edgestore-test".to_string());
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // This used to panic with:
+            // "Cannot start a runtime from within a runtime"
+            let _store = S3RemoteStore::new(&bucket, Some("async_test/"), Some(&endpoint))
+                .expect("S3RemoteStore::new must succeed from async context");
+        });
     }
 }

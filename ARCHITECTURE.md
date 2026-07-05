@@ -296,6 +296,66 @@ For async callers, `edgestore-tokio` wraps every operation in
 
 ---
 
+## Cold Storage & Tiering Patterns
+
+EdgeStore is **local-first**: the `Engine` operates on local SSD/NVMe only. It does not know S3 exists. This is a deliberate architectural boundary — the core crate has zero network dependencies.
+
+`edgestore-repl` provides the **transport primitives** (`RemoteStore` trait, `S3RemoteStore`, `HttpReplicationClient`) that let you move segments between nodes or to S3. What it does **not** provide is a tiering policy: cache eviction, read-through logic, or cold/hot data classification. Those are application concerns.
+
+### What `edgestore-repl` gives you
+
+- `S3RemoteStore::upload(hash, data)` — store a segment in S3
+- `S3RemoteStore::download(hash)` — retrieve a segment from S3
+- `Engine::import_segment(data, hash)` — LWW-merge a downloaded segment into the local engine
+- `Engine::export_manifest()` — list local segments for comparison with a remote manifest
+
+### What it does not give you
+
+- Automatic eviction of local segments to S3
+- Transparent `get()` fallback to S3 on cache miss
+- A per-namespace secondary index for S3 segment lookup
+- Cache warming, prefetch, or LRU policy
+
+### Building your own tiering (Application-level)
+
+If you need transparent read-through (local hot cache + S3 cold archive), the cleanest pattern is a wrapper in your application code:
+
+```rust
+use edgestore::{Engine, EdgestoreConfig, EdgestoreError};
+use edgestore_repl::S3RemoteStore;
+use edgestore::RemoteStore;
+
+pub struct MyTieredEngine {
+    local: Engine,
+    remote: S3RemoteStore,
+    // Your own cache policy, index, eviction logic...
+}
+
+impl MyTieredEngine {
+    pub fn get(&mut self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
+        // 1. Try local
+        if let Some(v) = self.local.get(ns, key)? {
+            return Ok(Some(v));
+        }
+        // 2. Your logic: find segment hash in S3, download, import, retry
+        // 3. Or return None if you choose not to fetch
+        Ok(None)
+    }
+}
+```
+
+This keeps `edgestore` pure and lets you control:
+- Which namespaces stay local vs. go to S3
+- When to fetch (on first miss? on range scan? eagerly?)
+- When to evict (LRU, TTL, size threshold)
+- Whether to pre-warm before a query
+
+### Future: `edgestore-tier` crate
+
+A future optional crate (`edgestore-tier`) may provide a reference implementation of this pattern — a per-namespace index in S3, LRU local cache, and transparent `get()` fallback. It would sit **beside** `edgestore-repl`, not inside it. Until then, the primitives in `edgestore-repl` are sufficient to build your own.
+
+---
+
 ## References
 
 - **Deep technical spec:** [`prod.md`](../prod.md)

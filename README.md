@@ -162,6 +162,12 @@ s3://{bucket}/{prefix}segments/{blake3_hash_hex}.dat
 
 `{blake3_hash_hex}` is the 64-character lowercase hex encoding of the 32-byte BLAKE3 hash.
 
+### What `edgestore-repl` does and does not do
+
+**It does:** provide `upload`/`download`/`list`/`delete` primitives so you can move segments to/from S3.
+
+**It does not:** implement tiering policy, cache eviction, or transparent `get()` fallback to S3. Those are application-level decisions. You can build them yourself using `S3RemoteStore` + `Engine::import_segment`, or wait for a future `edgestore-tier` crate. See [ARCHITECTURE.md](ARCHITECTURE.md#cold-storage--tiering-patterns) for the full pattern.
+
 ### Environment variables
 
 | Variable | Purpose | Example |

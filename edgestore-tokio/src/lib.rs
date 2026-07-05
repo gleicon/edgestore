@@ -63,6 +63,27 @@ impl AsyncEngine {
         )))?
     }
 
+    /// Lightweight write with TTL — record expires via deathtime-cohort compaction.
+    pub async fn put_with_ttl(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+        val: &[u8],
+        ttl_secs: u32,
+    ) -> Result<u64, EdgestoreError> {
+        let ns = ns.to_vec();
+        let key = key.to_vec();
+        let val = val.to_vec();
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = inner.blocking_write();
+            engine.put_with_ttl(&ns, &key, &val, ttl_secs)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
     /// Lightweight delete.
     pub async fn delete(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
         let ns = ns.to_vec();
@@ -249,6 +270,16 @@ mod tests {
         engine.put(b"ns", b"hello", b"world").await.unwrap();
         let val = engine.get(b"ns", b"hello").await.unwrap();
         assert_eq!(val, Some(b"world".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn test_async_put_with_ttl_readable_before_expiry() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_async_engine(&dir).await;
+
+        engine.put_with_ttl(b"ns", b"key", b"val", 3600).await.unwrap();
+        let val = engine.get(b"ns", b"key").await.unwrap();
+        assert_eq!(val, Some(b"val".to_vec()));
     }
 
     #[tokio::test]

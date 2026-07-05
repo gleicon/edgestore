@@ -12,7 +12,7 @@ keywords = ["edgestore", "tokio", "async", "database"]
 categories = ["database-implementations", "asynchronous"]
 
 [dependencies]
-edgestore = { path = "../edgestore", version = "1.1.0" }
+edgestore = { path = "../edgestore", version = "1.1.1" }
 tokio = { version = "1.44", features = ["sync", "rt"] }
 
 [dev-dependencies]

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-07-04
+
+### Added
+
+- **S3RemoteStore** (`edgestore-repl/src/s3_remote_store.rs`). AWS S3 implementation of `RemoteStore` using `aws-sdk-s3` in blocking mode via an internal Tokio runtime. Feature-gated behind `s3`.
+  - Path layout: `s3://{bucket}/{prefix}segments/{blake3_hash_hex}.dat`
+  - LocalStack support: `force_path_style(true)` for custom endpoints.
+- **LocalStack integration testing** (`docker-compose.yml`, `scripts/localstack-init.sh`, `Makefile`).
+  - `make s3-test` starts LocalStack, runs S3 tests, tears down.
+  - `make s3-up` / `make s3-down` for manual container management.
+- **S3 integration tests** (`edgestore-repl/src/s3_remote_store.rs`):
+  - upload/download roundtrip, idempotent upload, list, delete, not-found.
+
+### Changed
+
+- **README rewrite** for clarity. Crate decision tree appears immediately after Quick Start. `edgestore-repl` explicitly labeled as optional.
+- **Architecture diagram** now shows `edgestore-repl` as an optional sidecar layer, not a core storage backend.
+- **S3RemoteStore simplification** — removed `HeadObject` idempotency check (extra round-trip; `PutObject` is naturally idempotent for content-addressed segments). Removed redundant CRC32 checksum.
+
+### Fixed
+
+- `edgestore-repl` crate docs and website copy now clearly distinguish `edgestore` (core) from `edgestore-repl` (replication transport). "repl" = replication, not a REPL shell.
+
 ## [1.0.11] - 2026-07-04
 
 ### Fixed

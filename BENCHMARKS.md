@@ -150,6 +150,25 @@ deserialize+merge, collapsing to ~6 QPS at 10K docs. Fixed in v1.0.9.
 > Index measurement: `cargo bench --bench text_search -- index`
 > Warm cache: run search once before benchmarking to populate in-memory index cache.
 
+### g) Tiered Storage Latency
+
+`edgestore-tier` benchmarks measure the overhead of the tiered wrapper and the cost of S3 cold-path operations. All numbers are from a local `FilesystemRemoteStore` (disk-to-disk); real S3 latency adds network round-trip (~20–100ms) but the CPU/decompression costs are identical.
+
+**All numbers are release mode (`cargo bench --package edgestore-tier`).**
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Local `Engine::get()` (hot) | **~21 µs** | Baseline: memtable + segment scan |
+| `TieredEngine::get()` local hit | **~28 µs** | ~30% wrapper overhead vs raw `Engine` |
+| `TieredEngine::get()` read-through (1000 keys) | **~24 ms** | Download 16 MB segment + decompress + WAL write + import + retry |
+| `TieredEngine::archive_segments()` (1000 keys) | **~309 µs** | Upload segment to `FilesystemRemoteStore` |
+| `TieredEngine::fetch_all_archived()` (1000 keys) | **~24 ms** | Bulk download + import of archived segment |
+
+> **Key insight:** Read-through is ~1000× slower than local hit. Selective fetch (`fetch_archived_overlapping`) is the critical optimization for range-query workloads — it avoids full rehydration.
+>
+> Measurement: `cargo bench --package edgestore-tier --bench tiered_get`
+> Hardware: Apple M5, 16 GB RAM, SSD
+
 ### f) Compaction Overhead (WAF)
 
 Write Amplification Factor = physical bytes written / logical bytes inserted.

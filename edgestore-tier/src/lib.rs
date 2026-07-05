@@ -617,4 +617,257 @@ mod tests {
         let scan = fresh_tiered.range(b"logs", b"2025", b"2035").unwrap();
         assert!(scan.is_empty(), "non-overlapping segment must not have been fetched");
     }
+
+    #[test]
+    fn test_readthrough_latency_within_budget() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        // Write 1000 keys and flush.
+        for i in 0u64..1000 {
+            tiered.put(b"ns", &i.to_be_bytes(), b"value").unwrap();
+        }
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Fresh engine: read-through must complete within budget.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("latency")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        let start = std::time::Instant::now();
+        let got = fresh_tiered.get(b"ns", &500u64.to_be_bytes()).unwrap();
+        let elapsed_ms = start.elapsed().as_millis() as f64;
+
+        assert_eq!(got, Some(b"value".to_vec()));
+
+        // Budget: debug < 500 ms, release < 100 ms (filesystem remote; real S3 is slower).
+        let budget_ms = if cfg!(debug_assertions) { 500.0 } else { 100.0 };
+        assert!(
+            elapsed_ms < budget_ms,
+            "read-through latency {:.1} ms exceeds budget {:.0} ms",
+            elapsed_ms,
+            budget_ms
+        );
+    }
+
+    #[test]
+    fn test_large_segment_archive_and_readthrough_10k() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        // Write 10K keys and flush.
+        for i in 0u64..10_000 {
+            tiered.put(b"ns", &i.to_be_bytes(), b"value").unwrap();
+        }
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Fresh engine: read-through must find keys across the full range.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("10k")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // Spot-check: first, middle, last.
+        for i in [0u64, 5000, 9999] {
+            let got = fresh_tiered.get(b"ns", &i.to_be_bytes()).unwrap();
+            assert_eq!(got, Some(b"value".to_vec()), "key {} must read-through", i);
+        }
+
+        // Range scan after warming must include all keys.
+        fresh_tiered.fetch_all_archived().unwrap();
+        let vals = fresh_tiered.range(b"ns", &0u64.to_be_bytes(), &10_000u64.to_be_bytes()).unwrap();
+        assert_eq!(vals.len(), 10_000, "range after warming must include all 10K keys");
+    }
+
+    #[test]
+    fn test_concurrent_archive_and_read() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        // Seed data and flush.
+        for i in 0u64..1000 {
+            tiered.put(b"ns", &i.to_be_bytes(), b"value").unwrap();
+        }
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+
+        // Spawn archive in one thread (separate local dir to avoid WriterBusy),
+        // reads in the main thread.
+        use std::sync::Arc;
+        use std::thread;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let done = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+
+        // Archive thread uses a separate local directory to avoid locking the main one.
+        let archive_local_path = local_dir.path().join("archive_concurrent");
+        let remote_path = remote_dir.path().to_path_buf();
+        let metas_clone = metas.clone();
+
+        let archive_handle = thread::spawn(move || {
+            let local = Engine::open(EdgestoreConfig::new(&archive_local_path)).unwrap();
+            let remote = FilesystemRemoteStore::new(remote_path).unwrap();
+            let mut t = TieredEngine::new(local, Box::new(remote));
+            t.archive_segments(&metas_clone).unwrap();
+            done_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Concurrent reads on the main engine (local hits, no remote involvement).
+        let mut read_count = 0usize;
+        while !done.load(Ordering::SeqCst) {
+            let _ = tiered.get(b"ns", &500u64.to_be_bytes()).unwrap();
+            read_count += 1;
+            if read_count > 10_000 {
+                break; // safety valve
+            }
+        }
+
+        archive_handle.join().unwrap();
+        assert!(read_count > 0, "reads occurred concurrently with archive");
+    }
+
+    #[test]
+    fn test_corrupt_segment_hash_mismatch_rejected() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Corrupt the remote file: overwrite first byte.
+        // FilesystemRemoteStore uses .seg extension.
+        let remote_base = remote_dir.path();
+        for entry in std::fs::read_dir(remote_base).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name().to_string_lossy().ends_with(".seg") {
+                let mut bytes = std::fs::read(entry.path()).unwrap();
+                bytes[0] = !bytes[0]; // flip first byte
+                std::fs::write(entry.path(), bytes).unwrap();
+            }
+        }
+
+        // Fresh engine: use fetch_segment (not get()) which does not swallow errors.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("corrupt")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // fetch_segment must return Err on hash mismatch (get() swallows the error).
+        let hash = tiered.archived_segments()[0].hash;
+        let result = fresh_tiered.fetch_segment(&hash);
+        assert!(result.is_err(), "corrupt segment hash mismatch must be rejected");
+    }
+
+    // ── Mock RemoteStore for fault injection ─────────────────────────────────
+
+    struct FaultyRemoteStore {
+        inner: FilesystemRemoteStore,
+        fail_next_upload: AtomicBool,
+        fail_next_download: AtomicBool,
+        delay_ms: AtomicU64,
+    }
+
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    impl FaultyRemoteStore {
+        fn new(inner: FilesystemRemoteStore) -> Self {
+            Self {
+                inner,
+                fail_next_upload: AtomicBool::new(false),
+                fail_next_download: AtomicBool::new(false),
+                delay_ms: AtomicU64::new(0),
+            }
+        }
+    }
+
+    impl RemoteStore for FaultyRemoteStore {
+        fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
+            if self.fail_next_upload.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(EdgestoreError::ReplicationError("injected upload fault".to_string()));
+            }
+            if let Some(delay) = std::time::Duration::from_millis(self.delay_ms.load(std::sync::atomic::Ordering::SeqCst)).checked_mul(1) {
+                std::thread::sleep(delay);
+            }
+            self.inner.upload(hash, data)
+        }
+
+        fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
+            if self.fail_next_download.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(EdgestoreError::ReplicationError("injected download fault".to_string()));
+            }
+            self.inner.download(hash)
+        }
+
+        fn list(&self) -> Result<Vec<[u8; 32]>, EdgestoreError> {
+            self.inner.list()
+        }
+
+        fn delete(&self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
+            self.inner.delete(hash)
+        }
+    }
+
+    #[test]
+    fn test_upload_fault_propagates() {
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let remote = FaultyRemoteStore::new(inner_remote);
+        remote.fail_next_upload.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let mut tiered = TieredEngine::new(local, Box::new(remote));
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        let result = tiered.archive_segments(&metas);
+        assert!(result.is_err(), "upload fault must propagate");
+    }
+
+    #[test]
+    fn test_download_fault_propagates() {
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let remote = FaultyRemoteStore::new(inner_remote);
+
+        let mut tiered = TieredEngine::new(local, Box::new(remote));
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Fresh engine with injected download fault.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fault"))).unwrap();
+        let fresh_inner = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_remote = FaultyRemoteStore::new(fresh_inner);
+        fresh_remote.fail_next_download.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // fetch_segment must return Err on download fault (get() swallows the error).
+        let hash = tiered.archived_segments()[0].hash;
+        let result = fresh_tiered.fetch_segment(&hash);
+        assert!(result.is_err(), "download fault must propagate");
+    }
 }

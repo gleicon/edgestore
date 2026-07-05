@@ -59,6 +59,7 @@ examples/           — Runnable Rust examples (edgestore/examples/)
 prod.md             — Full design spec (source of truth)
 ARCHITECTURE.md     — Component overview and data flows
 SCALING.md          — Scaling guide: snapshots, replication, tiering, edge functions
+CONSISTENCY.md      — Test coverage matrix and reevaluation triggers
 README.md           — Quick-start and feature matrix
 ```
 

@@ -19,6 +19,7 @@
 //! | Storage | [`StorageBackend`], [`DefaultStorageBackend`], [`MemoryStorageBackend`] | Pluggable I/O |
 //! | Compaction | [`Compactor`], [`CompactionStats`] | Deathtime-cohort compaction |
 //! | Merkle | [`RangeMerkleTree`] | Anti-entropy probe |
+//! | Immutable | [`ImmutableEngine`], [`InMemorySegmentReader`] | Read-only in-memory engine for serverless / WASM |
 
 #![warn(missing_docs)]
 
@@ -32,6 +33,8 @@ pub mod error;
 pub mod fdp_backend;
 /// Range-level Merkle tree for anti-entropy probes.
 pub mod merkle;
+/// Read-only in-memory engine for serverless / WASM environments (Phase 9).
+pub mod immutable;
 /// Engine metrics and snapshots.
 pub mod metrics;
 /// Remote segment store abstraction.
@@ -87,3 +90,5 @@ pub use vector::distance::{distance, distance_scalar, Metric, total_cmp_f32};
 pub use vector::hnsw::HnswIndex;
 pub use vector::search::{vector_search, VectorSearchResult};
 pub use vector::types::{Dtype, VectorRecord};
+pub use immutable::ImmutableEngine;
+pub use segment::in_memory::InMemorySegmentReader;

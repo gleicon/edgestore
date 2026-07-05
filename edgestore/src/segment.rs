@@ -11,6 +11,8 @@ use crate::types::{
     cohort_bucket_for, death_time_for, MemEntry, Operation, SegmentId, SegmentMeta,
 };
 
+pub mod in_memory;
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 pub(crate) const SEGMENT_BLOCK_MAGIC: u32 = 0x45445347; // "EDSG"
@@ -95,7 +97,9 @@ fn hash_key_to_u64(key: &[u8]) -> u64 {
 }
 
 pub(crate) fn build_xor_filter(keys: &[Vec<u8>]) -> Result<xorf::Xor8, EdgestoreError> {
-    let hashes: Vec<u64> = keys.iter().map(|k| hash_key_to_u64(k)).collect();
+    let mut hashes: Vec<u64> = keys.iter().map(|k| hash_key_to_u64(k)).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
     Ok(xorf::Xor8::from(hashes.as_slice()))
 }
 

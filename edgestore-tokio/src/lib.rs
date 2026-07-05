@@ -3,6 +3,11 @@ use tokio::sync::RwLock;
 
 use std::collections::HashMap;
 
+#[cfg(feature = "tier")]
+mod tiered;
+#[cfg(feature = "tier")]
+pub use tiered::AsyncTieredEngine;
+
 use edgestore::{
     EdgestoreConfig, EdgestoreError, Engine, FacetValue, ImportResult, MetricsSnapshot, SearchOptions, SegmentRef,
     TextEngine, TextSearchResult, VectorEngine,

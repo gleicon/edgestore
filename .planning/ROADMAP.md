@@ -1,6 +1,6 @@
 # Roadmap — EdgeStore
 
-**8 phases** | **34 requirements mapped** | All v1 requirements covered ✓
+**9 phases** | **42 requirements mapped** | v1 requirements covered ✓ | v2 in progress
 
 | # | Phase | Goal | Requirements | Success Criteria |
 |---|-------|------|--------------|-----------------|
@@ -13,6 +13,7 @@
 | 6 | SSD Optimization + HNSW | FDP hints, HNSW index, async wrapper | SSD-01–05 | 4 |
 | 7 | Full-Text Search (v2) | Embedded Algolia-like search | SEARCH-01–04 | 3 |
 | 8 | v1.0 Polish & Release | Final docs, CLI, packaging, release engineering | POLISH-01–08 | 4 |
+| 9 | Read-Only Edge Engine | ImmutableEngine for serverless, WASM, edge runtimes | RO-01–08 | 5 |
 
 ---
 
@@ -253,10 +254,40 @@ Plans:
 
 ---
 
+### Phase 9: Read-Only Edge Engine
+
+**Goal:** Enable EdgeStore to serve reads in environments with no local filesystem, no persistent writer process, and no locking — specifically serverless functions, edge runtimes, and WASM. Build an `ImmutableEngine` that reads content-addressed segments directly from object storage into memory, with zero WAL, zero memtable, and zero write amplification.
+
+**Requirements:** RO-01, RO-02, RO-03, RO-04, RO-05, RO-06, RO-07, RO-08
+
+**Plans:** 5 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — `InMemorySegmentReader`: parse `.dat` from memory, build sparse index and xor filter
+- [ ] 09-02-PLAN.md — `ImmutableEngine`: K-way merge `get()`/`range()`/`prefix()`, lazy vs eager modes
+- [ ] 09-03-PLAN.md — Manifest format (single JSON object), sidecar upload/download, `RemoteStore` extension
+- [ ] 09-04-PLAN.md — WASM bindings (`wasm-bindgen`), serverless runtime integration, runtime cache API
+- [ ] 09-05-PLAN.md — Integration tests: serverless simulation, cost/latency benchmarks
+
+**Success Criteria:**
+1. `ImmutableEngine::get()` returns correct value for a key in a downloaded segment
+2. `ImmutableEngine::range()` returns correctly merged results across 5+ segments
+3. Serverless query latency: <100ms cold start, <5ms warm (cache hit)
+4. WASM bundle size <500KB gzipped
+5. No local filesystem, no `LOCK` file, no WAL, no memtable
+
+**Key risks:**
+- WASM bundle size: Rust + serde + zstd + blake3 is heavy. May need feature-gating or streaming decompression.
+- Serverless memory limits vary by provider (128MB–512MB typical). Large segments may need chunked streaming.
+- Object storage API compatibility: S3-compatible APIs vary by provider (e.g. some lack Object Lock). Must test against target provider.
+
+---
+
 ## Milestone Structure
 
 **Milestone 1 (v0.1):** Phases 1–3 — local durable KV with deathtime-cohort compaction
 **Milestone 2 (v0.2):** Phase 4 — replication and S3 integration
 **Milestone 3 (v0.3):** Phase 5 — vector search
 **Milestone 4 (v1.0):** Phase 6 — SSD optimization, HNSW, production-ready
-**Milestone 5 (v2.0):** Phase 7 — full-text search
+**Milestone 5 (v1.1):** Phase 7 — full-text search + tiered storage
+**Milestone 6 (v1.2):** Phase 9 — read-only edge engine for serverless / WASM

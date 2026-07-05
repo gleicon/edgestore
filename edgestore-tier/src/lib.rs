@@ -226,6 +226,43 @@ impl TieredEngine {
         Ok(())
     }
 
+    /// Download and import one specific archived segment by hash — the selective
+    /// alternative to `fetch_all_archived` for callers that know (e.g. via
+    /// `archived_segments()`'s key bounds) exactly which segment they need, such as
+    /// a range query fetching only the segments overlapping its time window.
+    pub fn fetch_segment(&mut self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
+        self.fetch_and_import(hash)
+    }
+
+    /// Download and import only the archived segments whose `[min_key, max_key]`
+    /// bounds overlap the given namespace key range.
+    ///
+    /// This is the selective alternative to `fetch_all_archived()` for
+    /// range-query-shaped workloads (e.g. time-series / log ingestion) that
+    /// cannot afford to fully rehydrate before every scan. After calling this,
+    /// `range()` and `prefix()` will include data from the fetched segments.
+    pub fn fetch_archived_overlapping(
+        &mut self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<(), EdgestoreError> {
+        let start = edgestore::types::encode_key(ns, start);
+        let end = edgestore::types::encode_key(ns, end);
+
+        let overlapping: Vec<[u8; 32]> = self
+            .archived
+            .iter()
+            .filter(|seg| seg.max_key >= start && seg.min_key < end)
+            .map(|seg| seg.hash)
+            .collect();
+
+        for hash in overlapping {
+            self.fetch_and_import(&hash)?;
+        }
+        Ok(())
+    }
+
     /// Download and import a segment by hash.
     fn fetch_and_import(&mut self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
         let data = self.remote.download(hash).map_err(|e| {
@@ -546,5 +583,38 @@ mod tests {
         // Should return None gracefully, not panic.
         let got = fresh_tiered.get(b"ns", b"key").unwrap();
         assert_eq!(got, None, "graceful None when remote segment missing");
+    }
+
+    #[test]
+    fn test_fetch_archived_overlapping_selective() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        // Two separate flushes → two segments with distinct key ranges.
+        tiered.put(b"logs", b"2020", b"old-data").unwrap();
+        let meta_early = tiered.local_mut().flush_to_segments().unwrap();
+
+        tiered.put(b"logs", b"2030", b"new-data").unwrap();
+        let meta_late = tiered.local_mut().flush_to_segments().unwrap();
+
+        tiered.archive_segments(&[meta_early.clone(), meta_late.clone()]).unwrap();
+
+        // Fresh engine with archived list.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh5")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // Fetch only the range overlapping the early key.
+        fresh_tiered.fetch_archived_overlapping(b"logs", b"2020", b"2021").unwrap();
+
+        // Early key is now local.
+        let early = fresh_tiered.get(b"logs", b"2020").unwrap();
+        assert_eq!(early, Some(b"old-data".to_vec()), "overlapping segment fetched");
+
+        // Late key is still not local — range() over un-fetched region is empty.
+        let scan = fresh_tiered.range(b"logs", b"2025", b"2035").unwrap();
+        assert!(scan.is_empty(), "non-overlapping segment must not have been fetched");
     }
 }

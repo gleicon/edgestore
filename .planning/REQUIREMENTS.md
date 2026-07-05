@@ -69,6 +69,17 @@
 - [ ] **POLISH-07**: Benchmark suite runs and results published in `BENCHMARKS.md`
 - [ ] **POLISH-08**: crates.io publish dry-run (`cargo publish --dry-run`) passes for `edgestore` crate
 
+## v1.2 Requirements (Read-Only Edge Engine)
+
+- [ ] **RO-01**: `ImmutableEngine` can be initialized from a remote manifest without any local `db_path` or `LOCK` file
+- [ ] **RO-02**: `ImmutableEngine` supports `get()`, `range()`, and `prefix()` using the same K-way merge algorithm as `Snapshot`
+- [ ] **RO-03**: `ImmutableEngine` can download segments lazily (on first access) or eagerly (on init); both modes are configurable
+- [ ] **RO-04**: Segment sidecars (`.idx`, `.xf`, `.meta`) can be either downloaded alongside `.dat` or derived from `.dat` on first open
+- [ ] **RO-05**: The manifest is a single JSON object in object storage, not a `ListObjectsV2` scan; it lists all segments with hash, bounds, and sidecar availability
+- [ ] **RO-06**: `ImmutableEngine` is cache-friendly: segments are content-addressed by BLAKE3, safe for indefinite caching via CDN or runtime cache API
+- [ ] **RO-07**: WASM bindings (`wasm-bindgen`) expose `ImmutableEngine` to JavaScript/TypeScript for serverless runtimes
+- [ ] **RO-08**: `ImmutableEngine` integrates with S3-compatible object storage APIs and optionally with runtime cache APIs for segment caching
+
 ## v2 Requirements (Deferred)
 
 - Full-text search: tokenizer, stemmer, inverted index (BM25), postings compression, `index_text`/`search` API
@@ -99,6 +110,7 @@
 | 6 — SSD Optimization + HNSW | SSD-01 through SSD-05 |
 | 7 — Full-Text Search (v2) | SEARCH-01 through SEARCH-04 |
 | 8 — v1.0 Polish & Release | POLISH-01 through POLISH-08 |
+| 9 — Read-Only Edge Engine | RO-01 through RO-08 |
 
 ## Definition of Done (v1)
 

@@ -356,6 +356,7 @@ mod tests {
             death_time,
             merkle_root: vec![0u8; 32],
             created_at: 1_000_000_000_000,
+            text_index_stripped: false,
         }
     }
 

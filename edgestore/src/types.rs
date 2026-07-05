@@ -99,6 +99,11 @@ pub struct SegmentMeta {
     pub merkle_root: Vec<u8>,
     /// Creation timestamp (unix nanoseconds).
     pub created_at: i64,
+    /// When `true`, all `__text__*` namespace records have been removed from this segment.
+    /// Search queries should not expect text index data from this segment.
+    /// Set by `Engine::strip_text_index` after a segment has been archived to cold storage.
+    #[serde(default)]
+    pub text_index_stripped: bool,
 }
 
 /// Cohort bucket for a record: which compaction cohort it belongs to.

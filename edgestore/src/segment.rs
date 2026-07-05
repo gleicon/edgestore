@@ -312,6 +312,7 @@ impl SegmentWriter {
             death_time,
             merkle_root,
             created_at,
+            text_index_stripped: false,
         };
 
         let meta_file = std::fs::File::create(self.meta_path())?;
@@ -582,6 +583,37 @@ impl SegmentStore {
     /// Return the base path of this segment store.
     pub(crate) fn base_path(&self) -> &std::path::Path {
         &self.base_path
+    }
+
+    /// Return a reference to the SegmentReader for a given segment ID, if it exists.
+    pub(crate) fn reader_for(&self, segment_id: SegmentId) -> Option<&SegmentReader> {
+        self.readers.iter().find(|r| r.segment_id == segment_id)
+    }
+
+    /// Replace an existing segment with a rewritten version.
+    ///
+    /// Removes `old_id` from the manifest and reader list, adds `new_meta` and
+    /// `new_reader`. Deletes the old segment files (.dat, .idx, .xf, .meta) from disk.
+    pub(crate) fn replace_segment(
+        &mut self,
+        old_id: SegmentId,
+        new_meta: SegmentMeta,
+        new_reader: SegmentReader,
+    ) -> Result<(), EdgestoreError> {
+        // Delete old segment files.
+        for ext in &["dat", "idx", "xf", "meta"] {
+            let path = self.base_path.join(format!("segment-{:08}.{}", old_id, ext));
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(|e| EdgestoreError::Io(e))?;
+            }
+        }
+        // Remove from manifest and readers.
+        self.manifest.remove_segments(&[old_id])?;
+        self.readers.retain(|r| r.segment_id != old_id);
+        // Add replacement.
+        self.manifest.add_segment(new_meta)?;
+        self.readers.push(new_reader);
+        Ok(())
     }
 
     /// Return the cohort_window_secs for this segment store.

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-07-05
+
+### Fixed
+
+- **`TieredEngine::range()` and `prefix()` now read through archived segments** — previously these methods returned only local data, silently omitting keys that had been archived to remote storage. Both methods now download overlapping archived segments ephemerally (no local import, no disk growth) and merge the results with local data using LWW semantics (local wins on key collision). `fetch_archived_overlapping()` remains available for callers that prefer explicit warming over per-query downloads. (`edgestore-tier/src/lib.rs`)
+
+- **`Engine::strip_text_index()` — new lifecycle hook for removing text index records from local segments** — text index entries (`__text__*` namespace) are stored in the same segment files as user data, making them invisible to external GC once segments are archived. `strip_text_index(segment_id)` rewrites the target segment filtering out all `__text__*` entries and sets `SegmentMeta::text_index_stripped = true` on the new segment. This is safe to call on archived segments so hot-storage tiering does not accumulate index overhead indefinitely. (`edgestore/src/engine.rs`, `edgestore/src/types.rs`)
+
+- **`TieredEngine::with_text_stripping(bool)` builder** — when enabled, `archive_segments()` automatically calls `strip_text_index()` after each successful upload, so tiered deployments shed index weight without additional application code. (`edgestore-tier/src/lib.rs`)
+
+- **`SegmentMeta::text_index_stripped` field** — backward-compatible (`#[serde(default)]`) boolean flag that marks segments whose text index records have been removed. Existing manifests and remote archives deserialize correctly with the field defaulting to `false`. (`edgestore/src/types.rs`)
+
 ## [1.1.3] - 2026-07-05
 
 ### Added

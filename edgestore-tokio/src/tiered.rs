@@ -6,11 +6,11 @@ use edgestore::{EdgestoreConfig, EdgestoreError, Engine, FacetValue, RemoteStore
 use edgestore_tier::{ArchivedSegment, TieredEngine};
 
 /// Async wrapper around the synchronous `edgestore_tier::TieredEngine` — same
-/// pattern as `AsyncEngine`, all blocking work on `spawn_blocking`. Point lookups
-/// (`get`) read through to `RemoteStore` on a local miss; `range`/`prefix` are
-/// local-only by `TieredEngine`'s own design (see its module docs) — callers that
-/// need archived data in a scan must `fetch_all_archived` first, or select which
-/// segments to fetch themselves via `archived_segments()`'s key bounds.
+/// pattern as `AsyncEngine`, all blocking work on `spawn_blocking`.
+///
+/// `get` reads through to `RemoteStore` on a local miss, permanently importing the
+/// matching segment. `range`/`prefix` merge local results with archived segments
+/// ephemerally (no import, no disk growth); see `TieredEngine` for full semantics.
 #[derive(Clone)]
 pub struct AsyncTieredEngine {
     inner: Arc<RwLock<TieredEngine>>,
@@ -93,7 +93,6 @@ impl AsyncTieredEngine {
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
     }
 
-    /// Local-only — see struct docs.
     pub async fn prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let ns = ns.to_vec();
         let prefix = prefix.to_vec();
@@ -111,6 +110,17 @@ impl AsyncTieredEngine {
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.flush()
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+    }
+
+    /// Runs one deathtime-cohort compaction pass — heavy I/O, runs on spawn_blocking.
+    pub async fn compact_once(&self) -> Result<edgestore::CompactionStats, EdgestoreError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = inner.blocking_write();
+            engine.compact_once()
         })
         .await
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
@@ -219,6 +229,19 @@ impl AsyncTieredEngine {
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.fetch_archived_overlapping(&ns, &start, &end)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+    }
+
+    /// Downloads a segment's raw bytes without importing it locally — for building
+    /// an ephemeral, read-only `ImmutableEngine` view instead of permanently growing
+    /// local storage (unlike `fetch_segment`/`fetch_all_archived`, which both import).
+    pub async fn download_segment(&self, hash: [u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let engine = inner.blocking_read();
+            engine.download_segment(&hash)
         })
         .await
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?

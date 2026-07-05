@@ -397,6 +397,92 @@ impl Engine {
         self.segment_store.list_segment_metas().to_vec()
     }
 
+    /// Rewrite a segment removing all `__text__*` namespace records.
+    ///
+    /// After a segment has been archived to cold storage, callers may strip its embedded
+    /// full-text index records to reclaim local disk space. The archived copy retains the
+    /// original data; the local copy becomes a compact KV-only segment.
+    ///
+    /// Sets `SegmentMeta::text_index_stripped = true` on the new segment. Subsequent
+    /// `search_text` calls will not find text records from this segment; existing
+    /// search results are unaffected if the merged `__index__` entry was already flushed
+    /// to a later (unstripped) segment.
+    ///
+    /// Returns `Ok(existing_meta)` unchanged if the segment has no text records or was
+    /// already stripped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `segment_id` is not found, or if the rewrite fails.
+    pub fn strip_text_index(&mut self, segment_id: u64) -> Result<crate::types::SegmentMeta, EdgestoreError> {
+        use crate::types::decode_key;
+
+        // Locate the segment.
+        let old_meta = self.segment_store
+            .list_segment_metas()
+            .iter()
+            .find(|m| m.segment_id == segment_id)
+            .ok_or_else(|| EdgestoreError::InvalidOperation(
+                format!("strip_text_index: segment {} not found", segment_id)
+            ))?
+            .clone();
+
+        if old_meta.text_index_stripped {
+            return Ok(old_meta);
+        }
+
+        // Read all entries from the segment.
+        let entries = {
+            let reader = self.segment_store
+                .reader_for(segment_id)
+                .ok_or_else(|| EdgestoreError::InvalidOperation(
+                    format!("strip_text_index: no reader for segment {}", segment_id)
+                ))?;
+            reader.range_scan(&[], &vec![0xFF; 1024])?
+        };
+
+        // Filter out __text__ namespace records.
+        let filtered: Vec<(Vec<u8>, crate::types::MemEntry)> = entries
+            .into_iter()
+            .filter(|(k, _)| {
+                match decode_key(k) {
+                    Ok((ns, _)) => !ns.starts_with(b"__text__"),
+                    Err(_) => true, // keep malformed keys intact
+                }
+            })
+            .collect();
+
+        // Nothing to strip.
+        if filtered.len() == old_meta.record_count as usize {
+            return Ok(old_meta);
+        }
+
+        // No non-text entries remain — the segment is text-only; nothing to keep locally.
+        // Return the original meta unchanged (caller may delete the local segment themselves).
+        if filtered.is_empty() {
+            return Ok(old_meta);
+        }
+
+        // Write the filtered entries as a new segment.
+        let new_id = self.segment_store.alloc_segment_id();
+        let mut writer = crate::segment::SegmentWriter::new(
+            self.segment_store.base_path().to_path_buf(),
+            new_id,
+            self.config.cohort_window_secs,
+        );
+        let mut new_meta = writer.flush(&filtered)?;
+        new_meta.text_index_stripped = true;
+
+        let new_reader = crate::segment::SegmentReader::open(
+            self.segment_store.base_path().to_path_buf(),
+            new_id,
+        )?;
+
+        self.segment_store.replace_segment(segment_id, new_meta.clone(), new_reader)?;
+
+        Ok(new_meta)
+    }
+
     // ── Private implementations ───────────────────────────────────────────────
 
     fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
@@ -954,6 +1040,7 @@ impl Engine {
             death_time: 0,
             merkle_root: hash.to_vec(),
             created_at: now_nanos,
+            text_index_stripped: false,
         };
 
         // Write .idx, .xf, .meta files so SegmentReader::open can load it.

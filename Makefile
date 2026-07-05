@@ -15,7 +15,7 @@ VERSION ?= $(shell grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
 GIT_TAG := v$(VERSION)
 
 # Crates in dependency order (publish from root to leaves)
-CRATES := edgestore edgestore-tokio edgestore-repl edgestore-cli
+CRATES := edgestore edgestore-repl edgestore-tier edgestore-tokio edgestore-cli
 
 # ── Default ─────────────────────────────────────────────────────────────────
 

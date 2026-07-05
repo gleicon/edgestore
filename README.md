@@ -36,6 +36,32 @@ For a rich documentation site with feature guides and paper references, open [`w
 
 ---
 
+## Choose Your Crate
+
+EdgeStore is a Cargo workspace. Most users need only the first crate.
+
+| I want... | Crate | Add to `Cargo.toml` |
+|-----------|-------|---------------------|
+| A local embedded database (sync, no network deps) | `edgestore` | `edgestore = "1.0"` |
+| The same, but async in a Tokio app | `edgestore` + `edgestore-tokio` | `edgestore-tokio = "1.0"` |
+| Replication between nodes via HTTP or S3 | `edgestore-repl` | `edgestore-repl = "1.0"` |
+| An admin command-line tool | `edgestore-cli` | `cargo install edgestore-cli` |
+
+**`edgestore-repl` is optional.** The core `edgestore` crate has zero network
+dependencies and zero async runtime dependencies. It is a library you embed
+and call directly — no daemon, no port binding, no server process.
+
+### Crate details
+
+| Crate | Scope |
+|-------|-------|
+| **`edgestore`** | Core engine: `Engine`, WAL, `SegmentStore`, `Compactor`, vector search, full-text search. Pure sync. |
+| **`edgestore-tokio`** | Thin async wrapper. Every call runs inside `tokio::task::spawn_blocking`. No storage logic duplicated. |
+| **`edgestore-repl`** | Replication transport: HTTP client/server, anti-entropy loop, `RemoteStore` trait implementations (filesystem, S3). |
+| **`edgestore-cli`** | Administrative binary: `create`, `put`, `get`, `compact`, `stats`, `export`, `import`. |
+
+---
+
 ## Feature Matrix
 
 | Feature | Crate | Status | Notes |
@@ -53,68 +79,66 @@ For a rich documentation site with feature guides and paper references, open [`w
 
 ---
 
-## Crate Overview
+## Architecture
 
-EdgeStore is organized as a Cargo workspace. Each crate has a distinct scope:
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Application                                                │
+│    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│    │   KV API     │  │ Vector API   │  │  Text API    │   │
+│    └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
+└───────────┼─────────────────┼─────────────────┼───────────┘
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Engine (single writer + group commit)                      │
+│    • Transactions, namespace isolation, LWW conflict res.   │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ writes batches
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  WAL (LZ4, CRC32C)                    Memtable (BTreeMap)   │
+│  • Append-only, rotated at 64 MB / 60 s  • In-memory buf   │
+│  • Crash recovery source                 • Flushed → segment│
+└─────────────────────────────────────────────────────────────┘
+                      │ flushes
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Segment Store                                              │
+│    • Immutable SSTables (ZSTD L1, 4 KiB blocks, 16 MB)      │
+│    • Sparse index + xor filter + BLAKE3 content addressing  │
+│    • Manifest: live segment tracking, Merkle roots           │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Local Storage (SSD / NVMe)                                 │
+│    • Deathtime-cohort compaction → WAF → 1.0                │
+│    • FDP placement hints on supported hardware              │
+└─────────────────────────────────────────────────────────────┘
 
-| Crate | What it is | What it is NOT |
-|-------|-----------|----------------|
-| **`edgestore`** | Core sync KV + vector + text engine. `Engine`, `WAL`, `SegmentStore`, `Compactor`. | Not a server. Not async. |
-| **`edgestore-tokio`** | Async wrapper. Every call runs in `tokio::task::spawn_blocking`. Thin layer. | Does not re-implement storage logic. |
-| **`edgestore-repl`** | **REPLication** transport — HTTP client/server + `RemoteStore` backends (filesystem, S3). Network and durability tier. | **Not a REPL shell.** "repl" = replication, not read-eval-print-loop. |
-| **`edgestore-cli`** | Administrative CLI binary. `put`, `get`, `compact`, `stats`, `export`, `import`. | Not a database server. Not a SQL client. |
-
-The core crate (`edgestore`) is **library-first**: you embed it in your application, call `Engine::open()`, and use it directly. No daemon, no port binding, no async runtime required.
-
-`edgestore-repl` adds network and remote durability when you need it — Merkle delta sync between nodes, HTTP replication, or S3 cold archive. It is an **optional addition**, not a requirement.
-
-## Installation
-
-Add to `Cargo.toml`:
-
-```toml
-[dependencies]
-edgestore = "1.0"
+┌─────────────────────────────────────────────────────────────┐
+│  Optional: edgestore-repl (network layer)                   │
+│    • HTTP replication client + server                        │
+│    • S3 / filesystem RemoteStore backends                    │
+│    • Merkle delta sync, anti-entropy loop                    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Or run:
-
-```bash
-cargo add edgestore
-```
-
-Optional async wrapper:
-
-```toml
-edgestore-tokio = "1.0"
-```
-
-Optional replication transport:
-
-```toml
-edgestore-repl = "1.0"
-```
-
-With S3 backend (adds `aws-sdk-s3` + `tokio`):
-
-```toml
-edgestore-repl = { version = "1.0", features = ["s3"] }
-```
-
-Minimum supported Rust version: **1.95.0**.
+For a deep dive, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
-## Using S3
+## Using S3 (Optional)
 
-Enable the `s3` feature on `edgestore-repl`:
+Only needed if you are replicating segments to S3 or using S3 as a cold archive.
+Add the `s3` feature to `edgestore-repl`:
 
 ```toml
 [dependencies]
 edgestore-repl = { version = "1.0", features = ["s3"] }
 ```
-
-Create an `S3RemoteStore` and use it with the `RemoteStore` trait:
 
 ```rust
 use edgestore::RemoteStore;
@@ -126,14 +150,11 @@ let store = S3RemoteStore::new(
     None,                  // None for AWS; Some("http://localhost:4566") for LocalStack
 ).expect("S3RemoteStore::new");
 
-// upload / download / list / delete via the trait
 store.upload(&hash, &data)?;
 let bytes = store.download(&hash)?;
 ```
 
 ### S3 path layout
-
-Segments are stored as:
 
 ```
 s3://{bucket}/{prefix}segments/{blake3_hash_hex}.dat
@@ -161,7 +182,7 @@ This starts a LocalStack container, runs all S3 integration tests, and tears it 
 
 ---
 
-### CLI Installation
+## CLI Installation
 
 The `edgestore-cli` administrative tool can be installed from source:
 
@@ -186,50 +207,6 @@ The CLI provides commands for:
 - Text search: `text-search`
 
 Run `edgestore-cli --help` for full command reference.
-
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Application                                                │
-│    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
-│    │   KV API     │  │ Vector API   │  │  Text API    │   │
-│    └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
-└───────────┼─────────────────┼─────────────────┼───────────┘
-            │                 │                 │
-            └─────────────────┼─────────────────┘
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Engine (single writer + group commit)                    │
-│    • Transactions, namespace isolation, LWW conflict res.   │
-└─────────────────────┬───────────────────────────────────────┘
-                      │ writes batches
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  WAL (LZ4, CRC32C)                    Memtable (BTreeMap)   │
-│  • Append-only, rotated at 64 MB / 60 s  • In-memory buf   │
-│  • Crash recovery source                 • Flushed → segment│
-└─────────────────────────────────────────────────────────────┘
-                      │ flushes
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Segment Store                                              │
-│    • Immutable SSTables (ZSTD L1, 4 KiB blocks, 16 MB)      │
-│    • Sparse index + xor filter + BLAKE3 content addressing  │
-│    • Manifest: live segment tracking, Merkle roots           │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  SSD / NVMe / S3 (via StorageBackend trait)                 │
-│    • Deathtime-cohort compaction → WAF → 1.0                │
-│    • FDP placement hints on supported hardware              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-For a deep dive, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 

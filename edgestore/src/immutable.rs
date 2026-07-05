@@ -9,7 +9,7 @@ use std::collections::BinaryHeap;
 
 use crate::error::EdgestoreError;
 use crate::segment::in_memory::InMemorySegmentReader;
-use crate::types::{decode_key, encode_key, MemEntry, Operation, SegmentMeta};
+use crate::types::{decode_key, encode_key, prefix_upper_bound, MemEntry, Operation, SegmentMeta};
 
 /// Read-only engine that serves from in-memory segments.
 ///
@@ -27,6 +27,67 @@ impl ImmutableEngine {
     /// to `InMemorySegmentReader` via `InMemorySegmentReader::from_bytes`.
     pub fn from_readers(readers: Vec<InMemorySegmentReader>) -> Self {
         Self { readers }
+    }
+
+    /// Export a JSON manifest describing all segments.
+    ///
+    /// The manifest is a single JSON object that can be shipped to a
+    /// serverless environment alongside the `.dat` segment files.
+    /// Format (stable):
+    ///
+    /// ```json
+    /// {
+    ///   "format_version": 1,
+    ///   "segments": [
+    ///     {
+    ///       "hash": "a1b2...1b" (64-hex),
+    ///       "segment_id": 0,
+    ///       "min_key": "hex-encoded bytes",
+    ///       "max_key": "hex-encoded bytes",
+    ///       "min_lsn": 1,
+    ///       "max_lsn": 100,
+    ///       "record_count": 50
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    pub fn export_manifest_json(&self) -> Result<String, EdgestoreError> {
+        use serde::Serialize;
+        #[derive(Serialize)]
+        struct Manifest {
+            format_version: u32,
+            segments: Vec<ManifestSegment>,
+        }
+        #[derive(Serialize)]
+        struct ManifestSegment {
+            hash: String,
+            segment_id: u64,
+            min_key: String,
+            max_key: String,
+            min_lsn: u64,
+            max_lsn: u64,
+            record_count: u64,
+        }
+
+        let mut segs = Vec::with_capacity(self.readers.len());
+        for r in &self.readers {
+            let meta = &r.meta;
+            segs.push(ManifestSegment {
+                hash: hex::encode(meta.segment_hash.as_slice()),
+                segment_id: meta.segment_id,
+                min_key: hex::encode(&meta.min_key),
+                max_key: hex::encode(&meta.max_key),
+                min_lsn: meta.min_lsn,
+                max_lsn: meta.max_lsn,
+                record_count: meta.record_count,
+            });
+        }
+        let manifest = Manifest {
+            format_version: 1,
+            segments: segs,
+        };
+        serde_json::to_string(&manifest)
+            .map_err(|e| EdgestoreError::ReplicationError(format!("manifest JSON: {}", e)))
     }
 
     /// Create an `ImmutableEngine` from a list of `(SegmentMeta, bytes)` pairs.
@@ -50,7 +111,11 @@ impl ImmutableEngine {
         Ok(Self { readers })
     }
 
-    /// Look up a single key across all segments, highest-LSN wins.
+    /// Look up a single key within a namespace.
+    ///
+    /// Scans all segments and returns the value from the entry with the highest LSN
+    /// (last-write-wins). Returns `None` if the key is absent or if the winning entry
+    /// is a delete tombstone.
     pub fn get(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
         let encoded = encode_key(ns, key);
         let mut best: Option<MemEntry> = None;
@@ -81,95 +146,14 @@ impl ImmutableEngine {
         start: &[u8],
         end: &[u8],
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
-        let enc_start = encode_key(ns, start);
-        let enc_end = encode_key(ns, end);
-
-        let mut per_reader: Vec<Vec<(Vec<u8>, MemEntry)>> = Vec::with_capacity(self.readers.len());
-        let mut total_len = 0usize;
-        for reader in &self.readers {
-            let mut seg = reader.range_scan(&enc_start, &enc_end)?;
-            seg.sort_by(|(a, _), (b, _)| a.cmp(b));
-            total_len += seg.len();
-            per_reader.push(seg);
-        }
-
-        #[derive(Eq, PartialEq)]
-        struct Item<'a> {
-            key: &'a [u8],
-            entry: &'a MemEntry,
-            reader_idx: usize,
-            elem_idx: usize,
-        }
-        impl<'a> Ord for Item<'a> {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                let key_cmp = other.key.cmp(self.key);
-                if key_cmp != std::cmp::Ordering::Equal {
-                    return key_cmp;
-                }
-                other.entry.lsn.cmp(&self.entry.lsn)
-            }
-        }
-        impl<'a> PartialOrd for Item<'a> {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-
-        let mut heap = BinaryHeap::new();
-        for (ri, seg) in per_reader.iter().enumerate() {
-            if let Some((k, e)) = seg.first() {
-                heap.push(Item { key: k, entry: e, reader_idx: ri, elem_idx: 0 });
-            }
-        }
-
-        let mut results: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_len);
-        let mut last_key: Option<Vec<u8>> = None;
-        let mut last_entry: Option<MemEntry> = None;
-        while let Some(item) = heap.pop() {
-            let seg = &per_reader[item.reader_idx];
-            let next_idx = item.elem_idx + 1;
-            if next_idx < seg.len() {
-                let (k, e) = &seg[next_idx];
-                heap.push(Item { key: k, entry: e, reader_idx: item.reader_idx, elem_idx: next_idx });
-            }
-            match last_key {
-                Some(ref lk) if lk == item.key => {
-                    if let Some(ref le) = last_entry {
-                        if item.entry.lsn > le.lsn {
-                            last_entry = Some(item.entry.clone());
-                        }
-                    }
-                }
-                _ => {
-                    if let Some(e) = last_entry.take() {
-                        if e.op != Operation::Delete {
-                            if let Some(lk) = last_key {
-                                let (_, user_key) = decode_key(&lk)?;
-                                if let Some(val) = e.value {
-                                    results.push((user_key, val));
-                                }
-                            }
-                        }
-                    }
-                    last_key = Some(item.key.to_vec());
-                    last_entry = Some(item.entry.clone());
-                }
-            }
-        }
-        if let Some(e) = last_entry {
-            if e.op != Operation::Delete {
-                if let Some(lk) = last_key {
-                    let (_, user_key) = decode_key(&lk)?;
-                    if let Some(val) = e.value {
-                        results.push((user_key, val));
-                    }
-                }
-            }
-        }
-        Ok(results)
+        self.range_encoded(&encode_key(ns, start), &encode_key(ns, end))
     }
 
-    /// Prefix scan within a namespace.
+    /// Scan all keys in a namespace whose raw bytes start with `prefix`.
+    ///
+    /// Matching is byte-exact: a key matches if and only if its bytes begin with
+    /// every byte of `prefix`. Merges across all segments (LWW), filters delete
+    /// tombstones, and returns results sorted by key.
     #[allow(clippy::type_complexity)]
     pub fn prefix(
         &self,
@@ -177,12 +161,8 @@ impl ImmutableEngine {
         prefix: &[u8],
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
-        let mut end = enc_prefix.clone();
-        if let Some(last) = end.last_mut() {
-            *last = last.wrapping_add(1);
-        } else {
-            end.push(1);
-        }
+        let end = prefix_upper_bound(&enc_prefix)
+            .unwrap_or_else(|| vec![0xFF; enc_prefix.len() + 1]);
         self.range_encoded(&enc_prefix, &end)
     }
 
@@ -282,7 +262,7 @@ impl ImmutableEngine {
 mod tests {
     use super::*;
     use crate::segment::SegmentWriter;
-    use crate::types::{encode_key, MemEntry, Operation};
+    use crate::types::{encode_key, prefix_upper_bound, MemEntry, Operation};
     use tempfile::TempDir;
 
     fn make_put_entry(key: &[u8], value: &[u8], lsn: u64) -> MemEntry {
@@ -460,5 +440,76 @@ mod tests {
 
         let results = engine.range(ns, &0u64.to_be_bytes(), &10_000u64.to_be_bytes()).unwrap();
         assert_eq!(results.len(), 10_000, "range must include all 10K keys");
+    }
+
+    #[test]
+    fn test_export_manifest_json_structure() {
+        let ns = b"ns";
+        let key = encode_key(ns, b"k");
+        let entry = make_put_entry(&key, b"v", 1);
+        let engine = build_engine_with_segments(vec![vec![(key, entry)]]);
+
+        let json = engine.export_manifest_json().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        assert_eq!(parsed["format_version"], 1, "format_version must be 1");
+        let segs = parsed["segments"].as_array().expect("segments array");
+        assert_eq!(segs.len(), 1, "one segment");
+
+        let seg = &segs[0];
+        assert!(seg["hash"].as_str().map(|h| h.len() == 64).unwrap_or(false), "hash is 64 hex chars");
+        assert!(seg["record_count"].as_u64().unwrap() > 0, "record_count > 0");
+
+        let min_hex = seg["min_key"].as_str().expect("min_key is a hex string");
+        let max_hex = seg["max_key"].as_str().expect("max_key is a hex string");
+        assert!(!hex::decode(min_hex).unwrap().is_empty(), "min_key hex decodes to non-empty bytes");
+        assert!(!hex::decode(max_hex).unwrap().is_empty(), "max_key hex decodes to non-empty bytes");
+    }
+
+    #[test]
+    fn test_prefix_upper_bound_all_0xff() {
+        assert_eq!(prefix_upper_bound(&[0xFF, 0xFF, 0xFF]), None);
+        assert_eq!(prefix_upper_bound(&[0x01, 0xFF, 0xFF]), Some(vec![0x02]));
+        assert_eq!(prefix_upper_bound(&[0x01, 0x02, 0xFE]), Some(vec![0x01, 0x02, 0xFF]));
+    }
+
+    #[test]
+    fn test_immutable_prefix_0xff_suffix_returns_results() {
+        let ns = b"ns";
+        let prefix_bytes: &[u8] = &[0xAA, 0xFF];
+        let key1 = encode_key(ns, &[0xAA, 0xFF, 0x01]);
+        let key2 = encode_key(ns, &[0xAA, 0xFF, 0x02]);
+        let e1 = make_put_entry(&key1, b"v1", 1);
+        let e2 = make_put_entry(&key2, b"v2", 2);
+        let engine = build_engine_with_segments(vec![vec![(key1, e1), (key2, e2)]]);
+        let results = engine.prefix(ns, prefix_bytes).unwrap();
+        assert_eq!(results.len(), 2, "prefix ending in 0xFF must find both keys");
+    }
+
+    #[test]
+    fn test_immutable_cross_segment_delete_wins() {
+        let ns = b"ns";
+        let key = encode_key(ns, b"contested");
+
+        let put_entry = make_put_entry(&key, b"value", 1);
+        let del_entry = MemEntry {
+            key: key.clone(),
+            value: None,
+            op: Operation::Delete,
+            lsn: 2,
+            timestamp: 3_600_000_000_001,
+            ttl: 0,
+        };
+
+        let engine = build_engine_with_segments(vec![
+            vec![(key.clone(), put_entry)],
+            vec![(key.clone(), del_entry)],
+        ]);
+
+        let got = engine.get(ns, b"contested").unwrap();
+        assert!(got.is_none(), "cross-segment delete (lsn=2) must win over put (lsn=1)");
+
+        let range = engine.range(ns, b"", b"\xff").unwrap();
+        assert!(range.is_empty(), "range must exclude cross-segment deleted key");
     }
 }

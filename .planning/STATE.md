@@ -1,25 +1,25 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
+milestone: v1.2
 milestone_name: milestone
-  current_phase: 08
+  current_phase: 09
   status: Complete
-  last_updated: "2026-05-26T00:00:00.000Z"
+  last_updated: "2026-07-05T15:00:00.000Z"
   progress:
-    total_phases: 8
+    total_phases: 9
     completed_phases: 8
-    total_plans: 50
-    completed_plans: 50
-    percent: 100
+    total_plans: 55
+    completed_plans: 52
+    percent: 95
 ---
 
 # Project State — EdgeStore
 
 ## Current Status
 
-**Phase:** 8 — v1.0 Polish & Release
-**Current Phase:** 08
-**Milestone:** Milestone 4 (v1.0)
+**Phase:** 9 — Read-Only Edge Engine (ImmutableEngine for serverless / WASM)
+**Current Phase:** 09
+**Milestone:** Milestone 6 (v1.2)
 
 ## Phase Progress
 
@@ -34,10 +34,21 @@ milestone_name: milestone
 | 6 — SSD Optimization + HNSW | Complete | 2026-05-25 | 2026-05-25 |
 | 7 — Full-Text Search (v2) | Complete | 2026-05-25 | 2026-05-25 |
 | 8 — v1.0 Polish & Release | Complete | 2026-05-25 | 2026-05-26 |
+| 9 — Read-Only Edge Engine | Complete | 2026-07-05 | 2026-07-05 |
+
+## Phase 9 Wave Progress
+
+| Wave | Status | Deliverables |
+|------|--------|--------------|
+| Wave 1: `InMemorySegmentReader` | Complete | `edgestore/src/segment/in_memory.rs` + 4 unit tests |
+| Wave 2: `ImmutableEngine` | Complete | `edgestore/src/immutable.rs` + 8 unit tests + `export_manifest_json()` |
+| Wave 3: Sidecars + `RemoteStore` extension | Complete | `upload_aux`/`download_aux` on trait + FilesystemRemoteStore + S3RemoteStore; `TieredEngine::with_sidecars()`; `archive_segments` sidecar upload; 7 new tests |
+| Wave 4: WASM bindings | Deferred | Out of scope per D22 — platform owners build their own bindings |
+| Wave 5: Serverless benchmarks | Complete | `edgestore/benches/immutable.rs` — 5 benches (cold start 1K/10K, hot get, range 1K, multi-segment merge) |
 
 ## Requirement Status
 
-34 requirements total — 0 validated, 34 active, 0 blocked
+42 requirements total — 0 validated, 34 active, 8 blocked (Phase 9 RO-01–08)
 
 ## Phase 3 Plans
 

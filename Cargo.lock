@@ -1077,18 +1077,20 @@ dependencies = [
 
 [[package]]
 name = "edgestore"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "blake3",
  "byteorder",
  "crc32c",
  "criterion",
  "fs2",
+ "hex",
  "lazy_static",
  "log",
  "lz4_flex",
  "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
  "tempfile",
  "wide",
@@ -1098,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-cli"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "clap",
  "edgestore",
@@ -1110,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-repl"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -1127,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tier"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "blake3",
  "criterion",
@@ -1140,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tokio"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "edgestore",
  "edgestore-repl",

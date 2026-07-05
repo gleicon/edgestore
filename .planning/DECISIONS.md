@@ -163,6 +163,76 @@ pub trait RemoteStore: Send + Sync {
 
 ---
 
+## D16 — ImmutableEngine crate placement: core, not separate
+
+**Decision:** `ImmutableEngine` lives in `edgestore` core as `edgestore::immutable::ImmutableEngine`. A separate crate is deferred until bundle size becomes a measurable issue.
+
+**Rationale:** Reuses existing `segment`, `types`, `snapshot` modules with zero duplication. Moving to a separate crate would require extracting shared internals or duplicating code.
+
+**Implication:** `ImmutableEngine` stays in core. No separate crate needed unless a future platform-specific crate emerges.
+
+---
+
+## D22 — WASM bindings: out of scope; platform owners build their own
+
+**Decision:** EdgeStore does not ship WASM bindings (`wasm-bindgen`, `wasm-pack`, `edgestore-wasm`). Serverless and edge platforms that want to use EdgeStore in WASM runtimes must build their own bindings on top of the Rust `ImmutableEngine` API.
+
+**Rationale:** EdgeStore is a Rust library first. The core team's focus is the Rust API surface. WASM is a target runtime, not a first-class platform we maintain. The `export_manifest_json()` API and `ImmutableEngine` provide everything a platform needs to build their own WASM wrapper.
+
+**Implication:** The `edgestore-wasm` crate is removed from the workspace. `RO-07` (WASM bindings requirement) is deferred to platform owners. The core team does not track bundle size or JS interop.
+
+---
+
+## D17 — Xor filter deduplication for duplicate keys across blocks
+
+**Decision:** `build_xor_filter()` deduplicates key hashes (via `HashSet`) before constructing the `xorf::Xor8` filter.
+
+**Rationale:** The same key can appear in multiple blocks within a single segment (e.g. old + new version during compaction). `xorf::Xor8::from()` panics on duplicate hashes. Deduplication is cheap and preserves correctness.
+
+**Implication:** `build_xor_filter` now allocates a temporary `HashSet<u64>` before building the filter. No API change.
+
+---
+
+## D18 — Error handling split: `get()` swallows, `fetch_segment()` propagates
+
+**Decision:** `TieredEngine::get()` returns `None` on non-retryable remote fetch errors (network unreachable, auth failure, 404). `TieredEngine::fetch_segment()` propagates the same errors as `Result::Err`.
+
+**Rationale:** `get()` is a point lookup where the caller expects an `Option`. Swallowing errors gracefully matches the "best effort" semantics of a tiered cache. `fetch_segment()` is an explicit operation where the caller must know if the segment is unavailable.
+
+**Implication:** Callers that need error details use `fetch_segment()` directly; casual `get()` callers get resilient behavior.
+
+---
+
+## D19 — Retry policy: transient errors only, 3 retries, exponential backoff
+
+**Decision:** `fetch_and_import()` and `upload_with_retry()` retry only on errors whose message contains "throttled", "timeout", or "503". Max 3 retries with backoff: 10ms, 20ms, 40ms.
+
+**Rationale:** Other errors (auth failure, 404, corrupted data) are permanent and should fail fast. Exponential backoff with jitter avoids thundering herd against object storage.
+
+**Implication:** The retry logic inspects error message strings (not typed variants). Future refactor may introduce a `RemoteError::is_transient()` method.
+
+---
+
+## D20 — WASM crate name: `edgestore-wasm`
+
+**Decision:** The WASM bindings crate is named `edgestore-wasm`, following the workspace naming convention (`edgestore-{suffix}`).
+
+**Rationale:** Consistent with `edgestore-repl`, `edgestore-tokio`, `edgestore-tier`, `edgestore-cli`.
+
+**Implication:** Published crate name on crates.io will be `edgestore-wasm`.
+
+---
+
+## D21 — Manifest JSON format: `serde_bytes` for base64-encoded binary keys
+
+**Decision:** `ImmutableEngine::export_manifest_json()` uses `serde_bytes` to encode `min_key`/`max_key` as base64 strings in the JSON manifest.
+
+**Rationale:** Segment bounds are binary (`Vec<u8>`). Base64 is the standard JSON-safe encoding. `serde_bytes` provides this automatically without custom serializers.
+
+**Implication:** Manifest consumers (WASM JS, serverless runtimes) must base64-decode `min_key`/`max_key` before use. The format is versioned (`format_version: 1`) for future evolution.
+
+---
+
 ## D15 — edgestore-tokio: write uses spawn_blocking, read uses Arc<AsyncReader>
 
 **Decision:** In the `edgestore-tokio` async wrapper crate: write operations (`put`, `delete`, `flush`) use `tokio::task::spawn_blocking` — serialized, correct for the single-writer constraint. Read operations (`get`, `range`, `prefix`) use `Arc<AsyncReader>` with `Arc<RwLock<BlockCache>>` — cache hits return without blocking the async thread; cache misses use `tokio::fs::read`. The `edgestore` core crate stays fully sync with no Tokio dependency.

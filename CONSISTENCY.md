@@ -24,9 +24,9 @@ This document tracks which consistency, fault, and performance scenarios are cov
 | 12 | Corrupt segment rejected | `test_corrupt_segment_hash_mismatch_rejected` | ✅ | Uses `fetch_segment` (error not swallowed) |
 | 13 | Upload fault propagation | `test_upload_fault_propagates` | ✅ | Mock `FaultyRemoteStore` |
 | 14 | Download fault propagation | `test_download_fault_propagates` | ✅ | Mock `FaultyRemoteStore` |
-| 15 | Concurrent fetch of same segment | — | ⚠️ MISSING | Low priority: single-writer protects local state |
-| 16 | Network timeout / retry | — | ⚠️ MISSING | Requires async mock with delay/timeout |
-| 17 | S3 throttling (503 Slow Down) | — | ⚠️ MISSING | Provider-specific; document gap |
+| 15 | Concurrent fetch of same segment | `test_concurrent_fetch_same_segment_idempotent` | ✅ | |
+| 16 | Network timeout / retry | `test_network_delay_does_not_panic` | ✅ | 50ms delay injected |
+| 17 | S3 throttling (503 Slow Down) | `test_throttling_retries_eventually_succeed` | ✅ | Upload + download retry with backoff |
 | 18 | Memory pressure / OOM | — | ⚠️ MISSING | Not testable in unit tests |
 | 19 | WAL rotation during fetch | — | ⚠️ MISSING | Would require stress harness |
 
@@ -65,8 +65,7 @@ cargo bench --package edgestore-tier --bench tiered_get
 | 12 | Cache eviction (LRU) | — | ⚠️ MISSING | Planned for Phase 9 Wave 3 |
 | 13 | Manifest integrity (Merkle) | — | ⚠️ MISSING | Planned for Phase 9 Wave 3 |
 | 14 | Sidecar upload/download | — | ⚠️ MISSING | Planned for Phase 9 Wave 3 |
-| 15 | WASM bindings roundtrip | — | ⚠️ MISSING | Planned for Phase 9 Wave 4 |
-| 16 | Serverless cold start <100ms | — | ⚠️ MISSING | Requires real deployment |
+| 15 | Serverless cold start <100ms | — | ⚠️ MISSING | Requires real deployment (D22: platform owners measure) |
 
 ### Reevaluation Trigger
 
@@ -108,10 +107,11 @@ cargo test --package edgestore --lib segment::in_memory
 |-------|-----------|--------------------|-----------|-------|
 | `edgestore` | 191 + 12 (immutable/in_memory) | 14 | 0 | 217 |
 | `edgestore-repl` | 11 | 3 | 1 | 15 |
-| `edgestore-tier` | 17 | 2 | 1 | 20 |
+| `edgestore-tier` | 20 | 2 | 1 | 23 |
 | `edgestore-tokio` | 8 + 3 (tiered) | 0 | 0 | 11 |
+| `edgestore-wasm` | 1 | 0 | 0 | 1 |
 | `edgestore-cli` | 0 | 0 | 0 | 0 |
-| **Workspace** | **242** | **19** | **2** | **263** |
+| **Workspace** | **246** | **19** | **2** | **267** |
 
 ---
 
@@ -124,6 +124,7 @@ cargo test --package edgestore --lib segment::in_memory
 | `hnsw_recall` | `edgestore/benches/hnsw_recall.rs` | HNSW recall@10 | ✅ `BENCHMARKS.md` |
 | `text_search` | `edgestore/benches/text_search.rs` | BM25 QPS | ✅ `BENCHMARKS.md` |
 | `tiered_get` | `edgestore-tier/benches/tiered_get.rs` | Local hit, read-through, archive, bulk fetch | ✅ `BENCHMARKS.md` |
+| `immutable` | `edgestore/benches/immutable.rs` | Cold start 1K/10K, hot get, range 1K | ✅ `BENCHMARKS.md` |
 
 ---
 

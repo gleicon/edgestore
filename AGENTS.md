@@ -6,7 +6,7 @@ Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, d
 
 **Status:** v1.1.1 (bugfix release — text search write amplification fix + incremental index + HNSW staleness detection + Rust 1.95.0 MSRV + FDP compilation fix).
 
-**Next:** Phase 9 (Read-Only Edge Engine) planned for v1.2 — `ImmutableEngine` for serverless / WASM. See `.planning/phases/09-readonly-edge/09-00-PLAN.md` and `SCALING.md`.
+**Next:** Phase 9 (Read-Only Edge Engine) planned for v1.2 — `ImmutableEngine` for serverless deployments via Rust. WASM bindings are out of scope (D22). See `.planning/phases/09-readonly-edge/09-00-PLAN.md` and `SCALING.md`.
 
 ## Architecture Constraints (non-negotiable)
 

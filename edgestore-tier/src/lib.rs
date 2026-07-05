@@ -63,6 +63,8 @@ pub struct TieredEngine {
     archived: Vec<ArchivedSegment>,
     /// Segments already fetched this session — avoid re-download.
     fetched: HashMap<[u8; 32], ()>,
+    /// When true, `archive_segments` also uploads `.idx`, `.xf`, and `.meta` sidecars.
+    upload_sidecars: bool,
 }
 
 impl TieredEngine {
@@ -73,7 +75,19 @@ impl TieredEngine {
             remote,
             archived: Vec::new(),
             fetched: HashMap::new(),
+            upload_sidecars: false,
         }
+    }
+
+    /// Enable or disable sidecar upload during `archive_segments`.
+    ///
+    /// When enabled, `archive_segments` uploads `.idx`, `.xf`, and `.meta` files
+    /// alongside each `.dat` segment. Sidecars let `ImmutableEngine` reconstruct
+    /// its in-memory index and filter without decompressing the full `.dat` file.
+    /// Requires the `RemoteStore` to implement `upload_aux`.
+    pub fn with_sidecars(mut self, enabled: bool) -> Self {
+        self.upload_sidecars = enabled;
+        self
     }
 
     /// Access the underlying local engine (e.g. for snapshots, metrics, compaction).
@@ -190,6 +204,10 @@ impl TieredEngine {
     /// `metas` is typically obtained from `engine.list_segment_metas()`. After upload,
     /// the caller may delete the local `.dat` files to reclaim space.
     /// The segment metadata (min/max key bounds) is recorded for future read-through.
+    ///
+    /// When `with_sidecars(true)` is set, also uploads `.idx`, `.xf`, and `.meta`
+    /// files alongside each `.dat`. Sidecar upload errors are logged but do not fail
+    /// the archive — the `.dat` alone is sufficient for correctness.
     pub fn archive_segments(&mut self, metas: &[edgestore::types::SegmentMeta]) -> Result<(), EdgestoreError> {
         let base = self.local.db_path().to_path_buf();
 
@@ -207,13 +225,24 @@ impl TieredEngine {
                 continue; // already archived / deleted
             }
 
-            // Upload to remote.
-            let data = std::fs::read(&dat_path).map_err(|e| {
-                EdgestoreError::Io(e)
-            })?;
-            self.remote.upload(&hash, &data).map_err(|e| {
-                EdgestoreError::ReplicationError(e.to_string())
-            })?;
+            let data = std::fs::read(&dat_path).map_err(EdgestoreError::Io)?;
+            self.upload_with_retry(&hash, &data)?;
+
+            if self.upload_sidecars {
+                for ext in &["idx", "xf", "meta"] {
+                    let sidecar_path = base.join(format!("segment-{:08}.{}", meta.segment_id, ext));
+                    if let Ok(bytes) = std::fs::read(&sidecar_path) {
+                        if let Err(e) = self.remote.upload_aux(&hash, ext, &bytes) {
+                            eprintln!(
+                                "[edgestore-tier] sidecar upload skipped for {}.{}: {}",
+                                hex_hash(&hash),
+                                ext,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
 
             // Record as archived.
             self.archived.push(ArchivedSegment {
@@ -263,38 +292,106 @@ impl TieredEngine {
         Ok(())
     }
 
-    /// Download and import a segment by hash.
-    fn fetch_and_import(&mut self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
-        let data = self.remote.download(hash).map_err(|e| {
-            EdgestoreError::ReplicationError(format!(
-                "download segment {}: {}",
-                hex_hash(hash),
-                e
-            ))
-        })?;
+    /// Upload a segment with exponential backoff retry.
+    /// Retries up to 3 times on transient errors.
+    fn upload_with_retry(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 10;
 
-        match self.local.import_segment(&data, hash)? {
-            ImportResult::Applied { keys_written, keys_skipped } => {
-                eprintln!(
-                    "[edgestore-tier] imported {} ({} written, {} skipped)",
-                    hex_hash(hash),
-                    keys_written,
-                    keys_skipped
-                );
-            }
-            ImportResult::Skipped => {
-                eprintln!("[edgestore-tier] segment {} already local", hex_hash(hash));
-            }
-            ImportResult::HashMismatch => {
-                return Err(EdgestoreError::ReplicationError(format!(
-                    "hash mismatch for segment {}",
-                    hex_hash(hash)
-                )));
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match self.remote.upload(hash, data) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    last_err = Some(e);
+                    if msg.contains("throttled") || msg.contains("timeout") || msg.contains("503") {
+                        if attempt < MAX_RETRIES {
+                            let delay = BASE_DELAY_MS * (1u64 << attempt);
+                            eprintln!(
+                                "[edgestore-tier] upload retry {} for {} after {} ms",
+                                attempt + 1,
+                                hex_hash(hash),
+                                delay
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                        }
+                    } else {
+                        break;
+                    }
+                }
             }
         }
 
-        self.fetched.insert(*hash, ());
-        Ok(())
+        Err(EdgestoreError::ReplicationError(format!(
+            "upload segment {} failed after {} retries: {}",
+            hex_hash(hash),
+            MAX_RETRIES,
+            last_err.map(|e| e.to_string()).unwrap_or_default()
+        )))
+    }
+
+    /// Download and import a segment by hash with exponential backoff retry.
+    /// Retries up to 3 times on transient errors (e.g. throttling, timeout).
+    fn fetch_and_import(&mut self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 10;
+
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match self.remote.download(hash) {
+                Ok(data) => {
+                    match self.local.import_segment(&data, hash)? {
+                        ImportResult::Applied { keys_written, keys_skipped } => {
+                            eprintln!(
+                                "[edgestore-tier] imported {} ({} written, {} skipped)",
+                                hex_hash(hash),
+                                keys_written,
+                                keys_skipped
+                            );
+                        }
+                        ImportResult::Skipped => {
+                            eprintln!("[edgestore-tier] segment {} already local", hex_hash(hash));
+                        }
+                        ImportResult::HashMismatch => {
+                            return Err(EdgestoreError::ReplicationError(format!(
+                                "hash mismatch for segment {}",
+                                hex_hash(hash)
+                            )));
+                        }
+                    }
+                    self.fetched.insert(*hash, ());
+                    return Ok(());
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    last_err = Some(e);
+                    // Only retry on transient-looking errors.
+                    if msg.contains("throttled") || msg.contains("timeout") || msg.contains("503") {
+                        if attempt < MAX_RETRIES {
+                            let delay = BASE_DELAY_MS * (1u64 << attempt);
+                            eprintln!(
+                                "[edgestore-tier] retry {} for {} after {} ms",
+                                attempt + 1,
+                                hex_hash(hash),
+                                delay
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                        }
+                    } else {
+                        // Non-transient error: fail immediately.
+                        break;
+                    }
+                }
+            }
+        }
+
+        Err(EdgestoreError::ReplicationError(format!(
+            "download segment {} failed after {} retries: {}",
+            hex_hash(hash),
+            MAX_RETRIES,
+            last_err.map(|e| e.to_string()).unwrap_or_default()
+        )))
     }
 
     /// Fetch every archived segment into local storage.
@@ -869,5 +966,274 @@ mod tests {
         let hash = tiered.archived_segments()[0].hash;
         let result = fresh_tiered.fetch_segment(&hash);
         assert!(result.is_err(), "download fault must propagate");
+    }
+
+    #[test]
+    fn test_concurrent_fetch_same_segment_idempotent() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+        let archived = tiered.archived_segments();
+        let hash = archived[0].hash;
+
+        // Two fresh engines on separate local dirs fetch the same segment concurrently.
+        let fresh_local_a = Engine::open(EdgestoreConfig::new(local_dir.path().join("concurrent_a"))).unwrap();
+        let fresh_local_b = Engine::open(EdgestoreConfig::new(local_dir.path().join("concurrent_b"))).unwrap();
+        let remote_a = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let remote_b = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+
+        let mut tiered_a = TieredEngine::new(fresh_local_a, Box::new(remote_a));
+        let mut tiered_b = TieredEngine::new(fresh_local_b, Box::new(remote_b));
+        tiered_a.register_archived(archived.clone());
+        tiered_b.register_archived(archived.clone());
+
+        use std::thread;
+        let handle_a = thread::spawn(move || {
+            tiered_a.fetch_segment(&hash).unwrap();
+            tiered_a.get(b"ns", b"key").unwrap()
+        });
+        let handle_b = thread::spawn(move || {
+            tiered_b.fetch_segment(&hash).unwrap();
+            tiered_b.get(b"ns", b"key").unwrap()
+        });
+
+        let got_a = handle_a.join().unwrap();
+        let got_b = handle_b.join().unwrap();
+        assert_eq!(got_a, Some(b"val".to_vec()));
+        assert_eq!(got_b, Some(b"val".to_vec()));
+    }
+
+    #[test]
+    fn test_archive_with_sidecars_uploads_aux_files() {
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+
+        let mut tiered = TieredEngine::new(local, Box::new(remote)).with_sidecars(true);
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let remote_files: Vec<String> = std::fs::read_dir(remote_dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        let has_ext = |ext: &str| remote_files.iter().any(|f| f.ends_with(ext));
+        assert!(has_ext(".seg"), ".dat (as .seg) must be present");
+        assert!(has_ext(".idx"), ".idx sidecar must be present");
+        assert!(has_ext(".xf"), ".xf sidecar must be present");
+        assert!(has_ext(".meta"), ".meta sidecar must be present");
+    }
+
+    #[test]
+    fn test_archive_without_sidecars_skips_aux_files() {
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+
+        // Default: sidecars disabled.
+        let mut tiered = TieredEngine::new(local, Box::new(remote));
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let remote_files: Vec<String> = std::fs::read_dir(remote_dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        let has_ext = |ext: &str| remote_files.iter().any(|f| f.ends_with(ext));
+        assert!(has_ext(".seg"), ".dat (as .seg) must be present");
+        assert!(!has_ext(".idx"), ".idx sidecar must NOT be present without with_sidecars");
+        assert!(!has_ext(".xf"), ".xf sidecar must NOT be present without with_sidecars");
+        assert!(!has_ext(".meta"), ".meta sidecar must NOT be present without with_sidecars");
+    }
+
+    #[test]
+    fn test_sidecar_download_roundtrip_via_remote_store() {
+        let (_dir, remote_dir, _tiered) = make_tiered();
+
+        let local = Engine::open(EdgestoreConfig::new(
+            remote_dir.path().join("arch_local"),
+        ))
+        .unwrap();
+        let remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let mut tiered = TieredEngine::new(local, Box::new(remote)).with_sidecars(true);
+
+        tiered.put(b"ns", b"sidecar_key", b"sidecar_val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let hash: [u8; 32] = metas[0].segment_hash.as_slice().try_into().unwrap();
+        let reader = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+
+        let idx_bytes = reader.download_aux(&hash, "idx");
+        let xf_bytes = reader.download_aux(&hash, "xf");
+        let meta_bytes = reader.download_aux(&hash, "meta");
+
+        assert!(idx_bytes.is_ok(), "idx sidecar downloadable: {:?}", idx_bytes.err());
+        assert!(xf_bytes.is_ok(), "xf sidecar downloadable");
+        assert!(meta_bytes.is_ok(), "meta sidecar downloadable");
+        assert!(!idx_bytes.unwrap().is_empty(), "idx sidecar non-empty");
+    }
+
+    #[test]
+    fn test_sidecars_enabled_but_upload_aux_unsupported_archive_still_succeeds() {
+        // A store whose upload_aux returns Err (the default impl) must not break
+        // archive_segments — the .dat upload is what matters for correctness.
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        // Wrap FilesystemRemoteStore to override upload_aux with the default Err behavior.
+        struct NoAuxStore(FilesystemRemoteStore);
+        impl RemoteStore for NoAuxStore {
+            fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
+                self.0.upload(hash, data)
+            }
+            fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
+                self.0.download(hash)
+            }
+            fn list(&self) -> Result<Vec<[u8; 32]>, EdgestoreError> {
+                self.0.list()
+            }
+            fn delete(&self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
+                self.0.delete(hash)
+            }
+            // upload_aux intentionally not overridden — uses default Err impl.
+        }
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let remote = NoAuxStore(
+            FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap(),
+        );
+        let mut tiered = TieredEngine::new(local, Box::new(remote)).with_sidecars(true);
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+        let metas = tiered.local().list_segment_metas();
+
+        // Must succeed even though upload_aux will return Err for every sidecar.
+        tiered.archive_segments(&metas).expect("archive must succeed despite upload_aux Err");
+        assert!(!tiered.archived_segments().is_empty(), "segment recorded as archived");
+
+        // .dat is present in remote; sidecars are absent.
+        let remote_files: Vec<String> = std::fs::read_dir(remote_dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(remote_files.iter().any(|f| f.ends_with(".seg")), ".dat must be archived");
+        assert!(!remote_files.iter().any(|f| f.ends_with(".idx")), ".idx must be absent");
+    }
+
+    #[test]
+    fn test_network_delay_does_not_panic() {
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let remote = FaultyRemoteStore::new(inner_remote);
+        remote.delay_ms.store(50, std::sync::atomic::Ordering::SeqCst);
+
+        let mut tiered = TieredEngine::new(local, Box::new(remote));
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        let start = std::time::Instant::now();
+        tiered.archive_segments(&metas).unwrap();
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        assert!(elapsed >= 50, "delay should have been applied: {} ms", elapsed);
+    }
+
+    #[test]
+    fn test_throttling_retries_eventually_succeed() {
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let remote = ThrottlingRemoteStore::new(inner_remote, 2); // fail first 2
+
+        let mut tiered = TieredEngine::new(local, Box::new(remote));
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("throttle"))).unwrap();
+        let fresh_inner = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_remote = ThrottlingRemoteStore::new(fresh_inner, 2);
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // get() → fetch_and_import with retry. 3rd attempt succeeds.
+        let got = fresh_tiered.get(b"ns", b"key").unwrap();
+        assert_eq!(got, Some(b"val".to_vec()), "retry eventually succeeds");
+    }
+
+    // ── Throttling mock: fails first N calls, then succeeds ────────────────────
+
+    struct ThrottlingRemoteStore {
+        inner: FilesystemRemoteStore,
+        fail_count: AtomicU64,
+        max_fails: u64,
+    }
+
+    impl ThrottlingRemoteStore {
+        fn new(inner: FilesystemRemoteStore, max_fails: u64) -> Self {
+            Self { inner, fail_count: AtomicU64::new(0), max_fails }
+        }
+
+        fn try_inner<F, T>(&self, f: F) -> Result<T, EdgestoreError>
+        where F: FnOnce(&FilesystemRemoteStore) -> Result<T, EdgestoreError>
+        {
+            let count = self.fail_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count < self.max_fails {
+                return Err(EdgestoreError::ReplicationError(
+                    format!("throttled: 503 Slow Down (attempt {})", count + 1)
+                ));
+            }
+            f(&self.inner)
+        }
+    }
+
+    impl RemoteStore for ThrottlingRemoteStore {
+        fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
+            self.try_inner(|inner| inner.upload(hash, data))
+        }
+
+        fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
+            self.try_inner(|inner| inner.download(hash))
+        }
+
+        fn list(&self) -> Result<Vec<[u8; 32]>, EdgestoreError> {
+            self.inner.list()
+        }
+
+        fn delete(&self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
+            self.inner.delete(hash)
+        }
     }
 }

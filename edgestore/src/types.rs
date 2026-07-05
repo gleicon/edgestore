@@ -135,6 +135,23 @@ pub fn encode_key(ns: &[u8], key: &[u8]) -> Vec<u8> {
     buf
 }
 
+/// Compute the exclusive upper bound for a prefix range scan.
+///
+/// Scans right-to-left for the first byte below `0xFF`, increments it, and
+/// truncates the slice. Returns `None` when every byte is `0xFF` (no finite
+/// upper bound exists in the byte-string ordering).
+pub fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
+    let mut end = prefix.to_vec();
+    for i in (0..end.len()).rev() {
+        if end[i] < 0xFF {
+            end[i] += 1;
+            end.truncate(i + 1);
+            return Some(end);
+        }
+    }
+    None
+}
+
 pub(crate) fn decode_key(encoded: &[u8]) -> Result<(Vec<u8>, Vec<u8>), EdgestoreError> {
     if encoded.len() < 2 {
         return Err(EdgestoreError::CorruptKey);

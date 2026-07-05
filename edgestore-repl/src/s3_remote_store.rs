@@ -157,6 +157,20 @@ impl S3RemoteStore {
         format!("{}segments/{}.dat", self.prefix, Self::hash_hex(hash))
     }
 
+    fn aux_key(&self, hash: &[u8; 32], ext: &str) -> String {
+        format!("{}segments/{}.{}", self.prefix, Self::hash_hex(hash), ext)
+    }
+
+    fn validate_ext(ext: &str) -> Result<(), EdgestoreError> {
+        if ext.is_empty() || !ext.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Err(EdgestoreError::InvalidOperation(format!(
+                "invalid sidecar ext {:?}: only lowercase ASCII letters allowed",
+                ext
+            )));
+        }
+        Ok(())
+    }
+
     /// Run an async future to completion.
     ///
     /// If the caller is already inside a Tokio runtime this uses
@@ -315,6 +329,60 @@ impl RemoteStore for S3RemoteStore {
         })?;
 
         Ok(())
+    }
+
+    fn upload_aux(
+        &self,
+        hash: &[u8; 32],
+        ext: &str,
+        data: &[u8],
+    ) -> Result<(), EdgestoreError> {
+        Self::validate_ext(ext)?;
+        let key = self.aux_key(hash, ext);
+        self.block_on(async {
+            self.client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .body(ByteStream::from(data.to_vec()))
+                .send()
+                .await
+                .map_err(|e| {
+                    EdgestoreError::ReplicationError(format!(
+                        "S3 upload_aux failed for {key}: {e}"
+                    ))
+                })
+        })?;
+        Ok(())
+    }
+
+    fn download_aux(&self, hash: &[u8; 32], ext: &str) -> Result<Vec<u8>, EdgestoreError> {
+        Self::validate_ext(ext)?;
+        let key = self.aux_key(hash, ext);
+        self.block_on(async {
+            let output = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| {
+                    EdgestoreError::ReplicationError(format!(
+                        "S3 download_aux failed for {key}: {e}"
+                    ))
+                })?;
+            output
+                .body
+                .collect()
+                .await
+                .map(|d| d.into_bytes().to_vec())
+                .map_err(|e| {
+                    EdgestoreError::ReplicationError(format!(
+                        "S3 body stream error for {key}: {e}"
+                    ))
+                })
+        })
     }
 }
 

@@ -263,10 +263,10 @@ Plans:
 **Plans:** 5 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — `InMemorySegmentReader`: parse `.dat` from memory, build sparse index and xor filter
-- [ ] 09-02-PLAN.md — `ImmutableEngine`: K-way merge `get()`/`range()`/`prefix()`, lazy vs eager modes
-- [ ] 09-03-PLAN.md — Manifest format (single JSON object), sidecar upload/download, `RemoteStore` extension
-- [ ] 09-04-PLAN.md — WASM bindings (`wasm-bindgen`), serverless runtime integration, runtime cache API
+- [x] 09-01-PLAN.md — `InMemorySegmentReader`: parse `.dat` from memory, build sparse index and xor filter
+- [x] 09-02-PLAN.md — `ImmutableEngine`: K-way merge `get()`/`range()`/`prefix()`, lazy vs eager modes
+- [~] 09-03-PLAN.md — Manifest format (single JSON object), sidecar upload/download, `RemoteStore` extension
+- [ ] 09-04-PLAN.md — WASM bindings (`wasm-bindgen`), serverless runtime integration, runtime cache API  **→ Deferred to platform owners (D22). Not in core scope.**
 - [ ] 09-05-PLAN.md — Integration tests: serverless simulation, cost/latency benchmarks
 
 **Success Criteria:**

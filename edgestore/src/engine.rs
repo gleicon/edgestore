@@ -8,7 +8,7 @@ use crate::error::EdgestoreError;
 use crate::memtable::MemTable;
 use crate::metrics::{EngineMetrics, MetricsSnapshot};
 use crate::replication::SegmentRef;
-use crate::types::{decode_key, encode_key, Lsn, MemEntry, Operation, WalRecord};
+use crate::types::{decode_key, encode_key, prefix_upper_bound, Lsn, MemEntry, Operation, WalRecord};
 use crate::vector::api::{vector_namespace, VectorEngine};
 use crate::vector::distance::Metric;
 use crate::vector::hnsw::HnswIndex;
@@ -23,19 +23,6 @@ fn next_wal_path(db_path: &Path, lsn: Lsn) -> PathBuf {
 /// Alias to reduce type-complexity warnings on public KV scan APIs.
 type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
 
-/// Compute exclusive upper bound for a prefix scan: increment last non-0xFF byte.
-fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
-    let mut end = prefix.to_vec();
-    for i in (0..end.len()).rev() {
-        if end[i] < 0xFF {
-            end[i] += 1;
-            end.truncate(i + 1);
-            return Some(end);
-        }
-        end[i] = 0;
-    }
-    None
-}
 
 const AVG_ENTRY_SIZE_ESTIMATE: u64 = 256;
 

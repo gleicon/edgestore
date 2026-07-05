@@ -39,6 +39,16 @@ impl FilesystemRemoteStore {
     fn seg_path(&self, hash: &[u8; 32]) -> PathBuf {
         self.base_dir.join(format!("{}.seg", Self::hash_hex(hash)))
     }
+
+    fn aux_path(&self, hash: &[u8; 32], ext: &str) -> Result<PathBuf, EdgestoreError> {
+        if ext.is_empty() || !ext.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Err(EdgestoreError::InvalidOperation(format!(
+                "invalid sidecar ext {:?}: only lowercase ASCII letters allowed",
+                ext
+            )));
+        }
+        Ok(self.base_dir.join(format!("{}.{}", Self::hash_hex(hash), ext)))
+    }
 }
 
 impl RemoteStore for FilesystemRemoteStore {
@@ -134,6 +144,36 @@ impl RemoteStore for FilesystemRemoteStore {
             Err(e) => Err(EdgestoreError::ReplicationError(e.to_string())),
         }
     }
+
+    fn upload_aux(
+        &self,
+        hash: &[u8; 32],
+        ext: &str,
+        data: &[u8],
+    ) -> Result<(), EdgestoreError> {
+        let dest = self.aux_path(hash, ext)?;
+        if dest.exists() {
+            return Ok(());
+        }
+        let tmp = self.base_dir.join(format!("{}.{}.tmp", Self::hash_hex(hash), ext));
+        std::fs::write(&tmp, data).map_err(|e| EdgestoreError::ReplicationError(e.to_string()))?;
+        std::fs::rename(&tmp, &dest).map_err(|e| EdgestoreError::ReplicationError(e.to_string()))
+    }
+
+    fn download_aux(&self, hash: &[u8; 32], ext: &str) -> Result<Vec<u8>, EdgestoreError> {
+        let path = self.aux_path(hash, ext)?;
+        std::fs::read(&path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                EdgestoreError::ReplicationError(format!(
+                    "sidecar not found: {}.{}",
+                    Self::hash_hex(hash),
+                    ext
+                ))
+            } else {
+                EdgestoreError::ReplicationError(e.to_string())
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -214,5 +254,55 @@ mod tests {
 
         let result = store.download(&hash);
         assert!(result.is_err(), "download of non-existent hash should return Err");
+    }
+
+    #[test]
+    fn test_upload_aux_download_aux_roundtrip() {
+        let (_dir, store) = make_store();
+        let hash = [0x77u8; 32];
+
+        store.upload_aux(&hash, "idx", b"index-data").expect("upload_aux idx");
+        store.upload_aux(&hash, "xf", b"filter-data").expect("upload_aux xf");
+        store.upload_aux(&hash, "meta", b"meta-data").expect("upload_aux meta");
+
+        assert_eq!(store.download_aux(&hash, "idx").unwrap(), b"index-data");
+        assert_eq!(store.download_aux(&hash, "xf").unwrap(), b"filter-data");
+        assert_eq!(store.download_aux(&hash, "meta").unwrap(), b"meta-data");
+    }
+
+    #[test]
+    fn test_upload_aux_idempotent() {
+        let (_dir, store) = make_store();
+        let hash = [0x88u8; 32];
+
+        store.upload_aux(&hash, "idx", b"v1").expect("first upload_aux");
+        store.upload_aux(&hash, "idx", b"v2").expect("second upload_aux idempotent");
+
+        // Content-addressed: first upload wins.
+        assert_eq!(store.download_aux(&hash, "idx").unwrap(), b"v1");
+    }
+
+    #[test]
+    fn test_download_aux_not_found() {
+        let (_dir, store) = make_store();
+        let hash = [0x99u8; 32];
+
+        let result = store.download_aux(&hash, "idx");
+        assert!(result.is_err(), "download_aux of non-existent sidecar should Err");
+    }
+
+    #[test]
+    fn test_upload_aux_rejects_path_traversal_ext() {
+        let (_dir, store) = make_store();
+        let hash = [0xAAu8; 32];
+
+        for bad_ext in &["../etc/passwd", "idx/../../shadow", "IDX", "idx.bak", "", "idx\0evil"] {
+            let result = store.upload_aux(&hash, bad_ext, b"data");
+            assert!(
+                result.is_err(),
+                "upload_aux must reject ext {:?}",
+                bad_ext
+            );
+        }
     }
 }

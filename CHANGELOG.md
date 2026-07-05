@@ -7,8 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-07-05
+
 ### Added
 
+- **`ImmutableEngine`** (`edgestore/src/immutable.rs`) — read-only in-memory engine for serverless, edge, and WASM environments (Phase 9). No WAL, no memtable, no local filesystem. Initializes from downloaded segment bytes and serves `get`, `range`, and `prefix` queries entirely in-memory with LWW merge across segments.
+  - `ImmutableEngine::from_readers(readers)` — construct from pre-built `InMemorySegmentReader` instances.
+  - `ImmutableEngine::from_segment_bytes(segments)` — eager-init from `(SegmentMeta, Vec<u8>)` pairs; parses all segments upfront.
+  - `ImmutableEngine::export_manifest_json()` — emit a single JSON manifest (format v1) describing all segments by BLAKE3 hash, key bounds, LSN range, and record count. `min_key`/`max_key` are hex-encoded strings.
+  - K-way BinaryHeap merge for `range()` and `prefix()` — correct LWW deduplication across any number of segments with deletes filtered.
+  - 8 unit tests in `immutable.rs`: single-segment get, absent-key, LWW across two segments, sorted-deduped range, prefix scan, delete tombstone filtered, `from_segment_bytes`, 10K-record large segment.
+- **`InMemorySegmentReader`** (`edgestore/src/segment/in_memory.rs`) — in-memory variant of `SegmentReader`. Parses `.dat` bytes (file header → ZSTD blocks → sparse index + xor filter) without filesystem I/O after init. Exported from `edgestore` root.
+- **`RemoteStore::upload_aux` / `download_aux`** — sidecar file support added to the `RemoteStore` trait. Stores per-segment auxiliary files (`"idx"`, `"xf"`, `"meta"`) alongside `.dat` blobs. Default implementations return `Err(InvalidOperation)` so all existing `RemoteStore` implementations compile unchanged without modification.
+  - `FilesystemRemoteStore` — implements both methods; keys as `{hash_hex}.{ext}` files; atomic write via `.{ext}.tmp` rename.
+  - `S3RemoteStore` — implements both methods; S3 key `{prefix}segments/{hash_hex}.{ext}`.
+- **`TieredEngine::with_sidecars(bool)`** — builder method enabling sidecar upload during `archive_segments`. When `true`, uploads `.idx`, `.xf`, and `.meta` alongside each `.dat` segment. Sidecar upload errors are logged but do not fail the archive — the `.dat` is sufficient for correctness.
+- **Serverless benchmarks** (`edgestore/benches/immutable.rs`):
+  - `immutable_cold_start_1k` — init + first `get` from 1K-record segment.
+  - `immutable_cold_start_10k` — init + first `get` from 10K-record segment.
+  - `immutable_get_hot` — warm `get` on pre-initialized 1K engine.
+  - `immutable_range_1k` — range scan across all 1K records.
+  - `immutable_multi_segment_merge` — K-way merge over 5 segments × 200 records each.
 - **`TieredEngine::fetch_segment()`** — selective download+import of a single archived segment by hash. Enables callers to rehydrate only the segments they need instead of calling `fetch_all_archived()`.
 - **`TieredEngine::fetch_archived_overlapping()`** — selective range-aware warm-up. Downloads only archived segments whose `[min_key, max_key]` bounds overlap a given query range. This is the key primitive for range-query-shaped workloads (e.g. time-series / log ingestion) that cannot afford to fully rehydrate before every scan.
 - **`AsyncTieredEngine`** (`edgestore-tokio/src/tiered.rs`, feature-gated behind `tier`). Async wrapper around `TieredEngine` with the same `spawn_blocking` pattern as `AsyncEngine`. Includes `fetch_archived_overlapping()` for async callers.

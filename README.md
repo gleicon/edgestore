@@ -103,6 +103,64 @@ edgestore-repl = { version = "1.0", features = ["s3"] }
 
 Minimum supported Rust version: **1.95.0**.
 
+---
+
+## Using S3
+
+Enable the `s3` feature on `edgestore-repl`:
+
+```toml
+[dependencies]
+edgestore-repl = { version = "1.0", features = ["s3"] }
+```
+
+Create an `S3RemoteStore` and use it with the `RemoteStore` trait:
+
+```rust
+use edgestore::RemoteStore;
+use edgestore_repl::S3RemoteStore;
+
+let store = S3RemoteStore::new(
+    "my-bucket",           // S3 bucket name
+    Some("mydb/"),         // optional key prefix
+    None,                  // None for AWS; Some("http://localhost:4566") for LocalStack
+).expect("S3RemoteStore::new");
+
+// upload / download / list / delete via the trait
+store.upload(&hash, &data)?;
+let bytes = store.download(&hash)?;
+```
+
+### S3 path layout
+
+Segments are stored as:
+
+```
+s3://{bucket}/{prefix}segments/{blake3_hash_hex}.dat
+```
+
+`{blake3_hash_hex}` is the 64-character lowercase hex encoding of the 32-byte BLAKE3 hash.
+
+### Environment variables
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `AWS_ACCESS_KEY_ID` | AWS access key | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key | `...` |
+| `AWS_DEFAULT_REGION` | AWS region | `us-east-1` |
+| `EDGESTORE_S3_ENDPOINT_URL` | Custom endpoint (LocalStack, MinIO) | `http://localhost:4566` |
+| `EDGESTORE_S3_BUCKET` | Bucket name for tests | `edgestore-test` |
+
+### LocalStack testing
+
+```bash
+make s3-test
+```
+
+This starts a LocalStack container, runs all S3 integration tests, and tears it down.
+
+---
+
 ### CLI Installation
 
 The `edgestore-cli` administrative tool can be installed from source:

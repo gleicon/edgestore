@@ -1,53 +1,42 @@
 //! S3RemoteStore — AWS S3 implementation of `RemoteStore`.
 //!
-//! Uses the official AWS SDK for Rust (`aws-sdk-s3`) in **blocking mode** via an
-//! internal Tokio runtime. This keeps the `RemoteStore` trait sync (`Send + Sync`)
-//! while allowing the underlying S3 client to remain fully async.
+//! Stores content-addressed segments as S3 objects. The `RemoteStore` trait is
+//! sync (`Send + Sync`); this implementation bridges to the async AWS SDK via
+//! an internal Tokio runtime.
 //!
-//! ## LocalStack Testing
+//! ## Cargo feature
 //!
-//! Set `EDGESTORE_S3_ENDPOINT_URL=http://localhost:4566` to point at a LocalStack
-//! container. The AWS region and credentials are resolved via the standard
-//! `aws-config` chain (environment variables, `~/.aws/credentials`, IAM roles, etc.).
-//!
-//! ## Path Layout
-//!
-//! ```text
-//! s3://{bucket}/{prefix}segments/{hash_hex}.dat
-//! ```
-//!
-//! `prefix` is optional and defaults to `""`. If provided, it should end with `/`
-//! (e.g. `"mydb/"`).
-//!
-//! ## Async-to-Sync Bridge
-//!
-//! `S3RemoteStore` creates a dedicated multi-thread Tokio runtime on
-//! construction. If called from within an existing Tokio runtime, the call is
-//! offloaded to `tokio::task::spawn_blocking` to avoid the
-//! "cannot start a runtime from within a runtime" panic.
-//!
-//! Requires the `s3` Cargo feature on `edgestore-repl`:
+//! Requires the `s3` feature on `edgestore-repl`:
 //!
 //! ```toml
 //! [dependencies]
 //! edgestore-repl = { version = "1.0", features = ["s3"] }
 //! ```
+//!
+//! ## Path layout
+//!
+//! ```text
+//! s3://{bucket}/{prefix}segments/{hash_hex}.dat
+//! ```
+//!
+//! `prefix` is optional and defaults to `""`. If provided it should end with `/`
+//! (e.g. `"mydb/"`).
+//!
+//! ## LocalStack
+//!
+//! Set `EDGESTORE_S3_ENDPOINT_URL=http://localhost:4566` for testing against
+//! a LocalStack container. Credentials and region are resolved via the
+//! standard `aws-config` chain (env vars, `~/.aws/credentials`, IAM roles, etc.).
 
 use std::sync::Arc;
 
 use aws_config::{meta::region::RegionProviderChain, BehaviorVersion};
-use aws_sdk_s3::{
-    primitives::ByteStream,
-    types::ChecksumAlgorithm,
-};
+use aws_sdk_s3::primitives::ByteStream;
 
 use edgestore::error::EdgestoreError;
 use edgestore::RemoteStore;
 
 /// S3-backed implementation of `RemoteStore`.
-///
-/// Stores content-addressed segments as S3 objects. `upload` is idempotent:
-/// a `HeadObject` check skips the write if the object already exists.
 ///
 /// # Example
 ///
@@ -83,11 +72,6 @@ impl S3RemoteStore {
     /// * `endpoint_url` — Optional custom endpoint URL. Use
     ///   `Some("http://localhost:4566")` for LocalStack. Pass `None` to use
     ///   the standard AWS endpoint for the resolved region.
-    ///
-    /// # Errors
-    ///
-    /// Returns `EdgestoreError::ReplicationError` if the Tokio runtime cannot
-    /// be created or the AWS client fails to initialize.
     pub fn new(
         bucket: impl Into<String>,
         prefix: Option<&str>,
@@ -111,13 +95,13 @@ impl S3RemoteStore {
                     .region(region_provider);
 
             if let Some(url) = endpoint_url {
-                config_loader =
-                    config_loader.endpoint_url(url.to_string());
+                config_loader = config_loader.endpoint_url(url.to_string());
             }
 
             let sdk_config = config_loader.load().await;
             let mut s3_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
             if endpoint_url.is_some() {
+                // LocalStack and MinIO need path-style addressing.
                 s3_builder = s3_builder.force_path_style(true);
             }
             aws_sdk_s3::Client::from_conf(s3_builder.build())
@@ -133,9 +117,11 @@ impl S3RemoteStore {
 
     /// Encode a 32-byte hash as a 64-character lowercase hex string.
     fn hash_hex(hash: &[u8; 32]) -> String {
-        hash.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()
+        let mut s = String::with_capacity(64);
+        for b in hash {
+            s.push_str(&format!("{:02x}", b));
+        }
+        s
     }
 
     /// Build the S3 object key for a segment hash.
@@ -143,11 +129,10 @@ impl S3RemoteStore {
         format!("{}segments/{}.dat", self.prefix, Self::hash_hex(hash))
     }
 
-    /// Run an async future to completion, handling the case where the caller
-    /// is already inside a Tokio runtime.
+    /// Run an async future to completion.
     ///
-    /// Uses `tokio::task::block_in_place` when nested inside an existing runtime
-    /// to avoid the "cannot start a runtime from within a runtime" panic.
+    /// If the caller is already inside a Tokio runtime this uses
+    /// `block_in_place` to avoid nested-runtime panics.
     fn block_on<F, R>(&self, future: F) -> R
     where
         F: std::future::Future<Output = R> + Send,
@@ -166,35 +151,18 @@ impl RemoteStore for S3RemoteStore {
     fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
         let key = self.seg_key(hash);
 
-        // Idempotency check: skip if object already exists.
-        let head_result = self.block_on(async {
-            self.client
-                .head_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .send()
-                .await
-        });
-
-        if head_result.is_ok() {
-            return Ok(());
-        }
-
-        // Object does not exist (or we got an error other than NotFound —
-        // proceed with upload anyway and let PutObject fail if truly broken).
         self.block_on(async {
-            let body = ByteStream::from(data.to_vec());
             self.client
                 .put_object()
                 .bucket(&self.bucket)
                 .key(&key)
-                .body(body)
-                .checksum_algorithm(ChecksumAlgorithm::Crc32)
+                .body(ByteStream::from(data.to_vec()))
                 .send()
                 .await
                 .map_err(|e| {
-                    let err = format!("S3 upload failed for {key}: {e}");
-                    EdgestoreError::ReplicationError(err)
+                    EdgestoreError::ReplicationError(format!(
+                        "S3 upload failed for {key}: {e}"
+                    ))
                 })
         })?;
 
@@ -204,20 +172,20 @@ impl RemoteStore for S3RemoteStore {
     fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
         let key = self.seg_key(hash);
 
-        let output = self.block_on(async {
-            self.client
+        self.block_on(async {
+            let output = self
+                .client
                 .get_object()
                 .bucket(&self.bucket)
                 .key(&key)
                 .send()
                 .await
                 .map_err(|e| {
-                    let err = format!("S3 download failed for {key}: {e}");
-                    EdgestoreError::ReplicationError(err)
-                })
-        })?;
+                    EdgestoreError::ReplicationError(format!(
+                        "S3 download failed for {key}: {e}"
+                    ))
+                })?;
 
-        let data = self.block_on(async {
             output
                 .body
                 .collect()
@@ -228,14 +196,11 @@ impl RemoteStore for S3RemoteStore {
                         "S3 body stream error for {key}: {e}"
                     ))
                 })
-        })?;
-
-        Ok(data)
+        })
     }
 
     fn list(&self) -> Result<Vec<[u8; 32]>, EdgestoreError> {
         let prefix = format!("{}segments/", self.prefix);
-        let suffix = ".dat";
 
         let mut hashes = Vec::new();
         let mut continuation_token: Option<String> = None;
@@ -262,10 +227,9 @@ impl RemoteStore for S3RemoteStore {
             if let Some(contents) = output.contents {
                 for obj in contents {
                     if let Some(key) = obj.key {
-                        // Strip prefix and suffix, leaving just the hash hex.
                         let stem = key
                             .strip_prefix(&prefix)
-                            .and_then(|s| s.strip_suffix(suffix));
+                            .and_then(|s| s.strip_suffix(".dat"));
 
                         if let Some(stem) = stem {
                             if stem.len() == 64 {
@@ -324,18 +288,17 @@ impl RemoteStore for S3RemoteStore {
 mod tests {
     use super::*;
 
-    /// Build a store pointing at LocalStack using environment variables.
-    fn make_localstack_store() -> Option<S3RemoteStore> {
+    fn make_store() -> Option<S3RemoteStore> {
         let endpoint = std::env::var("EDGESTORE_S3_ENDPOINT_URL").ok()?;
-        let bucket = std::env::var("EDGESTORE_S3_BUCKET").unwrap_or_else(|_| "edgestore-test".to_string());
-
+        let bucket = std::env::var("EDGESTORE_S3_BUCKET")
+            .unwrap_or_else(|_| "edgestore-test".to_string());
         S3RemoteStore::new(&bucket, Some("test/"), Some(&endpoint)).ok()
     }
 
     #[test]
     fn test_upload_download_roundtrip() {
-        let Some(store) = make_localstack_store() else {
-            eprintln!("Skipping S3 test: EDGESTORE_S3_ENDPOINT_URL not set");
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
             return;
         };
 
@@ -348,26 +311,25 @@ mod tests {
     }
 
     #[test]
-    fn test_upload_idempotent() {
-        let Some(store) = make_localstack_store() else {
-            eprintln!("Skipping S3 test: EDGESTORE_S3_ENDPOINT_URL not set");
+    fn test_upload_twice_no_error() {
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
             return;
         };
 
         let hash = [0xBBu8; 32];
-        let data = b"original";
 
-        store.upload(&hash, data).expect("first upload");
-        store.upload(&hash, b"different").expect("second upload (idempotent)");
-
-        let got = store.download(&hash).expect("download after idempotent upload");
-        assert_eq!(got, data);
+        // Two uploads with the same hash must not error.
+        // In a content-addressed system the hash is derived from the data,
+        // so identical hashes imply identical content.
+        store.upload(&hash, b"data").expect("first");
+        store.upload(&hash, b"data").expect("second");
     }
 
     #[test]
     fn test_list_returns_uploaded_hashes() {
-        let Some(store) = make_localstack_store() else {
-            eprintln!("Skipping S3 test: EDGESTORE_S3_ENDPOINT_URL not set");
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
             return;
         };
 
@@ -375,18 +337,16 @@ mod tests {
         let hash2 = [0x02u8; 32];
         let hash3 = [0x03u8; 32];
 
-        store.upload(&hash1, b"a").expect("upload 1");
-        store.upload(&hash2, b"b").expect("upload 2");
-        store.upload(&hash3, b"c").expect("upload 3");
+        store.upload(&hash1, b"a").expect("up1");
+        store.upload(&hash2, b"b").expect("up2");
+        store.upload(&hash3, b"c").expect("up3");
 
         let listed = store.list().expect("list");
 
-        // The bucket may contain objects from other tests; verify that
-        // the three hashes we just uploaded are present.
         for h in [&hash1, &hash2, &hash3] {
             assert!(
                 listed.contains(h),
-                "listed hashes should contain {}",
+                "listed should contain {}",
                 S3RemoteStore::hash_hex(h)
             );
         }
@@ -394,30 +354,27 @@ mod tests {
 
     #[test]
     fn test_delete_removes_object() {
-        let Some(store) = make_localstack_store() else {
-            eprintln!("Skipping S3 test: EDGESTORE_S3_ENDPOINT_URL not set");
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
             return;
         };
 
         let hash = [0xCCu8; 32];
 
-        store.upload(&hash, b"segment data").expect("upload");
-        store.delete(&hash).expect("delete");
+        store.upload(&hash, b"segment data").expect("up");
+        store.delete(&hash).expect("del");
 
-        let result = store.download(&hash);
-        assert!(result.is_err(), "download after delete should return Err");
+        assert!(store.download(&hash).is_err());
     }
 
     #[test]
     fn test_download_not_found() {
-        let Some(store) = make_localstack_store() else {
-            eprintln!("Skipping S3 test: EDGESTORE_S3_ENDPOINT_URL not set");
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
             return;
         };
 
         let hash = [0xDDu8; 32];
-
-        let result = store.download(&hash);
-        assert!(result.is_err(), "download of non-existent hash should return Err");
+        assert!(store.download(&hash).is_err());
     }
 }

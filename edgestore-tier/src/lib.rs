@@ -91,6 +91,18 @@ impl TieredEngine {
         self.archived.clone()
     }
 
+    /// Register segments as archived without uploading them.
+    ///
+    /// Use this after restart to restore the archived list from persistent storage
+    /// (e.g. a JSON file you wrote after a previous `archive_segments` call).
+    pub fn register_archived(&mut self, segments: Vec<ArchivedSegment>) {
+        for seg in segments {
+            if !self.archived.iter().any(|s| s.hash == seg.hash) {
+                self.archived.push(seg);
+            }
+        }
+    }
+
     // ── Pass-through KV API ─────────────────────────────────────────────────
 
     /// Single-record put. Goes to local engine only.
@@ -374,5 +386,165 @@ mod tests {
 
         let vals = tiered.range(b"ns", b"a", b"c").unwrap();
         assert_eq!(vals.len(), 2); // exclusive end
+    }
+
+    #[test]
+    fn test_idempotent_fetch() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Fresh engine with archived list registered.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+
+        let archived: Vec<ArchivedSegment> = tiered.archived_segments();
+        fresh_tiered.register_archived(archived);
+
+        // First get — triggers fetch.
+        let got = fresh_tiered.get(b"ns", b"key").unwrap();
+        assert_eq!(got, Some(b"val".to_vec()));
+
+        // Second get — should be local hit, no re-fetch.
+        let got = fresh_tiered.get(b"ns", b"key").unwrap();
+        assert_eq!(got, Some(b"val".to_vec()));
+    }
+
+    #[test]
+    fn test_lww_local_wins_over_archived() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        // Write v1 and flush to segment.
+        tiered.put(b"ns", b"key", b"v1").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Write v2 locally (newer timestamp).
+        tiered.put(b"ns", b"key", b"v2").unwrap();
+
+        // Fresh engine — local is empty, only archived v1 exists.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh2")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // Read-through imports v1. Then local put v2.
+        let got = fresh_tiered.get(b"ns", b"key").unwrap();
+        assert_eq!(got, Some(b"v1".to_vec()), "archived v1 imported");
+
+        // Now write v2 locally.
+        fresh_tiered.put(b"ns", b"key", b"v2").unwrap();
+
+        // Local v2 should win.
+        let got = fresh_tiered.get(b"ns", b"key").unwrap();
+        assert_eq!(got, Some(b"v2".to_vec()), "local v2 wins via LWW");
+    }
+
+    #[test]
+    fn test_partial_archive_mixed_local_remote() {
+        let (_local_dir, _remote_dir, mut tiered) = make_tiered();
+
+        // Write two batches, flush separately.
+        for i in 0u64..500 {
+            tiered.put(b"ns", &i.to_be_bytes(), b"batch1").unwrap();
+        }
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas1 = tiered.local().list_segment_metas();
+
+        for i in 500u64..1000 {
+            tiered.put(b"ns", &i.to_be_bytes(), b"batch2").unwrap();
+        }
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let _metas2 = tiered.local().list_segment_metas();
+
+        // Archive only the first batch's segments.
+        tiered.archive_segments(&metas1).unwrap();
+
+        // Simulate: new engine, first batch is archived, second batch is local.
+        // We can't easily simulate this with a single engine instance, so we verify:
+        // 1. Archived keys are readable through read-through
+        // 2. Local keys are still readable
+        let got = tiered.get(b"ns", &250u64.to_be_bytes()).unwrap();
+        assert_eq!(got, Some(b"batch1".to_vec()), "archived key readable");
+
+        let got = tiered.get(b"ns", &750u64.to_be_bytes()).unwrap();
+        assert_eq!(got, Some(b"batch2".to_vec()), "local key still readable");
+    }
+
+    #[test]
+    fn test_range_after_warming() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"a", b"1").unwrap();
+        tiered.put(b"ns", b"b", b"2").unwrap();
+        tiered.put(b"ns", b"c", b"3").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Fresh engine with archived list.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh3")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // Range before warming — empty.
+        let vals = fresh_tiered.range(b"ns", b"a", b"d").unwrap();
+        assert!(vals.is_empty(), "range before warming is empty");
+
+        // Warm all archived segments.
+        fresh_tiered.fetch_all_archived().unwrap();
+
+        // Range after warming — includes all data.
+        let vals = fresh_tiered.range(b"ns", b"a", b"d").unwrap();
+        assert_eq!(vals.len(), 3, "range after warming includes all keys");
+    }
+
+    #[test]
+    fn test_archived_not_found_in_remote() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"key", b"val").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        // Delete the remote file to simulate S3 deletion / bucket corruption.
+        let remote_base = remote_dir.path();
+        for entry in std::fs::read_dir(remote_base).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name().to_string_lossy().ends_with(".seg") {
+                std::fs::remove_file(entry.path()).unwrap();
+            }
+        }
+
+        // Fresh engine with archived list pointing to deleted remote objects.
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh4")))
+            .expect("fresh Engine::open");
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf())
+            .expect("FilesystemRemoteStore::new");
+        let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
+        fresh_tiered.register_archived(tiered.archived_segments());
+
+        // Should return None gracefully, not panic.
+        let got = fresh_tiered.get(b"ns", b"key").unwrap();
+        assert_eq!(got, None, "graceful None when remote segment missing");
     }
 }

@@ -1,8 +1,12 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use std::collections::HashMap;
+
 use edgestore::{
-    EdgestoreConfig, EdgestoreError, Engine, ImportResult, MetricsSnapshot, VectorEngine,
+    EdgestoreConfig, EdgestoreError, Engine, FacetValue, ImportResult, MetricsSnapshot, SearchOptions, SegmentRef,
+    TextEngine, TextSearchResult, VectorEngine,
+    types::SegmentMeta,
     vector::distance::Metric,
     vector::search::VectorSearchResult,
     vector::types::{Dtype, VectorRecord},
@@ -220,6 +224,98 @@ impl AsyncEngine {
         )))?
     }
 
+    /// Flush the current memtable to a new immutable segment file — heavy I/O, runs on spawn_blocking.
+    pub async fn flush_to_segments(&self) -> Result<SegmentMeta, EdgestoreError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = inner.blocking_write();
+            engine.flush_to_segments()
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
+    /// Local segment manifest (hash + id per segment) — used by replication/backup callers.
+    pub async fn export_manifest(&self) -> Result<Vec<SegmentRef>, EdgestoreError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let engine = inner.blocking_read();
+            engine.export_manifest()
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
+    /// Index a document for BM25 full-text search — lightweight write.
+    pub async fn index_text(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+        text: &str,
+        facets: HashMap<String, FacetValue>,
+    ) -> Result<u64, EdgestoreError> {
+        let ns = ns.to_vec();
+        let key = key.to_vec();
+        let text = text.to_string();
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = inner.blocking_write();
+            engine.index_text(&ns, &key, &text, facets)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
+    /// BM25 search — heavy operation (scoring), runs on spawn_blocking.
+    pub async fn search_text(&self, ns: &[u8], query: &str, k: usize) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+        let ns = ns.to_vec();
+        let query = query.to_string();
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let engine = inner.blocking_read();
+            engine.search_text(&ns, &query, k)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
+    /// BM25 search with facet filters / typo tolerance — heavy, runs on spawn_blocking.
+    pub async fn search_text_with_options(
+        &self,
+        ns: &[u8],
+        query: &str,
+        options: SearchOptions,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+        let ns = ns.to_vec();
+        let query = query.to_string();
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let engine = inner.blocking_read();
+            engine.search_text_with_options(&ns, &query, &options)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
+    /// Remove a document from the text index — lightweight write.
+    pub async fn delete_text(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
+        let ns = ns.to_vec();
+        let key = key.to_vec();
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = inner.blocking_write();
+            engine.delete_text(&ns, &key)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
+        )))?
+    }
+
     /// Get metrics snapshot.
     pub async fn metrics(&self) -> MetricsSnapshot {
         let inner = self.inner.clone();
@@ -280,6 +376,45 @@ mod tests {
         engine.put_with_ttl(b"ns", b"key", b"val", 3600).await.unwrap();
         let val = engine.get(b"ns", b"key").await.unwrap();
         assert_eq!(val, Some(b"val".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn test_async_flush_to_segments_and_export_manifest() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_async_engine(&dir).await;
+
+        engine.put(b"ns", b"key", b"val").await.unwrap();
+        let meta = engine.flush_to_segments().await.unwrap();
+        assert_eq!(meta.segment_hash.len(), 32);
+
+        let manifest = engine.export_manifest().await.unwrap();
+        assert_eq!(manifest.len(), 1);
+        assert_eq!(manifest[0].segment_hash.to_vec(), meta.segment_hash);
+    }
+
+    #[tokio::test]
+    async fn test_async_index_and_search_text() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_async_engine(&dir).await;
+
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).await.unwrap();
+        engine.index_text(b"ns", b"doc2", "goodbye world", std::collections::HashMap::new()).await.unwrap();
+
+        let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].doc_id, b"doc1");
+    }
+
+    #[tokio::test]
+    async fn test_async_delete_text_removes_from_search() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_async_engine(&dir).await;
+
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).await.unwrap();
+        engine.delete_text(b"ns", b"doc1").await.unwrap();
+
+        let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
+        assert!(results.is_empty());
     }
 
     #[tokio::test]

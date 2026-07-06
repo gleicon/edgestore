@@ -600,19 +600,19 @@ impl SegmentStore {
         new_meta: SegmentMeta,
         new_reader: SegmentReader,
     ) -> Result<(), EdgestoreError> {
-        // Delete old segment files.
+        // Update manifest and readers before touching disk — same ordering
+        // invariant as remove_segment. Partial file deletion after manifest
+        // success leaves only orphaned bytes, not a broken manifest.
+        self.manifest.remove_segments(&[old_id])?;
+        self.readers.retain(|r| r.segment_id != old_id);
+        self.manifest.add_segment(new_meta)?;
+        self.readers.push(new_reader);
         for ext in &["dat", "idx", "xf", "meta"] {
             let path = self.base_path.join(format!("segment-{:08}.{}", old_id, ext));
             if path.exists() {
-                std::fs::remove_file(&path).map_err(|e| EdgestoreError::Io(e))?;
+                std::fs::remove_file(&path).map_err(EdgestoreError::Io)?;
             }
         }
-        // Remove from manifest and readers.
-        self.manifest.remove_segments(&[old_id])?;
-        self.readers.retain(|r| r.segment_id != old_id);
-        // Add replacement.
-        self.manifest.add_segment(new_meta)?;
-        self.readers.push(new_reader);
         Ok(())
     }
 

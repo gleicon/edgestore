@@ -124,6 +124,13 @@ impl Compactor {
         cohort: &CohortInfo,
         stats: &mut CompactionStats,
     ) -> Result<(), EdgestoreError> {
+        // Manifest updated before file deletion — same ordering invariant as
+        // SegmentStore::remove_segment. If file deletion fails partway, orphaned
+        // bytes on disk are a space leak only; the manifest will not list them.
+        manifest.remove_segments(&cohort.segment_ids)?;
+        stats.segments_removed += cohort.segment_ids.len() as u64;
+        stats.cohorts_collected += 1;
+
         for &seg_id in &cohort.segment_ids {
             let extensions = ["dat", "idx", "xf", "meta"];
             for ext in extensions {
@@ -141,11 +148,6 @@ impl Compactor {
                 }
             }
         }
-
-        manifest.remove_segments(&cohort.segment_ids)?;
-        stats.segments_removed += cohort.segment_ids.len() as u64;
-        stats.cohorts_collected += 1;
-        // live_records_relocated stays 0 — zero live relocation invariant
 
         Ok(())
     }
@@ -195,7 +197,11 @@ impl Compactor {
             .collect();
 
         if survivors.is_empty() {
-            // All records are dead — treat as fully expired (no output segment)
+            // All records are dead — treat as fully expired (no output segment).
+            // Manifest first; file-deletion failure after this is a space leak only.
+            manifest.remove_segments(&cohort.segment_ids)?;
+            stats.segments_removed += cohort.segment_ids.len() as u64;
+            stats.cohorts_collected += 1;
             for &seg_id in &cohort.segment_ids {
                 let extensions = ["dat", "idx", "xf", "meta"];
                 for ext in extensions {
@@ -213,9 +219,6 @@ impl Compactor {
                     }
                 }
             }
-            manifest.remove_segments(&cohort.segment_ids)?;
-            stats.segments_removed += cohort.segment_ids.len() as u64;
-            stats.cohorts_collected += 1;
             return Ok(());
         }
 
@@ -778,5 +781,80 @@ mod tests {
         assert_eq!(stats.segments_removed, 2);
         assert_eq!(stats.cohorts_collected, 1);
         assert_eq!(stats.live_records_relocated, 0);
+    }
+
+    // Regression: collect_expired_cohort previously deleted files before updating
+    // the manifest. On manifest-write failure, the manifest still listed segments
+    // whose files were already gone. Now manifest is updated first.
+    #[test]
+    fn test_collect_expired_cohort_manifest_consistent_after_removal() {
+        let dir = TempDir::new().unwrap();
+        let manifest_path = dir.path().join("MANIFEST");
+        let mut manifest = Manifest::open(&manifest_path).unwrap();
+
+        let cohort_window_secs = 3600u64;
+        let write_time_nanos: i64 = 3_600_000_000_000;
+        let entries = vec![(
+            encode_key(b"ns", b"k"),
+            make_put_entry(b"k", b"v", 1, write_time_nanos, 1),
+        )];
+        let meta = flush_segment(&dir, &mut manifest, 0, &entries, cohort_window_secs);
+        let seg_id = meta.segment_id;
+
+        assert_eq!(manifest.list_segments().len(), 1);
+
+        let compactor = Compactor::new(dir.path().to_path_buf(), u64::MAX, cohort_window_secs);
+        let cohort = CohortInfo {
+            cohort_bucket: meta.cohort_bucket,
+            segment_ids: vec![seg_id],
+            max_death_time_nanos: meta.death_time,
+            total_records: meta.record_count,
+            dead_record_estimate: meta.record_count,
+            is_fully_expired: true,
+        };
+        let mut stats = CompactionStats::default();
+        compactor.collect_expired_cohort(&mut manifest, &cohort, &mut stats).unwrap();
+
+        // Manifest must not list the segment regardless of file state.
+        assert!(manifest.list_segments().is_empty(), "manifest must not list removed segment");
+        // Reload manifest from disk to confirm durability.
+        let manifest2 = Manifest::open(&manifest_path).unwrap();
+        assert!(manifest2.list_segments().is_empty(), "reloaded manifest must also be empty");
+    }
+
+    // Regression: compact_partial_cohort (all-dead path) previously deleted files
+    // before updating the manifest, same class of bug.
+    #[test]
+    fn test_compact_partial_cohort_all_dead_manifest_consistent() {
+        let dir = TempDir::new().unwrap();
+        let manifest_path = dir.path().join("MANIFEST");
+        let mut manifest = Manifest::open(&manifest_path).unwrap();
+
+        let cohort_window_secs = 3600u64;
+        // All records expire at write_time + ttl = 1h + 1s; compact at 2h.
+        let write_time_nanos: i64 = 3_600_000_000_000;
+        let entries = vec![(
+            encode_key(b"ns", b"gone"),
+            make_put_entry(b"gone", b"val", 1, write_time_nanos, 1),
+        )];
+        let meta = flush_segment(&dir, &mut manifest, 0, &entries, cohort_window_secs);
+        let seg_id = meta.segment_id;
+
+        let compactor = Compactor::new(dir.path().to_path_buf(), u64::MAX, cohort_window_secs);
+        let cohort = CohortInfo {
+            cohort_bucket: meta.cohort_bucket,
+            segment_ids: vec![seg_id],
+            max_death_time_nanos: meta.death_time,
+            total_records: meta.record_count,
+            dead_record_estimate: meta.record_count,
+            is_fully_expired: false,
+        };
+        let now_nanos: i64 = 7_200_000_000_000; // 2h — all records dead
+        let mut stats = CompactionStats::default();
+        compactor.compact_partial_cohort(&mut manifest, &cohort, now_nanos, 1, &mut stats).unwrap();
+
+        assert!(manifest.list_segments().is_empty(), "manifest must not list removed segment");
+        let manifest2 = Manifest::open(&manifest_path).unwrap();
+        assert!(manifest2.list_segments().is_empty(), "reloaded manifest must also be empty");
     }
 }

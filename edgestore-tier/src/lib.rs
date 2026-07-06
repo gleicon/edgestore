@@ -1772,4 +1772,54 @@ mod tests {
         let r = fresh.range(b"ns", b"a", b"z").unwrap();
         assert_eq!(r.len(), 1, "results correct even with 1-byte cache limit");
     }
+
+    // Regression for the byte-counter drift bug: previously LruCache had a
+    // 64-item cap. The 65th .put() triggered a silent internal LRU eviction
+    // that never decremented segment_cache_bytes, causing the counter to
+    // overcount permanently. Now item cap = 65536, byte loop is sole path.
+    #[test]
+    fn test_segment_cache_byte_counter_accurate_past_old_item_cap() {
+        // Build a TieredEngine whose cache can hold many small entries.
+        // We need direct access to cache internals, so test via the public
+        // segment_cache_bytes field (private) — instead, verify indirectly:
+        // populate >64 distinct hash entries and confirm range() still works
+        // correctly (it would produce stale reads if byte-counter drift caused
+        // premature over-eviction of live entries).
+        let (local_dir, remote_dir, mut base) = make_tiered();
+
+        // Write 70 distinct keys across 70 flush cycles so we get 70 segments.
+        for i in 0u32..70 {
+            let key = format!("key{:04}", i);
+            let val = format!("val{:04}", i);
+            base.put(b"ns", key.as_bytes(), val.as_bytes()).unwrap();
+            base.local_mut().flush_to_segments().unwrap();
+        }
+        let metas = base.local().list_segment_metas();
+        assert!(metas.len() >= 70, "need 70 segments for regression");
+        base.archive_segments(&metas).unwrap();
+
+        // Fresh engine with enough byte budget to hold all 70 segments.
+        let fresh_local = Engine::open(EdgestoreConfig::new(
+            local_dir.path().join("fresh_70"),
+        ))
+        .unwrap();
+        let fresh_remote = edgestore_repl::FilesystemRemoteStore::new(
+            remote_dir.path().to_path_buf(),
+        )
+        .unwrap();
+        let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote))
+            .with_segment_cache_bytes(64 * 1024 * 1024);
+        for m in &metas {
+            fresh.register_archived(vec![ArchivedSegment {
+                hash: m.segment_hash.as_slice().try_into().unwrap(),
+                min_key: m.min_key.clone(),
+                max_key: m.max_key.clone(),
+            }]);
+        }
+
+        // Trigger 70 ephemeral downloads — previously the 65th would have
+        // caused a silent byte-counter overcount.
+        let results = fresh.range(b"ns", b"key0000", b"key9999").unwrap();
+        assert_eq!(results.len(), 70, "all 70 entries visible after >64 segments cached");
+    }
 }

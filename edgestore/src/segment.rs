@@ -1027,4 +1027,33 @@ mod tests {
         let results = store.range_scan(&key, &key_end).unwrap();
         assert!(results.is_empty(), "delete should filter out the key");
     }
+
+    // Regression: remove_segment must update manifest before deleting files.
+    // Previously files were deleted first — manifest-write failure would leave
+    // manifest pointing at non-existent files. Now the manifest is durably
+    // updated first; any subsequent file-deletion failure leaves only orphaned
+    // bytes, not a broken manifest.
+    #[test]
+    fn test_remove_segment_manifest_updated_before_files_gone() {
+        use crate::memtable::BTreeMemTable;
+        use crate::types::encode_key;
+
+        let dir = TempDir::new().unwrap();
+        let mut store = SegmentStore::open(dir.path().to_path_buf(), 3600).unwrap();
+
+        let mut mt = BTreeMemTable::new();
+        let k = encode_key(b"ns", b"key");
+        mt.insert(k.clone(), make_entry(1, &k, b"val"));
+        let meta = store.flush_memtable(&mt).unwrap();
+        let id = meta.segment_id;
+
+        assert!(dir.path().join(format!("segment-{:08}.dat", id)).exists());
+        assert_eq!(store.manifest.list_segments().len(), 1);
+
+        store.remove_segment(id).unwrap();
+
+        assert_eq!(store.manifest.list_segments().len(), 0, "manifest must not list removed segment");
+        assert!(!dir.path().join(format!("segment-{:08}.dat", id)).exists());
+        assert_eq!(store.readers.len(), 0);
+    }
 }

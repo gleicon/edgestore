@@ -19,10 +19,48 @@ use edgestore::{
 
 /// Async wrapper around the synchronous `edgestore::Engine`.
 ///
-/// All heavy I/O operations (search, index build) run on `tokio::task::spawn_blocking`
-/// to avoid blocking the async runtime. Lightweight operations return immediately.
+/// All I/O runs on `tokio::task::spawn_blocking`. The core `edgestore` crate is
+/// intentionally sync; this crate is the async boundary.
 ///
-/// Per architecture constraint: no async in the core `edgestore` crate; async belongs here.
+/// ## Using with axum
+///
+/// Store the engine in shared state and pass it through `axum::Extension` or
+/// `axum::extract::State`. Writes use `&mut self` so wrap in `Arc<RwLock<>>`:
+///
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use edgestore::EdgestoreConfig;
+/// use edgestore_tokio::AsyncEngine;
+///
+/// async fn axum_example() {
+///     let engine = AsyncEngine::open(EdgestoreConfig::new("/var/db")).await.unwrap();
+///     let shared = Arc::new(engine); // AsyncEngine already wraps Arc<RwLock<Engine>>
+///
+///     // In a handler:
+///     // let val = shared.get(b"ns", b"key").await.unwrap();
+/// }
+/// ```
+///
+/// ## Using with actix-web
+///
+/// Wrap in `web::Data<AsyncEngine>`. `AsyncEngine` is `Clone + Send + Sync`.
+///
+/// ## Sync callers inside async
+///
+/// If you have blocking Engine code that needs to run inside an async context
+/// without this wrapper, use `tokio::task::spawn_blocking` directly:
+///
+/// ```rust,no_run
+/// use edgestore::{EdgestoreConfig, Engine};
+///
+/// async fn run_sync_code() {
+///     tokio::task::spawn_blocking(|| {
+///         let mut engine = Engine::open(EdgestoreConfig::new("/var/db")).unwrap();
+///         engine.put(b"ns", b"key", b"val").unwrap();
+///     }).await.unwrap();
+/// }
+/// ```
 #[derive(Clone)]
 pub struct AsyncEngine {
     inner: Arc<RwLock<Engine>>,

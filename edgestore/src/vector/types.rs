@@ -1,13 +1,42 @@
 use crate::error::EdgestoreError;
 
 /// Data type for vector elements.
+///
+/// ## Scalar quantization (SQ8)
+///
+/// `Dtype::I8` implements Scalar Quantization 8-bit (SQ8). Caller quantizes
+/// `f32` values to `i8` before calling `vector_put`; EdgeStore stores and
+/// searches the quantized bytes with no further transformation.
+///
+/// Typical quantization: map the range `[min, max]` of each dimension to
+/// `[-128, 127]`:
+///
+/// ```rust,ignore
+/// fn quantize_sq8(floats: &[f32]) -> Vec<u8> {
+///     let min = floats.iter().cloned().fold(f32::INFINITY, f32::min);
+///     let max = floats.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+///     let scale = if max == min { 1.0 } else { 255.0 / (max - min) };
+///     floats.iter().map(|&v| {
+///         let q = ((v - min) * scale - 128.0).clamp(-128.0, 127.0) as i8;
+///         q as u8  // reinterpret bits
+///     }).collect()
+/// }
+/// ```
+///
+/// **Trade-off**: I8 storage uses 4× less memory and disk than F32. Distance
+/// computations widen to `i32` before accumulating, preserving precision. Recall
+/// loss is typically < 1% for normalized embeddings; higher for non-normalized data.
+///
+/// `F16` halves storage vs F32 with minimal recall impact (< 0.1% for most
+/// embedding models). Product Quantization (PQ) codebooks are **not** supported —
+/// caller-side SQ8 via `Dtype::I8` is the supported quantization path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dtype {
     /// 32-bit floating point (4 bytes per element).
     F32 = 0,
     /// 16-bit floating point (2 bytes per element).
     F16 = 1,
-    /// 8-bit signed integer (1 byte per element).
+    /// 8-bit signed integer (1 byte per element). See type-level docs for SQ8 usage.
     I8 = 2,
 }
 

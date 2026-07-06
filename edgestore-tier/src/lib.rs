@@ -40,6 +40,74 @@
 //! 6. **No background tasks.** Everything is synchronous and caller-driven.
 //!    The application decides when to archive, how much to keep local, and
 //!    whether to prefetch.
+//!
+//! ## Monitor-and-archive pattern
+//!
+//! EdgeStore is caller-driven: your application decides when to archive. A
+//! typical service loop checks local segment count against a threshold, then
+//! archives and optionally strips the text index:
+//!
+//! ```rust,no_run
+//! use edgestore::{EdgestoreConfig, Engine};
+//! use edgestore_repl::FilesystemRemoteStore;
+//! use edgestore_tier::TieredEngine;
+//!
+//! let local = Engine::open(EdgestoreConfig::new("/var/db/hot")).unwrap();
+//! let remote = FilesystemRemoteStore::new("/mnt/cold".into()).unwrap();
+//! let mut tiered = TieredEngine::new(local, Box::new(remote))
+//!     .with_text_stripping(true)      // strip BM25 records from archived segments
+//!     .with_segment_cache_bytes(32 * 1024 * 1024); // 32 MB ephemeral cache
+//!
+//! loop {
+//!     // ... handle requests ...
+//!
+//!     let metas = tiered.local().list_segment_metas();
+//!     if metas.len() > 8 {
+//!         // Archive the oldest half; keep the 4 most recent hot.
+//!         let to_archive = &metas[..metas.len() - 4];
+//!         tiered.archive_segments(to_archive).unwrap();
+//!         // Optionally: prune local copies to reclaim disk space.
+//!         // for m in to_archive { tiered.prune_local_segment(m.segment_id).unwrap(); }
+//!     }
+//! # break;
+//! }
+//! ```
+//!
+//! ## Time-windowed vector search
+//!
+//! For workloads that embed vectors alongside time-keyed records (e.g. log
+//! semantics), the hot window uses HNSW and the historical range falls back
+//! to flat scan over archived segments:
+//!
+//! **Complexity:**
+//! - Hot window (HNSW loaded): O(log n) per query.
+//! - Cold archive (flat scan per segment): O(S × V) where S = segments scanned,
+//!   V = vectors per segment. At 100 M vectors × 32 dims with I8 SIMD
+//!   (~1 B ops/sec): ≈ 3 seconds per full-corpus query. Suitable for batch
+//!   analytics, not interactive search. Limit S with time-range filters.
+//!
+//! ```rust,no_run
+//! // Hot window: query local HNSW (last N hours of data).
+//! // edgestore::VectorEngine trait must be in scope.
+//! use edgestore::VectorEngine;
+//! use edgestore::vector::distance::Metric;
+//! # use edgestore::{EdgestoreConfig, Engine};
+//! # use edgestore_repl::FilesystemRemoteStore;
+//! # use edgestore_tier::TieredEngine;
+//! # let local = Engine::open(EdgestoreConfig::new("/tmp/t")).unwrap();
+//! # let remote = FilesystemRemoteStore::new("/tmp/r".into()).unwrap();
+//! # let mut tiered = TieredEngine::new(local, Box::new(remote));
+//!
+//! use edgestore::vector::types::{Dtype, VectorRecord};
+//! let query = VectorRecord { dims: 32, dtype: Dtype::F32, data: vec![0u8; 128] };
+//! let hot_results = tiered.local_mut().vector_search(b"logs", &query, 10, Metric::Cosine).unwrap();
+//!
+//! // Cold archive: fetch overlapping segments for the target time range,
+//! // then run a range scan to retrieve candidate records.
+//! tiered.fetch_archived_overlapping(b"logs", b"2026-07-01", b"2026-07-06").unwrap();
+//! let cold_results = tiered.range(b"logs", b"2026-07-01", b"2026-07-06").unwrap();
+//! // Merge hot_results + cold_results in application code.
+//! ```
 
 use std::collections::HashMap;
 

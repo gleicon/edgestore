@@ -35,6 +35,10 @@ lazy_static = "1"
 tempfile = "3"
 rmp-serde = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
+parquet = { version = "53", features = ["arrow"] }
+arrow-array = "53"
+arrow-schema = "53"
+anyhow = "1"
 
 [[bench]]
 name = "vector_search"

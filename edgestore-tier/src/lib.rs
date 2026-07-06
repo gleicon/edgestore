@@ -133,8 +133,6 @@ pub struct ArchivedSegment {
 
 /// Default maximum bytes for the ephemeral segment byte cache (32 MB).
 const DEFAULT_SEGMENT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
-/// LRU capacity in items (upper bound; byte limit is the real constraint).
-const SEGMENT_CACHE_LRU_CAP: usize = 64;
 
 /// Tiered engine: local hot cache + remote cold archive.
 ///
@@ -170,7 +168,11 @@ impl TieredEngine {
             fetched: HashMap::new(),
             upload_sidecars: false,
             strip_text_after_archive: false,
-            segment_cache: LruCache::new(NonZeroUsize::new(SEGMENT_CACHE_LRU_CAP).unwrap()),
+            // Item cap is high enough that byte-based eviction always fires first;
+            // at segment_size_bytes=16MB and a 32MB default byte budget, the byte
+            // loop evicts after ~2 entries — never 65536. This prevents a second
+            // silent eviction path from drifting segment_cache_bytes.
+            segment_cache: LruCache::new(NonZeroUsize::new(65536).unwrap()),
             segment_cache_bytes: 0,
             segment_cache_max_bytes: DEFAULT_SEGMENT_CACHE_MAX_BYTES,
         }
@@ -685,6 +687,9 @@ impl TieredEngine {
             }
         }
         self.segment_cache_bytes += incoming;
+        // LruCache item cap is NonZeroUsize::MAX so this put() never silently
+        // evicts by count. All eviction goes through the while loop above,
+        // keeping segment_cache_bytes accurate.
         self.segment_cache.put(hash, data);
     }
 }

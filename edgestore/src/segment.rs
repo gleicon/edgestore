@@ -622,14 +622,19 @@ impl SegmentStore {
     /// durably available elsewhere (e.g. a remote archive) and just want to reclaim
     /// local disk space.
     pub(crate) fn remove_segment(&mut self, id: SegmentId) -> Result<(), EdgestoreError> {
+        // Update manifest and in-memory readers before touching disk. If file
+        // deletion fails after this point, the segment is already gone from the
+        // manifest — orphaned bytes on disk are a space leak, not a correctness
+        // break. The previous ordering (delete files first) could leave the
+        // manifest pointing at non-existent files on manifest-write failure.
+        self.manifest.remove_segments(&[id])?;
+        self.readers.retain(|r| r.segment_id != id);
         for ext in &["dat", "idx", "xf", "meta"] {
             let path = self.base_path.join(format!("segment-{:08}.{}", id, ext));
             if path.exists() {
                 std::fs::remove_file(&path).map_err(EdgestoreError::Io)?;
             }
         }
-        self.manifest.remove_segments(&[id])?;
-        self.readers.retain(|r| r.segment_id != id);
         Ok(())
     }
 

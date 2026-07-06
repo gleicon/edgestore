@@ -1562,7 +1562,12 @@ impl TextEngine for Engine {
         };
 
         let index = self.text_indices.entry(text_ns.clone()).or_insert(loaded_index);
-        index.remove_document(key);
+        // Skip the O(total index size) removal scan when this doc_id is definitely
+        // new (the common case for an append-only workload — see `text::bloom`).
+        // Zero false negatives means this is always correct to skip on `false`.
+        if index.doc_bloom.might_contain(key) {
+            index.remove_document(key);
+        }
         index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
 
         // Merged index is NOT written here — only on flush() / drop.

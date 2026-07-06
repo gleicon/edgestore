@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::EdgestoreError;
+use crate::text::bloom::BloomFilter;
 use crate::text::types::FacetValue;
 
 /// A posting in the inverted index.
@@ -28,6 +29,11 @@ pub struct InvertedIndex {
     /// LSN of the `flush()` / `persist_text_indices()` that wrote this sidecar.
     /// Used for staleness detection on crash recovery. 0 = unknown / treat as stale.
     pub sidecar_lsn: u64,
+    /// Existence check to skip `remove_document`'s O(total index size) scan when a
+    /// doc_id is definitely new (the common case for an append-only workload) — see
+    /// `crate::text::bloom` for why. Deliberately not part of the on-disk format;
+    /// rebuilt in `deserialize()` and whenever `bloom_insert()` detects saturation.
+    pub doc_bloom: BloomFilter,
 }
 
 impl InvertedIndex {
@@ -38,7 +44,36 @@ impl InvertedIndex {
             total_docs: 0,
             total_doc_len: 0,
             sidecar_lsn: 0,
+            doc_bloom: BloomFilter::new(),
         }
+    }
+
+    /// Rebuilds the (unpersisted) Bloom filter from the current `postings` at the
+    /// given `capacity` — not a fixed capacity (see `text::bloom`'s doc comment on
+    /// why a fixed capacity degrades silently once exceeded). Used right after
+    /// deserializing from disk (the filter isn't part of the wire format) and by
+    /// `bloom_insert()` whenever the filter has saturated. O(total postings), paid
+    /// once per load/grow rather than once per document indexed — the same
+    /// amortized-cost shape as `Vec`'s reallocation on push.
+    fn rebuild_bloom_at_capacity(&mut self, capacity: usize) {
+        self.doc_bloom = BloomFilter::with_capacity(capacity.max(crate::text::bloom::INITIAL_CAPACITY));
+        for postings in self.postings.values() {
+            for posting in postings {
+                self.doc_bloom.insert(&posting.doc_id);
+            }
+        }
+    }
+
+    /// Records `doc_id` as present in the Bloom filter, growing it first if it has
+    /// saturated — a saturated filter's false-positive rate climbs fast, silently
+    /// reintroducing the O(n) `remove_document` scan for most "new" documents (see
+    /// `text::bloom`'s doc). One call encapsulates the whole grow-then-insert policy
+    /// so `add_document` doesn't need to know about it.
+    fn bloom_insert(&mut self, doc_id: &[u8]) {
+        if self.doc_bloom.is_saturated() {
+            self.rebuild_bloom_at_capacity(self.doc_bloom.capacity() * 2);
+        }
+        self.doc_bloom.insert(doc_id);
     }
 
     /// Remove a document from the index.
@@ -78,6 +113,8 @@ impl InvertedIndex {
         doc_len: u32,
         facets: HashMap<String, FacetValue>,
     ) {
+        self.bloom_insert(&doc_id);
+
         // Count term frequencies
         let mut term_counts: HashMap<String, u32> = HashMap::new();
         for token in tokens {
@@ -230,7 +267,10 @@ impl InvertedIndex {
             postings.insert(term, posting_vec);
         }
 
-        Ok(InvertedIndex { postings, total_docs, total_doc_len, sidecar_lsn })
+        let mut index = InvertedIndex { postings, total_docs, total_doc_len, sidecar_lsn, doc_bloom: BloomFilter::new() };
+        let capacity = total_docs as usize;
+        index.rebuild_bloom_at_capacity(capacity);
+        Ok(index)
     }
 }
 

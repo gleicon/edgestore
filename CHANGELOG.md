@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`index_text` was effectively O(n²) for indexing n documents into one namespace — now amortized O(n).** `Engine::index_text` unconditionally called `InvertedIndex::remove_document` before every `add_document`, even for a document never indexed before; `remove_document` scans every posting in every term (O(total index size)) regardless of whether the doc_id was ever present. For an append-only workload (unique key per document, the common case), that scan was pure waste on every call, scaling with however much had already been indexed. Measured: 10K documents in one namespace went from ~750ms to ~130-155ms; 100K documents from ~134s to ~1.5-1.8s; 1M documents, which never completed in any prior benchmark run, now indexes in ~18.5s. Fixed with a new `InvertedIndex::doc_bloom` (`edgestore/src/text/bloom.rs`) — a small, hand-rolled, capacity-adaptive Bloom filter checked before `remove_document`; zero false negatives means it's always safe to skip the scan when it reports "definitely not present". Capacity is not fixed — the filter doubles (rebuilding from `postings`) whenever it saturates, since a fixed-capacity version was found (before shipping) to degrade silently and just as badly once actual usage exceeded its designed capacity. Not part of `InvertedIndex`'s on-disk format — a pure in-memory optimization aid, rebuilt on load or growth. (`edgestore/src/text/bloom.rs`, `edgestore/src/text/index.rs`, `edgestore/src/engine.rs`)
+
+- **Bloom filter hashing uses a per-instance random seed, not a fixed one.** A fixed hash seed would let a caller who controls `doc_id`/key values (true for edgestore as a general-purpose library) craft keys that collide into the same bit positions, inflating the false-positive rate and defeating the fix above under adversarial input. Seeded via `std::collections::hash_map::RandomState` — no new dependency, the same mechanism every `HashMap` in this codebase already gets by default. (`edgestore/src/text/bloom.rs`)
+
 ## [1.2.0] - 2026-07-06
 
 ### Added

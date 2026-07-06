@@ -406,3 +406,35 @@ fn test_no_rebuild_when_sidecar_fresh() {
         assert_eq!(results.len(), 2, "fresh sidecar should contain both docs without rebuild");
     }
 }
+
+#[test]
+fn test_reindex_after_reload_removes_old_terms() {
+    // Combines two things no other test does together: reopening the engine (so
+    // InvertedIndex::deserialize rebuilds the Bloom filter from postings, since the
+    // filter isn't part of the wire format) and then re-indexing a doc_id that
+    // already existed before the reload. If the Bloom filter rebuild were ever
+    // broken or skipped, `might_contain` could wrongly report the doc_id as absent,
+    // skip `remove_document`, and leave stale postings behind — this is the specific
+    // scenario that would catch it.
+    let dir = TempDir::new().unwrap();
+
+    // Phase 1: index doc1, flush, drop.
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine.flush().unwrap();
+    }
+
+    // Phase 2: reopen, re-index the *same* doc1 with different text.
+    {
+        let mut engine = open_engine(&dir);
+        engine.index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new()).unwrap();
+
+        let results_hello = engine.search_text(b"ns", "hello", 5).unwrap();
+        assert!(results_hello.is_empty(), "old term 'hello' must not match after re-indexing post-reload");
+
+        let results_foo = engine.search_text(b"ns", "foo", 5).unwrap();
+        assert_eq!(results_foo.len(), 1);
+        assert_eq!(results_foo[0].doc_id, b"doc1");
+    }
+}

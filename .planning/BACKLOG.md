@@ -81,6 +81,15 @@ pub trait Tokenizer: Send + Sync {
 
 ---
 
+### FT-06: Re-evaluate BM25 delete-under-stress (Bloom filter staleness)
+
+**Status:** Deferred — 2026-07-06
+**Rationale:** `InvertedIndex::add_document`'s Bloom-filter existence check (added to fix an O(n²) reindex-scan bug) is never updated by `remove_document`/`delete_text` — Bloom filters can't safely unset bits without a counting variant. After a real deletion, `doc_bloom.might_contain(key)` still reports the key as present (a stale true, not a false positive in the usual sense). Consequence: deleting a document and later re-indexing the *same* key triggers `remove_document`'s O(n) scan again even though the key is no longer in any posting — a wasted scan, not an incorrect result (removal on an absent key is a safe no-op). Not a correctness bug; not yet measured under a delete-heavy workload (Pierre's own usage is append-only and never hits this path in practice).
+
+**Design (to revisit):** Benchmark a delete/reindex-heavy workload to see if the wasted-scan rate matters in practice before designing a fix. If it does, options include a counting Bloom filter (supports safe decrement on delete, more memory per entry) or a small `doc_id → terms` reverse index (makes both the delete path *and* this staleness issue disappear, at the cost of maintaining a second index — see also Pierre-side SPEC.md #L2's identical note about `remove_document`'s cost for genuine re-indexes/deletes).
+
+---
+
 ## Memory & Resource Management
 
 ### MEM-01: Configurable memtable flush threshold

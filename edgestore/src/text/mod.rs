@@ -1,3 +1,5 @@
+/// Small hand-rolled Bloom filter — existence check to avoid O(n) index scans.
+pub mod bloom;
 /// Text engine trait and helpers.
 pub mod engine;
 /// Facet filtering.

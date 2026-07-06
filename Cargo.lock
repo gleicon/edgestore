@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-cli"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "clap",
  "edgestore",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-repl"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tier"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "blake3",
  "criterion",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tokio"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "edgestore",
  "edgestore-repl",

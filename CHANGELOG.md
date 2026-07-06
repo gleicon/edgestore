@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bloom filter hashing uses a per-instance random seed, not a fixed one.** A fixed hash seed would let a caller who controls `doc_id`/key values (true for edgestore as a general-purpose library) craft keys that collide into the same bit positions, inflating the false-positive rate and defeating the fix above under adversarial input. Seeded via `std::collections::hash_map::RandomState` — no new dependency, the same mechanism every `HashMap` in this codebase already gets by default. (`edgestore/src/text/bloom.rs`)
 
+## [1.2.1] - 2026-07-06
+
+### Fixed
+
+- **`SegmentStore::remove_segment` — manifest updated before file deletion.** Previously files were deleted from disk before `manifest.remove_segments` was called. On manifest-write failure (most likely: disk-full, which is exactly the pressure under which this function runs), the manifest still listed the segment while the files were already gone. Any subsequent `get` for a key in that segment would surface an I/O error instead of a clean miss. Fixed: manifest and in-memory readers are updated first; a file-deletion failure after that leaves only orphaned bytes, not a broken store. (`edgestore/src/segment.rs`)
+
+- **`SegmentStore::replace_segment` — same ordering fix.** Files were removed before the old segment was cleared from the manifest and the new one added. (`edgestore/src/segment.rs`)
+
+- **`Compactor::collect_expired_cohort` and the all-dead path of `compact_partial_cohort` — same ordering fix.** Both called `remove_file` in a loop before calling `manifest.remove_segments`. Under disk-full conditions this left the manifest pointing at non-existent files. (`edgestore/src/compactor.rs`)
+
+- **`TieredEngine::cache_segment` — LRU byte-counter drift under high segment count.** The `LruCache` was constructed with a 64-item capacity cap alongside the manual byte-based eviction loop. When the 65th distinct segment was inserted, the LRU library silently evicted the oldest entry by item count — without decrementing `segment_cache_bytes`. The byte counter then overcounted permanently (one-directional; never self-corrects), causing the byte-eviction loop to fire earlier than intended and evict live entries prematurely. Fixed: item cap raised to 65,536 — far beyond any realistic byte budget — so the byte loop is the only eviction path that fires. (`edgestore-tier/src/lib.rs`)
+
 ## [1.2.0] - 2026-07-06
 
 ### Added

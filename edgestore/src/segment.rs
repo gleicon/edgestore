@@ -616,6 +616,23 @@ impl SegmentStore {
         Ok(())
     }
 
+    /// Remove a segment entirely: deletes its files (.dat, .idx, .xf, .meta) and
+    /// removes it from the manifest and reader list. Unlike `replace_segment`, adds
+    /// no replacement — for callers that have confirmed the segment's data is
+    /// durably available elsewhere (e.g. a remote archive) and just want to reclaim
+    /// local disk space.
+    pub(crate) fn remove_segment(&mut self, id: SegmentId) -> Result<(), EdgestoreError> {
+        for ext in &["dat", "idx", "xf", "meta"] {
+            let path = self.base_path.join(format!("segment-{:08}.{}", id, ext));
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(EdgestoreError::Io)?;
+            }
+        }
+        self.manifest.remove_segments(&[id])?;
+        self.readers.retain(|r| r.segment_id != id);
+        Ok(())
+    }
+
     /// Return the cohort_window_secs for this segment store.
     #[allow(dead_code)]
     pub(crate) fn cohort_window_secs(&self) -> u64 {

@@ -18,10 +18,23 @@ pub struct AsyncTieredEngine {
 
 impl AsyncTieredEngine {
     /// Opens the local engine and wraps it with the given `RemoteStore` backend.
+    /// Sidecar upload and text-index stripping are both off — use
+    /// `open_with_options` to enable either.
     pub async fn open(config: EdgestoreConfig, remote: Box<dyn RemoteStore>) -> Result<Self, EdgestoreError> {
+        Self::open_with_options(config, remote, false, false).await
+    }
+
+    /// Same as `open`, with `TieredEngine`'s `with_sidecars`/`with_text_stripping`
+    /// builder options exposed for async callers.
+    pub async fn open_with_options(
+        config: EdgestoreConfig,
+        remote: Box<dyn RemoteStore>,
+        with_sidecars: bool,
+        with_text_stripping: bool,
+    ) -> Result<Self, EdgestoreError> {
         let engine = tokio::task::spawn_blocking(move || -> Result<TieredEngine, EdgestoreError> {
             let local = Engine::open(config)?;
-            Ok(TieredEngine::new(local, remote))
+            Ok(TieredEngine::new(local, remote).with_sidecars(with_sidecars).with_text_stripping(with_text_stripping))
         })
         .await
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))??;
@@ -79,14 +92,13 @@ impl AsyncTieredEngine {
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
     }
 
-    /// Local-only — see struct docs.
     pub async fn range(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let ns = ns.to_vec();
         let start = start.to_vec();
         let end = end.to_vec();
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
+            let mut engine = inner.blocking_write();
             engine.range(&ns, &start, &end)
         })
         .await
@@ -98,7 +110,7 @@ impl AsyncTieredEngine {
         let prefix = prefix.to_vec();
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
+            let mut engine = inner.blocking_write();
             engine.prefix(&ns, &prefix)
         })
         .await
@@ -121,6 +133,18 @@ impl AsyncTieredEngine {
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.compact_once()
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+    }
+
+    /// Removes one segment from local storage only (files + manifest entry) —
+    /// does not touch the remote archive. See `TieredEngine::prune_local_segment`.
+    pub async fn prune_local_segment(&self, segment_id: edgestore::types::SegmentId) -> Result<(), EdgestoreError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut engine = inner.blocking_write();
+            engine.prune_local_segment(segment_id)
         })
         .await
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?

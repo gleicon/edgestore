@@ -246,7 +246,7 @@ dependencies = [
  "http 0.2.12",
  "http 1.4.2",
  "http-body 1.0.1",
- "lru",
+ "lru 0.16.4",
  "percent-encoding",
  "regex-lite",
  "sha2 0.11.0",
@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore"
-version = "1.1.4"
+version = "1.2.0"
 dependencies = [
  "blake3",
  "byteorder",
@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-cli"
-version = "1.1.4"
+version = "1.2.0"
 dependencies = [
  "clap",
  "edgestore",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-repl"
-version = "1.1.4"
+version = "1.2.0"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -1129,12 +1129,13 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tier"
-version = "1.1.4"
+version = "1.2.0"
 dependencies = [
  "blake3",
  "criterion",
  "edgestore",
  "edgestore-repl",
+ "lru 0.12.5",
  "serde",
  "serde_json",
  "tempfile",
@@ -1142,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "edgestore-tokio"
-version = "1.1.4"
+version = "1.2.0"
 dependencies = [
  "edgestore",
  "edgestore-repl",
@@ -1420,6 +1421,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -1873,6 +1876,15 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "lru"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.5",
+]
 
 [[package]]
 name = "lru"

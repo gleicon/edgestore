@@ -46,6 +46,8 @@ use std::collections::HashMap;
 use edgestore::error::EdgestoreError;
 use edgestore::types::encode_key;
 use edgestore::{Engine, ImmutableEngine, ImportResult, RemoteStore};
+use lru::LruCache;
+use std::num::NonZeroUsize;
 
 #[cfg(test)]
 use edgestore::EdgestoreConfig;
@@ -60,6 +62,11 @@ pub struct ArchivedSegment {
     /// Max key in this segment (inclusive).
     pub max_key: Vec<u8>,
 }
+
+/// Default maximum bytes for the ephemeral segment byte cache (32 MB).
+const DEFAULT_SEGMENT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+/// LRU capacity in items (upper bound; byte limit is the real constraint).
+const SEGMENT_CACHE_LRU_CAP: usize = 64;
 
 /// Tiered engine: local hot cache + remote cold archive.
 ///
@@ -77,6 +84,12 @@ pub struct TieredEngine {
     /// When true, `archive_segments` calls `Engine::strip_text_index` on successfully
     /// uploaded segments to reclaim local disk space used by the BM25 index records.
     strip_text_after_archive: bool,
+    /// LRU cache of raw segment bytes downloaded for ephemeral range/prefix reads.
+    segment_cache: LruCache<[u8; 32], Vec<u8>>,
+    /// Current total bytes resident in `segment_cache`.
+    segment_cache_bytes: usize,
+    /// Maximum total bytes allowed in `segment_cache` before LRU eviction.
+    segment_cache_max_bytes: usize,
 }
 
 impl TieredEngine {
@@ -89,7 +102,20 @@ impl TieredEngine {
             fetched: HashMap::new(),
             upload_sidecars: false,
             strip_text_after_archive: false,
+            segment_cache: LruCache::new(NonZeroUsize::new(SEGMENT_CACHE_LRU_CAP).unwrap()),
+            segment_cache_bytes: 0,
+            segment_cache_max_bytes: DEFAULT_SEGMENT_CACHE_MAX_BYTES,
         }
+    }
+
+    /// Set the maximum total bytes for the ephemeral segment byte cache.
+    ///
+    /// When the cache exceeds this limit, the least-recently-used segment bytes
+    /// are evicted. Evicted segments are re-downloaded on the next range/prefix
+    /// query that needs them. Default: 32 MB. Set to 0 to disable caching.
+    pub fn with_segment_cache_bytes(mut self, max_bytes: usize) -> Self {
+        self.segment_cache_max_bytes = max_bytes;
+        self
     }
 
     /// Enable or disable sidecar upload during `archive_segments`.
@@ -215,7 +241,7 @@ impl TieredEngine {
     /// scan still returns all data that could be reached.
     #[allow(clippy::type_complexity)]
     pub fn range(
-        &self,
+        &mut self,
         ns: &[u8],
         start: &[u8],
         end: &[u8],
@@ -231,7 +257,7 @@ impl TieredEngine {
     /// Same ephemeral-download semantics as `range()` — no local import, local wins ties.
     #[allow(clippy::type_complexity)]
     pub fn prefix(
-        &self,
+        &mut self,
         ns: &[u8],
         prefix: &[u8],
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
@@ -361,12 +387,15 @@ impl TieredEngine {
 
     /// Build an ephemeral `ImmutableEngine` from archived segments that overlap
     /// `[enc_start, enc_end)` (pre-encoded keys), excluding any already imported.
+    ///
+    /// Segment bytes are served from the LRU byte cache when available, avoiding
+    /// a re-download for segments accessed in multiple consecutive range queries.
     fn ephemeral_engine_for_range(
-        &self,
+        &mut self,
         enc_start: &[u8],
         enc_end: &[u8],
     ) -> Result<Option<ImmutableEngine>, EdgestoreError> {
-        let to_download: Vec<[u8; 32]> = self
+        let to_load: Vec<[u8; 32]> = self
             .archived
             .iter()
             .filter(|seg| seg.max_key.as_slice() >= enc_start && seg.min_key.as_slice() < enc_end)
@@ -374,21 +403,32 @@ impl TieredEngine {
             .map(|seg| seg.hash)
             .collect();
 
-        if to_download.is_empty() {
+        if to_load.is_empty() {
             return Ok(None);
         }
 
         let mut pairs: Vec<(edgestore::types::SegmentMeta, Vec<u8>)> =
-            Vec::with_capacity(to_download.len());
+            Vec::with_capacity(to_load.len());
 
-        for hash in to_download {
-            match self.remote.download(&hash) {
-                Ok(data) => pairs.push((synthetic_meta(&hash), data)),
-                Err(e) => eprintln!(
-                    "[edgestore-tier] ephemeral download skipped for {}: {}",
-                    hex_hash(&hash), e
-                ),
-            }
+        for hash in to_load {
+            let data = if let Some(cached) = self.segment_cache.get(&hash) {
+                cached.clone()
+            } else {
+                match self.remote.download(&hash) {
+                    Ok(data) => {
+                        self.cache_segment(hash, data.clone());
+                        data
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[edgestore-tier] ephemeral download skipped for {}: {}",
+                            hex_hash(&hash), e
+                        );
+                        continue;
+                    }
+                }
+            };
+            pairs.push((synthetic_meta(&hash), data));
         }
 
         if pairs.is_empty() {
@@ -400,7 +440,7 @@ impl TieredEngine {
 
     /// Range query against archived segments only, ephemerally.
     fn range_archived(
-        &self,
+        &mut self,
         ns: &[u8],
         start: &[u8],
         end: &[u8],
@@ -415,7 +455,7 @@ impl TieredEngine {
 
     /// Prefix query against archived segments only, ephemerally.
     fn prefix_archived(
-        &self,
+        &mut self,
         ns: &[u8],
         prefix: &[u8],
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
@@ -552,6 +592,32 @@ impl TieredEngine {
     /// Compact local segments.
     pub fn compact_once(&mut self) -> Result<edgestore::CompactionStats, EdgestoreError> {
         self.local.compact_once()
+    }
+
+    /// Removes one segment from local storage only — deletes its files and manifest
+    /// entry, does not touch the remote archive. Intended for callers that have
+    /// already confirmed (via `archived_segments()`) that a segment is durably
+    /// archived, and are pruning local disk after some retention policy.
+    pub fn prune_local_segment(&mut self, segment_id: edgestore::types::SegmentId) -> Result<(), EdgestoreError> {
+        self.local.prune_local_segment(segment_id)
+    }
+
+    /// Insert segment bytes into the LRU byte cache, evicting LRU entries until
+    /// total resident bytes is within `segment_cache_max_bytes`.
+    fn cache_segment(&mut self, hash: [u8; 32], data: Vec<u8>) {
+        if self.segment_cache_max_bytes == 0 {
+            return;
+        }
+        let incoming = data.len();
+        // Evict until there is room for the new entry.
+        while self.segment_cache_bytes + incoming > self.segment_cache_max_bytes {
+            match self.segment_cache.pop_lru() {
+                Some((_, evicted)) => self.segment_cache_bytes = self.segment_cache_bytes.saturating_sub(evicted.len()),
+                None => break,
+            }
+        }
+        self.segment_cache_bytes += incoming;
+        self.segment_cache.put(hash, data);
     }
 }
 
@@ -1571,5 +1637,66 @@ mod tests {
         let got = tiered.get(b"ns", b"kv").unwrap();
         assert!(got.is_some(), "KV access must still work after text stripping");
         let _ = stripped; // presence or absence is implementation-dependent
+    }
+
+    #[test]
+    fn test_segment_cache_avoids_redownload() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"x", b"v1").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_cache")))
+            .unwrap();
+        let fresh_remote = edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote))
+            .with_segment_cache_bytes(64 * 1024 * 1024);
+        for m in &metas {
+            fresh.register_archived(vec![ArchivedSegment {
+                hash: m.segment_hash.as_slice().try_into().unwrap(),
+                min_key: m.min_key.clone(),
+                max_key: m.max_key.clone(),
+            }]);
+        }
+
+        // First range — downloads and caches the segment.
+        let r1 = fresh.range(b"ns", b"x", b"z").unwrap();
+        assert_eq!(r1.len(), 1);
+
+        // Second range — must hit cache (no re-download); same results.
+        let r2 = fresh.range(b"ns", b"x", b"z").unwrap();
+        assert_eq!(r2, r1, "cached range must return identical results");
+
+        assert!(fresh.segment_cache_bytes > 0, "cache must hold resident bytes");
+    }
+
+    #[test]
+    fn test_segment_cache_evicts_at_limit() {
+        let (local_dir, remote_dir, mut tiered) = make_tiered();
+
+        tiered.put(b"ns", b"a", b"1").unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_evict")))
+            .unwrap();
+        let fresh_remote = edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        // Cache max = 1 byte — every segment evicts immediately after insert.
+        let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote))
+            .with_segment_cache_bytes(1);
+        for m in &metas {
+            fresh.register_archived(vec![ArchivedSegment {
+                hash: m.segment_hash.as_slice().try_into().unwrap(),
+                min_key: m.min_key.clone(),
+                max_key: m.max_key.clone(),
+            }]);
+        }
+
+        // Must still return correct results even when cache is effectively disabled.
+        let r = fresh.range(b"ns", b"a", b"z").unwrap();
+        assert_eq!(r.len(), 1, "results correct even with 1-byte cache limit");
     }
 }

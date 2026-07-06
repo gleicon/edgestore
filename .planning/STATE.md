@@ -2,24 +2,24 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: milestone
-  current_phase: 09
-  status: Complete
-  last_updated: "2026-07-05T15:00:00.000Z"
+  current_phase: post-09
+  status: Maintenance
+  last_updated: "2026-07-05T00:00:00.000Z"
   progress:
     total_phases: 9
-    completed_phases: 8
+    completed_phases: 9
     total_plans: 55
-    completed_plans: 52
-    percent: 95
+    completed_plans: 55
+    percent: 100
 ---
 
 # Project State — EdgeStore
 
 ## Current Status
 
-**Phase:** 9 — Read-Only Edge Engine (ImmutableEngine for serverless / WASM)
-**Current Phase:** 09
-**Milestone:** Milestone 6 (v1.2)
+**Phase:** Post-Phase 9 — Maintenance / patch releases
+**Current Phase:** post-09
+**Milestone:** v1.1.4 released (patch; all 9 phases complete)
 
 ## Phase Progress
 
@@ -45,6 +45,13 @@ milestone_name: milestone
 | Wave 3: Sidecars + `RemoteStore` extension | Complete | `upload_aux`/`download_aux` on trait + FilesystemRemoteStore + S3RemoteStore; `TieredEngine::with_sidecars()`; `archive_segments` sidecar upload; 7 new tests |
 | Wave 4: WASM bindings | Deferred | Out of scope per D22 — platform owners build their own bindings |
 | Wave 5: Serverless benchmarks | Complete | `edgestore/benches/immutable.rs` — 5 benches (cold start 1K/10K, hot get, range 1K, multi-segment merge) |
+
+## Post-Release Patches
+
+| Version | Date | Changes |
+|---------|------|---------|
+| v1.1.3 | 2026-07-05 | ImmutableEngine, InMemorySegmentReader, sidecars, serverless benchmarks, quality-gate passes |
+| v1.1.4 | 2026-07-05 | TieredEngine range/prefix ephemeral read-through (D23); Engine::strip_text_index + with_text_stripping (D24); Makefile CRATES publish order fix (D25) |
 
 ## Requirement Status
 

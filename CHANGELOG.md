@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-06
+
+### Added
+
+- **`EdgestoreConfig::memtable_max_bytes`** — dedicated memtable flush threshold (default 8 MB). Previously the flush trigger used `segment_size_bytes` via a fixed 256-byte-per-entry estimate, which under-counted large values (blobs, embeddings). The new field decouples "when to flush" from "how big to make segments". Lower on constrained hardware, raise for high-throughput servers. (`edgestore/src/config.rs`, `edgestore/src/engine.rs`)
+
+- **`EdgestoreConfig::hnsw_max_ram_bytes`** — HNSW sidecar file-size guard (default 512 MB). When the `.hnsw` file exceeds this threshold, `vector_search` skips loading the index and falls back to flat SIMD scan. Prevents silent OOM on large vector collections. Logs a warning with the file size and threshold. (`edgestore/src/config.rs`, `edgestore/src/engine.rs`)
+
+- **`Engine::get_into(ns, key, buf: &mut Vec<u8>)`** — buffer-reuse variant of `get()`. Returns `true`/`false` for hit/miss; fills `buf` in-place on hit. For hot loops over large values where repeated `Vec<u8>` allocation is measurable. (`edgestore/src/engine.rs`)
+
+- **`TieredEngine::with_segment_cache_bytes(max_bytes)`** — builder enabling an LRU byte cache for ephemeral segment downloads. When `range()` or `prefix()` downloads segment bytes from the remote for an ephemeral read, those bytes are cached up to `max_bytes` total. Subsequent range queries over the same segment are served from cache without re-downloading. Eviction is LRU by insertion order; on eviction, bytes are re-downloaded on next access. Default: 32 MB. Set to 0 to disable. (`edgestore-tier/src/lib.rs`)
+
+### Changed
+
+- **`TieredEngine::range()` and `prefix()` take `&mut self`** — required by the LRU segment byte cache, which must update access order on each lookup. `AsyncTieredEngine::range()` and `prefix()` now use `blocking_write()` instead of `blocking_read()`. Concurrent range queries are serialized; this is acceptable for the single-writer edge-first use case. Callers that held a `&TieredEngine` reference for range queries must bind `mut`. (`edgestore-tier/src/lib.rs`, `edgestore-tokio/src/tiered.rs`)
+
 ## [1.1.4] - 2026-07-05
 
 ### Fixed

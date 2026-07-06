@@ -229,7 +229,7 @@ pub trait RemoteStore: Send + Sync {
 
 **Rationale:** Segment bounds are binary (`Vec<u8>`). Base64 is the standard JSON-safe encoding. `serde_bytes` provides this automatically without custom serializers.
 
-**Implication:** Manifest consumers (WASM JS, serverless runtimes) must base64-decode `min_key`/`max_key` before use. The format is versioned (`format_version: 1`) for future evolution.
+**Implication:** Manifest consumers (WASM JS, serverless runtimes) receive `min_key`/`max_key` as lowercase hex strings. Decode with `hex::decode()` before use. The format is versioned (`format_version: 1`) for future evolution.
 
 ---
 
@@ -240,3 +240,33 @@ pub trait RemoteStore: Send + Sync {
 **Rationale:** `spawn_blocking` for writes is the simplest correct async wrapper for a sync, single-writer system. Async reads avoid blocking the Tokio thread pool on disk I/O for cache misses, improving throughput under concurrent read load.
 
 **Implication:** `edgestore-tokio/Cargo.toml` depends on `edgestore` (path) and `tokio` (with `rt`, `fs` features). The `Engine` core does not gain any `async` methods. `AsyncEngine` in `edgestore-tokio` wraps `Arc<Mutex<Engine>>` for writes and `Arc<Engine>` for reads (using a separate read path). `Arc<RwLock<BlockCache>>` is passed to the async reader so cache hits avoid blocking.
+
+---
+
+## D23 — TieredEngine range/prefix: ephemeral read-through, not local-only
+
+**Decision:** `TieredEngine::range()` and `prefix()` download overlapping archived segments ephemerally and merge results with local data. No segment import, no disk growth. Local data wins on key collision (LWW).
+
+**Rationale:** The previous local-only behavior silently omitted archived keys from scan results, violating user expectations for a tiered store. Ephemeral download avoids permanent local growth while keeping scans correct. `fetch_archived_overlapping()` remains for callers that want explicit warming.
+
+**Implication:** `range()` / `prefix()` stay `&self` (read lock, no write lock needed). Download errors for individual archived segments are logged and skipped; partial results are returned. Both `TieredEngine` and `AsyncTieredEngine` reflect this behavior.
+
+---
+
+## D24 — Text index stripping: Engine::strip_text_index + SegmentMeta flag
+
+**Decision:** `Engine::strip_text_index(segment_id)` rewrites the target segment filtering out all `__text__*` namespace entries and sets `SegmentMeta::text_index_stripped = true`. `TieredEngine::with_text_stripping(true)` auto-strips after each successful `archive_segments()` upload. `SegmentMeta::text_index_stripped` uses `#[serde(default)]` for backward compat.
+
+**Rationale:** Text index entries commingle with user records in ordinary segments. Once a segment is archived, there is no mechanism to GC the index weight from local storage without a rewrite. Auto-stripping after archive is the lifecycle hook tiered deployments need.
+
+**Implication:** Stripped segments cannot contribute to `rebuild_text_indices()` after a crash-recovery cycle. Tiered deployments that need crash-safe text index reconstruction should NOT enable text stripping, or must re-index from source data after recovery.
+
+---
+
+## D25 — Publish order: edgestore-tier was missing from Makefile CRATES
+
+**Decision:** Correct publish order is `edgestore edgestore-repl edgestore-tier edgestore-tokio edgestore-cli`. `edgestore-tier` was missing from the Makefile `CRATES` list prior to v1.1.4, causing `make publish` to skip it silently.
+
+**Rationale:** `edgestore-tier` depends on `edgestore` and `edgestore-repl`; `edgestore-tokio` and `edgestore-cli` depend on `edgestore-tier`. Publish order must be topological.
+
+**Implication:** Fixed in Makefile line 18. Use `make tag && make tags-push && make publish` for all future releases.

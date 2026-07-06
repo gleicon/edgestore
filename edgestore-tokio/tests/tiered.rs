@@ -99,14 +99,21 @@ async fn fetch_archived_overlapping_rehydrates_only_segments_in_range() {
         .await;
 
     // Fetch only the range overlapping the *early* key — the late segment must
-    // NOT be pulled in.
+    // NOT be imported (pulled into local storage).
     fresh.fetch_archived_overlapping(b"logs", b"2020", b"2021").await.unwrap();
 
     let early = fresh.get(b"logs", b"2020").await.unwrap();
     assert_eq!(early, Some(b"old-data".to_vec()), "the overlapping segment must be fetched");
 
-    // The late key is still not local — range() is local-only per TieredEngine's
-    // design, so a scan over the un-fetched region must come back empty.
-    let scan = fresh.range(b"logs", b"2025", b"2035").await.unwrap();
-    assert!(scan.is_empty(), "the non-overlapping segment must not have been fetched");
+    // Only the overlapping (early) segment should have been imported locally — one
+    // .dat file, not two. `range()` itself now reads through to archived segments
+    // (1.1.4) regardless of what's been imported, so a scan finding the late key is
+    // expected and correct; what this test actually guards is selective *import*,
+    // not read-through reach.
+    let dat_files = std::fs::read_dir(fresh_dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "dat"))
+        .count();
+    assert_eq!(dat_files, 1, "fetch_archived_overlapping must import only the overlapping segment, not the whole archive");
 }

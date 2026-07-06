@@ -271,6 +271,22 @@ impl Engine {
         r
     }
 
+    /// Get a value into an existing buffer, avoiding a fresh `Vec<u8>` allocation.
+    ///
+    /// Returns `true` if the key was found and `buf` was filled. Returns `false`
+    /// (and leaves `buf` unchanged) on a miss. Useful for high-throughput callers
+    /// that reuse a buffer across many lookups.
+    pub fn get_into(&self, ns: &[u8], key: &[u8], buf: &mut Vec<u8>) -> Result<bool, EdgestoreError> {
+        match self.get_inner(ns, key)? {
+            Some(val) => {
+                buf.clear();
+                buf.extend_from_slice(&val);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     /// Delete a key in the given namespace (tombstone).
     pub fn delete(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
@@ -483,6 +499,17 @@ impl Engine {
         Ok(new_meta)
     }
 
+    /// Removes one local segment: deletes its `.dat`/`.idx`/`.xf`/`.meta` files and
+    /// its manifest entry. Does **not** touch any remote/archived copy — for callers
+    /// that have already confirmed the segment is durably archived elsewhere and
+    /// just want to reclaim local disk space (e.g. Pierre's local-retention pruning,
+    /// after a configurable grace period past a successful archive).
+    ///
+    /// A no-op (returns `Ok`) if `segment_id` doesn't exist locally.
+    pub fn prune_local_segment(&mut self, segment_id: crate::types::SegmentId) -> Result<(), EdgestoreError> {
+        self.segment_store.remove_segment(segment_id)
+    }
+
     // ── Private implementations ───────────────────────────────────────────────
 
     fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
@@ -523,7 +550,7 @@ impl Engine {
         };
         self.memtable.insert(encoded_key, entry);
 
-        if (self.memtable.len() as u64) * AVG_ENTRY_SIZE_ESTIMATE >= self.config.segment_size_bytes {
+        if (self.memtable.len() as u64) * AVG_ENTRY_SIZE_ESTIMATE >= self.config.memtable_max_bytes {
             let _ = self.flush_to_segments_inner();
         }
 
@@ -1321,6 +1348,17 @@ impl Engine {
             return Ok(None);
         }
 
+        let file_bytes = std::fs::metadata(&sidecar_path).map(|m| m.len()).unwrap_or(0);
+        if file_bytes > self.config.hnsw_max_ram_bytes {
+            eprintln!(
+                "[edgestore] HNSW sidecar for namespace {:?} is {} MB, exceeds hnsw_max_ram_bytes ({} MB); falling back to flat scan",
+                String::from_utf8_lossy(ns),
+                file_bytes / (1024 * 1024),
+                self.config.hnsw_max_ram_bytes / (1024 * 1024),
+            );
+            return Ok(None);
+        }
+
         let bytes = std::fs::read(&sidecar_path)?;
         let index = HnswIndex::deserialize(&bytes)?;
 
@@ -1983,6 +2021,50 @@ mod tests {
     }
 
     /// Regression: Engine::range_inner must return sorted results even with multiple segments.
+    #[test]
+    fn test_get_into_hit_and_miss() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"k", b"val").unwrap();
+
+        let mut buf = Vec::new();
+        assert!(engine.get_into(b"ns", b"k", &mut buf).unwrap(), "existing key must return true");
+        assert_eq!(buf, b"val");
+
+        let found = engine.get_into(b"ns", b"missing", &mut buf).unwrap();
+        assert!(!found, "missing key must return false");
+    }
+
+    #[test]
+    fn test_get_into_reuses_buffer() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"k1", b"first").unwrap();
+        engine.put(b"ns", b"k2", b"second").unwrap();
+
+        let mut buf = Vec::with_capacity(64);
+        engine.get_into(b"ns", b"k1", &mut buf).unwrap();
+        assert_eq!(buf, b"first");
+        engine.get_into(b"ns", b"k2", &mut buf).unwrap();
+        assert_eq!(buf, b"second", "buffer must be overwritten on second call");
+    }
+
+    #[test]
+    fn test_memtable_auto_flush_at_threshold() {
+        let dir = TempDir::new().unwrap();
+        let mut cfg = EdgestoreConfig::new(dir.path());
+        // Set a tiny threshold so a few puts trigger a flush.
+        // AVG_ENTRY_SIZE_ESTIMATE = 256 bytes, so 2 entries × 256 = 512 ≥ threshold.
+        cfg.memtable_max_bytes = 400;
+        let mut engine = Engine::open(cfg).unwrap();
+
+        engine.put(b"ns", b"a", b"1").unwrap();
+        engine.put(b"ns", b"b", b"2").unwrap();
+
+        // At least one segment must have been created by the auto-flush.
+        assert!(!engine.list_segment_metas().is_empty(), "auto-flush must create a segment");
+    }
+
     /// This test creates 3 segments and verifies the merge produces sorted output.
     #[test]
     fn test_range_merge_sorted_across_segments() {

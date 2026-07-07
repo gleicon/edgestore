@@ -37,6 +37,11 @@ pub struct EdgestoreConfig {
     /// skips loading the index and uses the flat SIMD scan instead. Prevents
     /// silent OOM on large vector collections. Defaults to 512 MB.
     pub hnsw_max_ram_bytes: u64,
+    /// When `true`, all write methods return `Err(EdgestoreError::ReadOnly)`.
+    ///
+    /// Set via `Engine::open_readonly`. Use for replica instances where writes
+    /// must be rejected to prevent divergence from the primary.
+    pub readonly: bool,
     /// Factory function that returns a new empty memtable.
     pub memtable_factory: Box<dyn Fn() -> Box<dyn MemTable> + Send + Sync>,
 }
@@ -56,6 +61,7 @@ impl std::fmt::Debug for EdgestoreConfig {
             .field("compaction_write_budget_bytes", &self.compaction_write_budget_bytes)
             .field("fdp_enabled", &self.fdp_enabled)
             .field("hnsw_max_ram_bytes", &self.hnsw_max_ram_bytes)
+            .field("readonly", &self.readonly)
             .field("memtable_factory", &"<fn>")
             .finish()
     }
@@ -77,6 +83,7 @@ impl EdgestoreConfig {
             compaction_write_budget_bytes: 256 * 1024 * 1024,
             fdp_enabled: false,
             hnsw_max_ram_bytes: 512 * 1024 * 1024,
+            readonly: false,
             memtable_factory: Box::new(|| Box::new(BTreeMemTable::new())),
         }
     }

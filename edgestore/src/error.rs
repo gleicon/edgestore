@@ -55,6 +55,8 @@ pub enum EdgestoreError {
     },
     /// General corrupt data error.
     CorruptData(String),
+    /// Write attempted on a read-only engine.
+    ReadOnly,
 }
 
 impl fmt::Display for EdgestoreError {
@@ -84,6 +86,7 @@ impl fmt::Display for EdgestoreError {
                 write!(f, "dimension mismatch: expected {} bytes, got {}", expected, actual)
             }
             EdgestoreError::CorruptData(msg) => write!(f, "corrupt data: {}", msg),
+            EdgestoreError::ReadOnly => write!(f, "write attempted on a read-only engine"),
         }
     }
 }

@@ -30,9 +30,67 @@ assert_eq!(value, Some(b"world".to_vec()));
 db.flush()?; // WAL fsync + optional memtable flush
 ```
 
-See [`edgestore/examples/`](edgestore/examples/) for runnable examples (KV, vector search, replication).
+See [`edgestore/examples/`](edgestore/examples/) for runnable examples (KV, vector search, replication, unified engine).
 
 For a rich documentation site with feature guides and paper references, open [`website/index.html`](website/index.html) in your browser.
+
+---
+
+## One Engine, Many Namespaces
+
+**Use a single `Engine` instance per process.** KV, vector, and text search share one WAL, one lock file, one flush timer, and one replication target. Namespaces provide zero-overhead isolation.
+
+```rust
+use edgestore::{EdgestoreConfig, Engine, VectorEngine, TextEngine};
+use edgestore::vector::types::Dtype;
+use edgestore::vector::distance::Metric;
+use std::collections::HashMap;
+
+let mut engine = Engine::open(EdgestoreConfig::new("/var/db"))?;
+
+// KV — namespace: b"products"
+engine.put(b"products", b"p1", b"{\"name\":\"Widget A\"}")?;
+
+// Vectors — same user namespace, isolated internally under __vec__products
+engine.vector_put(b"products", b"p1", 4, Dtype::F32, &embed_bytes)?;
+
+// Text — same user namespace, isolated internally under __text__products
+engine.index_text(b"products", b"p1", "compact widget a", HashMap::new())?;
+
+// One flush, one segment, one replication target.
+engine.flush_to_segments()?;
+```
+
+**Avoid** opening multiple `Engine` instances at different paths (e.g. `products.db` + `products.vec`): two lock files, two flush timers that can diverge, two replication targets. Use namespaces instead.
+
+See [`examples/unified_engine.rs`](edgestore/examples/unified_engine.rs) for the full pattern.
+
+---
+
+## Replica Safety
+
+Open replicas with `Engine::open_readonly` to prevent accidental writes:
+
+```rust
+use edgestore::{EdgestoreConfig, Engine, EdgestoreError};
+
+let mut replica = Engine::open_readonly(EdgestoreConfig::new("/var/db/replica"))?;
+replica.get(b"products", b"p1")?;                     // ok
+replica.put(b"products", b"p2", b"data").unwrap_err(); // Err(ReadOnly)
+```
+
+Or use `ReplicatedEngine` from `edgestore-repl` to wire the full primary + replica topology in two lines:
+
+```rust
+use edgestore_repl::ReplicatedEngine;
+use edgestore::EdgestoreConfig;
+
+// Primary: writable engine + HTTP replication server
+let primary = ReplicatedEngine::open_primary(EdgestoreConfig::new("/var/db/primary"), "0.0.0.0:8900")?;
+
+// Replica: read-only engine + anti-entropy pull loop
+let replica = ReplicatedEngine::open_replica(EdgestoreConfig::new("/var/db/replica"), "http://primary:8900")?;
+```
 
 ---
 

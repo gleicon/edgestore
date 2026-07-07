@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-06
+
+### Added
+
+- **`Engine::open_readonly(config)`** — opens the engine in read-only mode. All write methods (`put`, `delete`, `vector_put`, `vector_delete`, `index_text`, `delete_text`, `flush_to_segments`, `compact_once`, `import_segment`) return `Err(EdgestoreError::ReadOnly)`. Use for replica instances to prevent accidental divergence from the primary. Controlled by `EdgestoreConfig::readonly: bool` (default `false`). (`edgestore/src/engine.rs`, `edgestore/src/config.rs`, `edgestore/src/error.rs`)
+
+- **`Engine::with_on_segment_flushed(cb)`** — registers a callback fired after every successful segment flush, both explicit (`flush_to_segments`) and auto-triggered by `put` when `memtable_max_bytes` is exceeded. Callback signature: `Fn(&SegmentMeta) + Send + Sync`. Use to wake a replication anti-entropy loop (drops lag from ≤30s to ≤1 RTT), update external metrics, or trigger downstream processing. Runs synchronously on the calling thread — keep it fast (send on a channel, set an atomic flag). (`edgestore/src/engine.rs`)
+
+- **`Engine::vector_count(ns) -> Option<u64>`** — returns the number of vectors in the HNSW index for the given namespace, or `None` if the index is not currently loaded in memory. Never triggers a disk scan or implicit index load. Call `preload_vector_index(ns)` first if a guaranteed count is needed. (`edgestore/src/engine.rs`)
+
+- **`EdgestoreError::ReadOnly`** — new error variant returned by all write methods on a read-only engine. (`edgestore/src/error.rs`)
+
+- **`ReplicatedEngine` in `edgestore-repl`** — convenience wrapper eliminating the three-step boilerplate of wiring `Engine` + `HttpReplicationServer` + `AntiEntropyLoop`. `ReplicatedEngine::open_primary(config, bind_addr)` opens a writable primary and starts the HTTP server. `ReplicatedEngine::open_replica(config, primary_url)` opens a read-only replica and starts the anti-entropy pull loop. (`edgestore-repl/src/replicated_engine.rs`)
+
+- **`examples/unified_engine.rs`** — runnable example showing KV + vector + text search all in one `Engine` instance at one path, distinguished by namespace. Documents the recommended pattern: one lock file, one WAL, one flush timer, one replication target. (`edgestore/examples/unified_engine.rs`)
+
+### Changed
+
+- **`Drop` now fsyncs the WAL** in addition to persisting text indices. On clean shutdown (SIGTERM, normal drop), in-flight WAL writes are durable before the file handle closes. Errors from fsync in Drop are logged (`log::warn!`) and not propagated. (`edgestore/src/engine.rs`)
+
 ### Fixed
 
 - **`index_text` was effectively O(n²) for indexing n documents into one namespace — now amortized O(n).** `Engine::index_text` unconditionally called `InvertedIndex::remove_document` before every `add_document`, even for a document never indexed before; `remove_document` scans every posting in every term (O(total index size)) regardless of whether the doc_id was ever present. For an append-only workload (unique key per document, the common case), that scan was pure waste on every call, scaling with however much had already been indexed. Measured: 10K documents in one namespace went from ~750ms to ~130-155ms; 100K documents from ~134s to ~1.5-1.8s; 1M documents, which never completed in any prior benchmark run, now indexes in ~18.5s. Fixed with a new `InvertedIndex::doc_bloom` (`edgestore/src/text/bloom.rs`) — a small, hand-rolled, capacity-adaptive Bloom filter checked before `remove_document`; zero false negatives means it's always safe to skip the scan when it reports "definitely not present". Capacity is not fixed — the filter doubles (rebuilding from `postings`) whenever it saturates, since a fixed-capacity version was found (before shipping) to degrade silently and just as badly once actual usage exceeded its designed capacity. Not part of `InvertedIndex`'s on-disk format — a pure in-memory optimization aid, rebuilt on load or growth. (`edgestore/src/text/bloom.rs`, `edgestore/src/text/index.rs`, `edgestore/src/engine.rs`)

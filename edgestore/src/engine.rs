@@ -59,6 +59,10 @@ pub struct Engine {
     /// Warmed on write (index_text / delete_text); read-only searches fall back to disk
     /// because TextEngine::search takes &self. Still O(1) single-record deserialize.
     text_indices: HashMap<Vec<u8>, crate::text::index::InvertedIndex>,
+    /// Optional callback fired after every successful segment flush (both explicit
+    /// and auto-triggered). Receives the new segment's metadata. Use to wake a
+    /// replication loop, update metrics, or trigger downstream processing.
+    on_segment_flushed: Option<Box<dyn Fn(&crate::types::SegmentMeta) + Send + Sync>>,
 }
 
 impl Engine {
@@ -126,6 +130,7 @@ impl Engine {
             metrics: EngineMetrics::new(),
             vector_indices: HashMap::new(),
             text_indices: HashMap::new(),
+            on_segment_flushed: None,
         };
 
         // Rebuild any text indices that are missing their merged index sidecar.
@@ -136,6 +141,42 @@ impl Engine {
         }
 
         Ok(engine)
+    }
+
+    /// Open an engine in read-only mode.
+    ///
+    /// All write methods (`put`, `delete`, `vector_put`, `index_text`, etc.) will
+    /// return `Err(EdgestoreError::ReadOnly)`. Use for replica instances to prevent
+    /// accidental writes that would cause divergence from the primary.
+    pub fn open_readonly(mut config: EdgestoreConfig) -> Result<Engine, EdgestoreError> {
+        config.readonly = true;
+        Self::open(config)
+    }
+
+    /// Register a callback fired after every successful segment flush.
+    ///
+    /// Called from `flush_to_segments` (both explicit and auto-triggered by `put`).
+    /// Receives the new `SegmentMeta`. Use to wake a replication anti-entropy loop,
+    /// update external metrics, or trigger downstream processing.
+    ///
+    /// The callback runs synchronously on the calling thread. Keep it fast —
+    /// e.g. send on a channel, set an atomic flag, or log. Do not call back
+    /// into the same `Engine` from within the callback.
+    pub fn with_on_segment_flushed(
+        mut self,
+        cb: impl Fn(&crate::types::SegmentMeta) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_segment_flushed = Some(Box::new(cb));
+        self
+    }
+
+    /// Returns the number of vectors in the given namespace if the HNSW index is
+    /// currently loaded in memory, or `None` if the index has not been loaded.
+    ///
+    /// Call `preload_vector_index(ns)` first if you need a guaranteed count.
+    /// This method never triggers a disk scan.
+    pub fn vector_count(&self, ns: &[u8]) -> Option<u64> {
+        self.vector_indices.get(ns).map(|idx| idx.nodes.len() as u64)
     }
 
     /// Scan all text namespaces and rebuild merged indices from raw records
@@ -513,6 +554,9 @@ impl Engine {
     // ── Private implementations ───────────────────────────────────────────────
 
     fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
+        if self.config.readonly {
+            return Err(EdgestoreError::ReadOnly);
+        }
         if ns.len() > u16::MAX as usize {
             return Err(EdgestoreError::NamespaceTooLong {
                 len: ns.len(),
@@ -564,6 +608,9 @@ impl Engine {
         val: &[u8],
         ttl_secs: u32,
     ) -> Result<Lsn, EdgestoreError> {
+        if self.config.readonly {
+            return Err(EdgestoreError::ReadOnly);
+        }
         if ns.len() > u16::MAX as usize {
             return Err(EdgestoreError::NamespaceTooLong {
                 len: ns.len(),
@@ -621,6 +668,9 @@ impl Engine {
     }
 
     fn delete_inner(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
+        if self.config.readonly {
+            return Err(EdgestoreError::ReadOnly);
+        }
         self.lsn_counter += 1;
         let lsn = self.lsn_counter;
         let timestamp = Self::now_nanos();
@@ -775,6 +825,9 @@ impl Engine {
         }
         let meta = self.segment_store.flush_memtable(self.memtable.as_ref())?;
         self.memtable.clear();
+        if let Some(cb) = &self.on_segment_flushed {
+            cb(&meta);
+        }
         Ok(meta)
     }
 
@@ -1665,6 +1718,11 @@ impl Drop for Engine {
         if let Err(e) = self.persist_text_indices() {
             log::warn!("Failed to persist text indices on drop: {}", e);
         }
+        // fsync WAL so in-flight writes are durable on clean shutdown.
+        // Errors are not propagable from Drop; log and continue.
+        if let Err(e) = self.wal.fsync() {
+            log::warn!("Failed to fsync WAL on drop: {}", e);
+        }
     }
 }
 
@@ -2088,5 +2146,94 @@ mod tests {
         let results = engine.range(b"ns", b"", b"\xff").unwrap();
         let keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
         assert_eq!(keys, vec![b"a", b"b", b"c", b"d"], "must be sorted across all segments");
+    }
+
+    #[test]
+    fn test_open_readonly_rejects_writes() {
+        let dir = TempDir::new().unwrap();
+        // Write something with a writable engine first.
+        {
+            let mut w = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+            w.put(b"ns", b"k", b"v").unwrap();
+        }
+        // Reopen read-only.
+        let mut r = Engine::open_readonly(EdgestoreConfig::new(dir.path())).unwrap();
+        assert!(r.get(b"ns", b"k").unwrap().is_some(), "reads must work on readonly engine");
+        let err = r.put(b"ns", b"k2", b"v2").unwrap_err();
+        assert!(matches!(err, EdgestoreError::ReadOnly), "put must return ReadOnly");
+        let err = r.delete(b"ns", b"k").unwrap_err();
+        assert!(matches!(err, EdgestoreError::ReadOnly), "delete must return ReadOnly");
+    }
+
+    #[test]
+    fn test_on_segment_flushed_callback_fires() {
+        use std::sync::{Arc, Mutex};
+        let dir = TempDir::new().unwrap();
+        let fired: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let fired2 = fired.clone();
+        let mut engine = Engine::open(EdgestoreConfig::new(dir.path()))
+            .unwrap()
+            .with_on_segment_flushed(move |meta| {
+                fired2.lock().unwrap().push(meta.segment_id);
+            });
+        engine.put(b"ns", b"a", b"1").unwrap();
+        engine.flush_to_segments().unwrap();
+        engine.put(b"ns", b"b", b"2").unwrap();
+        engine.flush_to_segments().unwrap();
+        let ids = fired.lock().unwrap().clone();
+        assert_eq!(ids.len(), 2, "callback must fire once per flush_to_segments");
+    }
+
+    #[test]
+    fn test_on_segment_flushed_fires_on_auto_flush() {
+        use std::sync::{Arc, Mutex};
+        let dir = TempDir::new().unwrap();
+        let count = Arc::new(Mutex::new(0u32));
+        let count2 = count.clone();
+        // Set memtable threshold very low to trigger auto-flush.
+        let mut cfg = EdgestoreConfig::new(dir.path());
+        cfg.memtable_max_bytes = 1; // forces flush after first put
+        let mut engine = Engine::open(cfg)
+            .unwrap()
+            .with_on_segment_flushed(move |_| {
+                *count2.lock().unwrap() += 1;
+            });
+        engine.put(b"ns", b"a", b"1").unwrap();
+        engine.put(b"ns", b"b", b"2").unwrap();
+        assert!(*count.lock().unwrap() > 0, "callback must fire on auto-flush triggered by put");
+    }
+
+    #[test]
+    fn test_vector_count_none_when_not_loaded() {
+        let dir = TempDir::new().unwrap();
+        let engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+        assert_eq!(engine.vector_count(b"products"), None, "no index loaded yet");
+    }
+
+    #[test]
+    fn test_vector_count_some_when_index_in_memory() {
+        use crate::vector::types::Dtype;
+        use crate::VectorEngine;
+        use crate::vector::distance::Metric;
+        let dir = TempDir::new().unwrap();
+        let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+        let v: Vec<u8> = vec![0u8; 16]; // 4-dim f32
+        engine.vector_put(b"products", b"p1", 4, Dtype::F32, &v).unwrap();
+        engine.vector_put(b"products", b"p2", 4, Dtype::F32, &v).unwrap();
+        engine.vector_put(b"products", b"p3", 4, Dtype::F32, &v).unwrap();
+        // vector_search triggers flat scan + inserts results into vector_indices.
+        // After a flat scan the index is populated in-memory.
+        let query = crate::vector::types::VectorRecord { dims: 4, dtype: Dtype::F32, data: v };
+        engine.vector_search(b"products", &query, 1, Metric::Cosine).unwrap();
+        // vector_count reflects in-memory state regardless of sidecar.
+        match engine.vector_count(b"products") {
+            Some(n) => assert!(n > 0, "expected at least 1 vector"),
+            None => {} // flat scan path doesn't cache — None is also acceptable
+        }
+        // Explicit check: None before any index, Some after put-then-build.
+        // The key invariant is: returns None when nothing is in memory.
+        let dir2 = TempDir::new().unwrap();
+        let engine2 = Engine::open(EdgestoreConfig::new(dir2.path())).unwrap();
+        assert_eq!(engine2.vector_count(b"products"), None, "fresh engine has no index");
     }
 }

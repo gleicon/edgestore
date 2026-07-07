@@ -14,6 +14,13 @@ use edgestore_tier::{ArchivedSegment, TieredEngine};
 #[derive(Clone)]
 pub struct AsyncTieredEngine {
     inner: Arc<RwLock<TieredEngine>>,
+    /// Fires (via `notify_one`) every time the local engine flushes a segment —
+    /// explicit (`flush_to_segments`) or `Engine`'s own auto-flush-on-`put` once
+    /// `memtable_max_bytes` is exceeded. Always wired at construction (cheap: a
+    /// `Notify` with no waiters costs nothing when notified) so callers can react
+    /// to a flush immediately via `flush_notify()` instead of only on their own
+    /// polling interval.
+    flush_notify: Arc<tokio::sync::Notify>,
 }
 
 impl AsyncTieredEngine {
@@ -32,14 +39,28 @@ impl AsyncTieredEngine {
         with_sidecars: bool,
         with_text_stripping: bool,
     ) -> Result<Self, EdgestoreError> {
+        let flush_notify = Arc::new(tokio::sync::Notify::new());
+        let notify_for_callback = flush_notify.clone();
         let engine = tokio::task::spawn_blocking(move || -> Result<TieredEngine, EdgestoreError> {
-            let local = Engine::open(config)?;
+            let local = Engine::open(config)?.with_on_segment_flushed(move |_meta| {
+                notify_for_callback.notify_one();
+            });
             Ok(TieredEngine::new(local, remote).with_sidecars(with_sidecars).with_text_stripping(with_text_stripping))
         })
         .await
         .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))??;
 
-        Ok(AsyncTieredEngine { inner: Arc::new(RwLock::new(engine)) })
+        Ok(AsyncTieredEngine { inner: Arc::new(RwLock::new(engine)), flush_notify })
+    }
+
+    /// A handle that resolves the instant any segment is flushed locally (explicit
+    /// or auto-triggered). `notify_one` semantics: if nothing is currently awaiting
+    /// it, the next `.notified().await` call resolves immediately instead of
+    /// missing the notification — safe for a caller that isn't always waiting.
+    /// Race this against a polling interval to react to flushes without waiting up
+    /// to the full interval (e.g. archiving a newly-flushed segment immediately).
+    pub fn flush_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.flush_notify.clone()
     }
 
     pub async fn get(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {

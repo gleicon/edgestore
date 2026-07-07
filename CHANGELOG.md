@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`AsyncTieredEngine::flush_notify()`** — exposes a `tokio::sync::Notify` handle (via `notify_one`) wired to the local engine's `with_on_segment_flushed` at construction. Lets async callers (e.g. a caller-driven tiering worker) race a polling interval against this handle to react to a flush immediately instead of waiting up to the full interval — the same latency win `with_on_segment_flushed` gives replication anti-entropy, extended to any `AsyncTieredEngine` user. Always wired, no new constructor parameters. (`edgestore-tokio/src/tiered.rs`)
+
 ## [1.3.0] - 2026-07-06
 
 ### Added

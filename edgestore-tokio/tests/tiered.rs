@@ -22,6 +22,23 @@ async fn put_get_local_roundtrip() {
 }
 
 #[tokio::test]
+async fn flush_notify_resolves_after_an_explicit_flush() {
+    let local_dir = TempDir::new().unwrap();
+    let remote_dir = TempDir::new().unwrap();
+    let engine = open(local_dir.path(), remote_dir.path()).await;
+    let notify = engine.flush_notify();
+
+    engine.put(b"ns", b"key", b"val").await.unwrap();
+    engine.flush_to_segments().await.unwrap();
+
+    // notify_one semantics: the notification is stored even though nothing was
+    // awaiting it yet — this call must resolve immediately, not hang.
+    tokio::time::timeout(std::time::Duration::from_secs(2), notify.notified())
+        .await
+        .expect("flush_notify must resolve promptly after an explicit flush");
+}
+
+#[tokio::test]
 async fn index_and_search_text_pass_through_to_local_engine() {
     let local_dir = TempDir::new().unwrap();
     let remote_dir = TempDir::new().unwrap();

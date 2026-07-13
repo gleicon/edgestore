@@ -260,6 +260,46 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       </div>
     </section>
 
+    <!-- Tiered Storage -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Tiered Storage <span class="text-sm font-normal text-slate-500 ml-2">edgestore-tier</span></h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>When local disk can't hold your full dataset, <code>edgestore-tier</code> wraps a local <code>Engine</code> with a transparent S3 read-through layer. Reads try local first; on a miss they fetch the matching archived segment from S3 ephemerally without permanently importing it.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>Caller-driven archiving</strong> — policy (when to archive, when to prune) stays in your code</li>
+            <li><strong>Read lock fast path</strong> — hot-window queries never block behind the writer (v1.4.0)</li>
+            <li><strong>Flush-wake notify</strong> — <code>flush_notify()</code> on <code>AsyncTieredEngine</code> wakes a tiering worker the moment a segment lands</li>
+            <li><strong>Text index stripping</strong> — <code>with_text_stripping(true)</code> auto-strips text index bytes from archived segments to reclaim local disk</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Requires edgestore-tier crate</span>
+<span class="keyword">use</span> edgestore_tier::TieredEngine;
+<span class="keyword">use</span> edgestore_repl::S3RemoteStore;
+
+<span class="keyword">let</span> local = Engine::open(config)?;
+<span class="keyword">let</span> remote = S3RemoteStore::new(<span class="string">"bucket"</span>, <span class="type">None</span>, <span class="type">None</span>)?;
+<span class="keyword">let mut</span> tiered = TieredEngine::new(local, Box::new(remote));
+
+<span class="comment">// Writes stay local</span>
+tiered.put(<span class="string">b"logs"</span>, <span class="string">b"2026-07-12"</span>, data)?;
+
+<span class="comment">// Reads fall through to S3 on local miss</span>
+<span class="keyword">let</span> val = tiered.get(<span class="string">b"logs"</span>, <span class="string">b"2025-01-01"</span>)?;
+
+<span class="comment">// Archive old segments to S3</span>
+<span class="keyword">let</span> old = tiered.local().list_segment_metas();
+tiered.archive_segments(&old)?;</code></pre>
+        </div>
+      </div>
+    </section>
+
     <!-- Snapshots -->
     <section class="mb-16">
       <div class="flex items-center space-x-3 mb-4">

@@ -297,6 +297,11 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
           <pre class="code-block p-3 text-sm"><code>cargo add edgestore-repl --features s3</code></pre>
         </div>
         <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
+          <h3 class="font-semibold text-slate-900 mb-1">Tiered Storage</h3>
+          <p class="text-xs text-slate-500 mb-3">Local hot cache + transparent S3 read-through when data exceeds local disk.</p>
+          <pre class="code-block p-3 text-sm"><code>cargo add edgestore-tier</code></pre>
+        </div>
+        <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
           <h3 class="font-semibold text-slate-900 mb-1">CLI Tool</h3>
           <p class="text-xs text-slate-500 mb-3">Admin commands: put, get, compact, export.</p>
           <pre class="code-block p-3 text-sm"><code>cargo install edgestore-cli</code></pre>

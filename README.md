@@ -103,6 +103,7 @@ EdgeStore is a Cargo workspace. Most users need only the first crate.
 | A local embedded database (sync, no network deps) | `edgestore` | `edgestore = "1.0"` |
 | The same, but async in a Tokio app | `edgestore` + `edgestore-tokio` | `edgestore-tokio = "1.0"` |
 | Replication between nodes via HTTP or S3 | `edgestore-repl` | `edgestore-repl = "1.0"` |
+| Dataset exceeds local disk, need S3 read-through | `edgestore-tier` | `edgestore-tier = "1.0"` |
 | An admin command-line tool | `edgestore-cli` | `cargo install edgestore-cli` |
 
 **`edgestore-repl` is optional.** The core `edgestore` crate has zero network

@@ -5,3 +5,4 @@ target/
 target/debug/
 edgestore-go
 edgestore-zig
+edgestore-website.tar.gz

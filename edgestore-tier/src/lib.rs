@@ -328,11 +328,7 @@ impl TieredEngine {
     ///
     /// Same ephemeral-download semantics as `range()` — no local import, local wins ties.
     #[allow(clippy::type_complexity)]
-    pub fn prefix(
-        &mut self,
-        ns: &[u8],
-        prefix: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    pub fn prefix(&mut self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let local = self.local.prefix(ns, prefix)?;
         let archived = self.prefix_archived(ns, prefix)?;
         Ok(merge_local_wins(local, archived))
@@ -545,11 +541,7 @@ impl TieredEngine {
 
     /// Local-only prefix scan, no archived read-through. Only a complete answer
     /// when `prefix_needs_archived_fetch` is `false` for the same arguments.
-    pub fn local_only_prefix(
-        &self,
-        ns: &[u8],
-        prefix: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    pub fn local_only_prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
         self.local.prefix(ns, prefix)
     }
 
@@ -625,11 +617,7 @@ impl TieredEngine {
     }
 
     /// Prefix query against archived segments only, ephemerally.
-    fn prefix_archived(
-        &mut self,
-        ns: &[u8],
-        prefix: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    fn prefix_archived(&mut self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
         // Compute the same upper bound ImmutableEngine::prefix uses internally.
         let enc_end = edgestore::types::prefix_upper_bound(&enc_prefix)
@@ -839,10 +827,7 @@ fn synthetic_meta(hash: &[u8; 32]) -> edgestore::types::SegmentMeta {
 ///
 /// Local data is always the authoritative version — it was either written after the
 /// archived copy, or is the same data. The result is sorted by key.
-fn merge_local_wins(
-    local: KvPairs,
-    archived: KvPairs,
-) -> KvPairs {
+fn merge_local_wins(local: KvPairs, archived: KvPairs) -> KvPairs {
     if archived.is_empty() {
         return local;
     }

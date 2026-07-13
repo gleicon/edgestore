@@ -94,7 +94,7 @@
         <div>
           <div class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 text-sm font-medium mb-6 border border-white/20">
             <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
-            v1.1.1 Released
+            v1.4.0 Released
           </div>
           <h1 class="text-4xl lg:text-6xl font-bold leading-tight mb-6">
             Local-First Embedded<br>
@@ -138,14 +138,16 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       <div class="bg-edge-50 rounded-xl border border-edge-200 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center space-x-2 mb-2">
-            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.1.1</span>
-            <span class="text-sm text-slate-600 font-medium">2026-07-03</span>
+            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.4.0</span>
+            <span class="text-sm text-slate-600 font-medium">2026-07-12</span>
           </div>
-          <h3 class="font-semibold text-slate-900">MSRV 1.95.0 + Cross-platform FDP fix + Performance</h3>
+          <h3 class="font-semibold text-slate-900">Read-lock fast path for tiered reads + flush-wake notify</h3>
           <p class="text-sm text-slate-600 mt-1">
-            Minimum Rust version raised to 1.95.0. FDP backend now compiles and passes tests on macOS, Linux x86_64, and Linux ARM64.
-            Segment index caching, BinaryHeap K-way merge, and merge-join for range/prefix scans improve read performance.
-            HNSW staleness detection uses BLAKE3 segment-set stamps.
+            <code>AsyncTieredEngine::get</code>, <code>range</code>, and <code>prefix</code> now try a read-lock fast path first,
+            only escalating to the write lock when an archived segment actually needs fetching.
+            Concurrent readers no longer serialize behind the single writer for hot-window queries.
+            <code>AsyncTieredEngine::flush_notify()</code> lets tiering workers react to a segment flush immediately
+            instead of waiting for a polling interval.
           </p>
         </div>
         <a href="../CHANGELOG.md" class="px-4 py-2 bg-white border border-edge-300 text-edge-700 rounded-lg font-medium hover:bg-edge-50 transition text-sm whitespace-nowrap">Read Changelog</a>
@@ -204,6 +206,20 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
           </div>
           <h3 class="font-semibold text-slate-900 mb-2">Replication</h3>
           <p class="text-slate-600 text-sm">Merkle-based delta sync via <code>edgestore-repl</code>. Content-addressed segments (BLAKE3). HTTP + S3 transports. Optional — core works standalone.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Read-Only Replicas</h3>
+          <p class="text-slate-600 text-sm"><code>Engine::open_readonly</code> rejects all writes at the API level. <code>ReplicatedEngine</code> in <code>edgestore-repl</code> wires primary + replica in two lines.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Tiered Read Fast Path</h3>
+          <p class="text-slate-600 text-sm"><code>AsyncTieredEngine</code> reads hot-window data under a read lock. Concurrent readers never block behind the single writer unless an archived segment must be fetched.</p>
         </div>
       </div>
     </div>

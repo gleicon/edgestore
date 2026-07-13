@@ -155,6 +155,68 @@ async fn get_reads_through_an_archived_segment_on_a_fresh_engine() {
 }
 
 #[tokio::test]
+async fn get_fast_path_returns_none_for_absent_key_not_in_any_archived_segment() {
+    // Key is absent locally and no archived segment could contain it (no archives
+    // registered). get_needs_archived_fetch returns false → the fast path under a
+    // read lock is the only spawn_blocking call made — correct result in one hop.
+    let local_dir = TempDir::new().unwrap();
+    let remote_dir = TempDir::new().unwrap();
+    let engine = open(local_dir.path(), remote_dir.path()).await;
+
+    engine.put(b"ns", b"present", b"yes").await.unwrap();
+
+    // "absent" was never written and no archived segment covers it.
+    let got = engine.get(b"ns", b"absent").await.unwrap();
+    assert_eq!(got, None, "fast path must return None for a key absent from all stores");
+
+    // "present" still readable.
+    let got2 = engine.get(b"ns", b"present").await.unwrap();
+    assert_eq!(got2, Some(b"yes".to_vec()));
+}
+
+#[tokio::test]
+async fn get_returns_correct_results_whether_or_not_archived_overlap_exists() {
+    // Mirrors range/prefix tests: verifies both the fast path (key outside
+    // all archived segment ranges) and slow path (key inside an archived range)
+    // return correct results.
+    let local_dir = TempDir::new().unwrap();
+    let remote_dir = TempDir::new().unwrap();
+
+    let meta = {
+        let engine = open(local_dir.path(), remote_dir.path()).await;
+        engine.put(b"logs", b"archived-key", b"archived-val").await.unwrap();
+        let meta = engine.flush_to_segments().await.unwrap();
+        engine.archive_segments(vec![meta.clone()]).await.unwrap();
+        meta
+    };
+
+    let fresh_dir = TempDir::new().unwrap();
+    let fresh = open(fresh_dir.path(), remote_dir.path()).await;
+    fresh
+        .register_archived(vec![edgestore_tier::ArchivedSegment {
+            hash: meta.segment_hash.as_slice().try_into().unwrap(),
+            min_key: meta.min_key.clone(),
+            max_key: meta.max_key.clone(),
+        }])
+        .await;
+    // Local key entirely outside the archived segment's key range.
+    fresh.put(b"logs", b"zzz-local-only", b"local-val").await.unwrap();
+
+    // Slow path: "archived-key" is within the archived segment → must fetch.
+    let from_archive = fresh.get(b"logs", b"archived-key").await.unwrap();
+    assert_eq!(from_archive, Some(b"archived-val".to_vec()), "slow path must read through to archived segment");
+
+    // Fast path: "zzz-local-only" is above the archived segment's max_key →
+    // get_needs_archived_fetch returns false, result comes from local only.
+    let local_val = fresh.get(b"logs", b"zzz-local-only").await.unwrap();
+    assert_eq!(local_val, Some(b"local-val".to_vec()), "fast path must return local value when key is outside all archived ranges");
+
+    // Fast path: key absent from both local and any archived range → None.
+    let absent = fresh.get(b"logs", b"zzz-not-written").await.unwrap();
+    assert_eq!(absent, None, "fast path must return None for key absent from all stores");
+}
+
+#[tokio::test]
 async fn fetch_archived_overlapping_rehydrates_only_segments_in_range() {
     let local_dir = TempDir::new().unwrap();
     let remote_dir = TempDir::new().unwrap();

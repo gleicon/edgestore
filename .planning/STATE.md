@@ -1,10 +1,10 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
+milestone: v1.3
 milestone_name: milestone
   current_phase: post-09
   status: Maintenance
-  last_updated: "2026-07-05T00:00:00.000Z"
+  last_updated: "2026-07-07T00:00:00.000Z"
   progress:
     total_phases: 9
     completed_phases: 9
@@ -19,7 +19,17 @@ milestone_name: milestone
 
 **Phase:** Post-Phase 9 — Maintenance / patch releases
 **Current Phase:** post-09
-**Milestone:** v1.1.4 released (patch; all 9 phases complete)
+**Milestone:** v1.3.0 released (Vectoria feedback batch; all 9 phases complete)
+
+## Now
+
+**State:** v1.3.0 shipped. Decisions D26–D33 recorded. Two user feedback cycles resolved (Vectoria: D26–D31; Pierre: D32–D33). No open implementation work — all decisions translated to code or docs. Pierre's tiered replication pattern documented in DECISIONS.md; no edgestore code changes needed for Pierre.
+
+**Next:** No active task. Next action is user-driven — either another user feedback cycle, or a new feature request.
+
+**Open questions:** None blocking.
+
+**Watch:** Pierre integrating TieredEngine + AntiEntropyLoop pattern (D32/D33) — may surface further gaps.
 
 ## Phase Progress
 
@@ -52,6 +62,9 @@ milestone_name: milestone
 |---------|------|---------|
 | v1.1.3 | 2026-07-05 | ImmutableEngine, InMemorySegmentReader, sidecars, serverless benchmarks, quality-gate passes |
 | v1.1.4 | 2026-07-05 | TieredEngine range/prefix ephemeral read-through (D23); Engine::strip_text_index + with_text_stripping (D24); Makefile CRATES publish order fix (D25) |
+| v1.2.0 | 2026-07-05 | Bug fixes: manifest-before-files ordering in remove_segment/replace_segment/compactor (4 sites); LRU byte-counter drift in TieredEngine; regression tests for both |
+| v1.2.1 | 2026-07-05 | Patch: parquet_export example dev-deps; doc backlog VEC-02/VEC-04/API-02/API-03/API-04 |
+| v1.3.0 | 2026-07-07 | Vectoria batch (D26–D31): Engine::open_readonly, EdgestoreConfig::readonly, EdgestoreError::ReadOnly, Engine::with_on_segment_flushed, Engine::vector_count, Drop WAL fsync, ReplicatedEngine (edgestore-repl), examples/unified_engine.rs, examples/production_patterns.rs, edgestore-repl/examples/replicated_engine.rs |
 
 ## Requirement Status
 

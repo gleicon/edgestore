@@ -270,3 +270,83 @@ pub trait RemoteStore: Send + Sync {
 **Rationale:** `edgestore-tier` depends on `edgestore` and `edgestore-repl`; `edgestore-tokio` and `edgestore-cli` depend on `edgestore-tier`. Publish order must be topological.
 
 **Implication:** Fixed in Makefile line 18. Use `make tag && make tags-push && make publish` for all future releases.
+
+---
+
+## D26 — Drop impl: WAL fsync only, no flush_to_segments
+
+**Decision:** `Engine::Drop` calls `persist_text_indices()` then `wal.fsync()` only. No `flush_to_segments()` on drop.
+
+**Rationale:** `flush_to_segments` can fail silently on drop and may discard partial data. WAL replay covers recovery on next open. Caller decides when to segment-flush.
+
+**Implication:** Last memtable writes since the previous flush are recoverable via WAL replay, not via segment files, after a non-graceful shutdown. `wal.fsync()` ensures they survive a process exit.
+
+---
+
+## D27 — vector_count returns Option<u64>, never triggers scan
+
+**Decision:** `Engine::vector_count(ns: &[u8]) -> Option<u64>`. Returns `None` if HNSW index not in memory; `Some(n)` from `self.vector_indices.get(ns).map(|idx| idx.nodes.len() as u64)`. Never triggers a prefix scan or disk read.
+
+**Rationale:** `None` honestly signals "not loaded" vs `Some(0)` which is ambiguous. Avoids the O(n) prefix scan and external `AtomicU64` that resets on restart. Caller loads index with `build_vector_index` or `preload_vector_index` when count is needed.
+
+**Implication:** Callers must call `build_vector_index` or `preload_vector_index` before `vector_count` returns `Some`. `vector_count` is a cheap in-memory read once the index is loaded.
+
+---
+
+## D28 — on_segment_flushed callback: Engine field, Fn(&SegmentMeta) + Send + Sync, all paths
+
+**Decision:** `Engine` holds `on_segment_flushed: Option<Box<dyn Fn(&SegmentMeta) + Send + Sync>>`. Set via builder method `Engine::with_on_segment_flushed(cb)`. Fires synchronously inside `flush_to_segments_inner` after manifest update, on all paths (explicit call and auto-flush).
+
+**Rationale:** Callback on `Engine` (not `EdgestoreConfig`) keeps config as plain data. `Fn(&SegmentMeta)` lets callers inspect the flushed segment (size, id) for decisions. Firing on all `flush_to_segments_inner` paths ensures no flush is silently missed. Synchronous keeps it simple — caller must not block.
+
+**Implication:** Callback runs on the calling thread. Must be fast (set an atomic, send on a channel). Long-running work inside the callback will block the flush caller. `ReplicatedEngine` and `AsyncTieredEngine::flush_notify` both wire to this callback.
+
+---
+
+## D29 — EdgestoreConfig::readonly + Engine::open_readonly + EdgestoreError::ReadOnly
+
+**Decision:** `EdgestoreConfig` gains `readonly: bool` (default `false`). `Engine::open_readonly(config)` sets `config.readonly = true` before calling `Engine::open`. All write paths (`put_inner`, `put_with_ttl_inner`, `delete_inner`) check the flag and return `Err(EdgestoreError::ReadOnly)` immediately. `ReadOnly` is a new `EdgestoreError` variant with display `"write attempted on a read-only engine"`.
+
+**Rationale:** Runtime error (not compile-time type) chosen to keep surprises minimal and at runtime — user confirmed this. No separate `ReadOnlyEngine` type avoids API surface explosion. All write guards are in the innermost shared paths so `vector_put` and `index_text` are covered without separate guards.
+
+**Implication:** `Engine::open_readonly` is the intended API. `EdgestoreConfig::readonly` is public for direct use in `ReplicatedEngine::open_replica`. Read operations are unaffected.
+
+---
+
+## D30 — ReplicatedEngine in edgestore-repl; replica uses open_readonly internally
+
+**Decision:** `ReplicatedEngine` lives in `edgestore-repl` (not core). `open_primary(config, bind_addr)` opens a writable `Engine` + starts `HttpReplicationServer`. `open_replica(config, primary_url)` calls `Engine::open_readonly(config)` internally + starts `AntiEntropyLoop`. Exposes `engine() -> Arc<Mutex<Engine>>` and `bound_port() -> Option<u16>`.
+
+**Rationale:** Core (`edgestore`) stays dep-free and sync. Network wiring belongs in `edgestore-repl`. `open_readonly` on replicas prevents write divergence at the API level without extra documentation burden.
+
+**Implication:** Pierre and other tiered users should NOT use `ReplicatedEngine` — they should wire `TieredEngine` + `HttpReplicationServer` / `AntiEntropyLoop` directly (see D32).
+
+---
+
+## D31 — Production examples: production_patterns.rs + replicated_engine.rs
+
+**Decision:** Two example files added. `edgestore/examples/production_patterns.rs`: runnable, covers flush callback, `vector_count`, and `open_readonly` guard. `edgestore-repl/examples/replicated_engine.rs`: integration demo of `ReplicatedEngine::open_primary` + `open_replica` with in-process HTTP server. Generic (not Vectoria-specific).
+
+**Rationale:** Covers all v1.3.0 patterns from the Vectoria feedback in runnable form. `production_patterns.rs` is the "what patterns to use" doc; `replicated_engine.rs` is the "how to wire replication" doc.
+
+**Implication:** `edgestore-repl/examples/` directory created (was absent). Both committed in `1ef1c8d`.
+
+---
+
+## D32 — Tiered replication pattern: TieredEngine on both nodes, no ReplicatedTieredEngine
+
+**Decision:** For tiered (S3-backed) deployments with replication, use `TieredEngine` on both primary and replica. Primary: `TieredEngine` + `HttpReplicationServer` (serves hot local segments). Replica: `TieredEngine` (own S3 connection, same bucket/prefix) + `AntiEntropyLoop` (pulls hot segments from primary). No `ReplicatedTieredEngine` wrapper type.
+
+**Rationale:** Cold/archived data lives in shared S3 — both nodes read it independently. Replication covers only the hot window (pre-prune segments). Adding a `ReplicatedTieredEngine` would be premature abstraction over two independently composable concerns.
+
+**Implication:** `ReplicatedEngine` is for hot-data-only deployments (no S3). Tiered users wire `TieredEngine` + replication components directly. Document this pattern; do not add new types. Source: Pierre (log processing service) feedback 2026-07-07.
+
+---
+
+## D33 — Prune race in tiered replication: not a bug under shared S3 pattern
+
+**Decision:** The apparent race — primary prunes a local segment before replica syncs it via `HttpReplicationServer` — is not a correctness bug when both nodes use `TieredEngine` with a shared S3 remote. Pruned segments exist in S3; replica's `TieredEngine` serves them via read-through without needing the primary's replication path.
+
+**Rationale:** `HttpReplicationServer` serves from the primary's local manifest intentionally (hot data only). Cold data ownership is S3, not the primary node. Pierre confirmed shared S3 is acceptable.
+
+**Implication:** No changes to `HttpReplicationServer`. No segment-prune fencing or replica registration needed. Caller must ensure replica `TieredEngine` points to the same S3 bucket/prefix as primary. Source: Pierre feedback 2026-07-07.

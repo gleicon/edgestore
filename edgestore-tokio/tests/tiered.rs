@@ -39,6 +39,80 @@ async fn flush_notify_resolves_after_an_explicit_flush() {
 }
 
 #[tokio::test]
+async fn range_returns_correct_results_whether_or_not_archived_overlap_exists() {
+    // Proves the read-lock fast path (range_needs_archived_fetch == false ->
+    // local_only_range) and the write-lock slow path (an archived segment
+    // actually needs fetching) both return correct, complete results — not just
+    // that one code path or the other "runs", but that they agree on the answer.
+    let local_dir = TempDir::new().unwrap();
+    let remote_dir = TempDir::new().unwrap();
+
+    let meta = {
+        let engine = open(local_dir.path(), remote_dir.path()).await;
+        engine.put(b"logs", b"archived-key", b"archived-val").await.unwrap();
+        let meta = engine.flush_to_segments().await.unwrap();
+        engine.archive_segments(vec![meta.clone()]).await.unwrap();
+        meta
+    };
+
+    let fresh_dir = TempDir::new().unwrap();
+    let fresh = open(fresh_dir.path(), remote_dir.path()).await;
+    fresh
+        .register_archived(vec![edgestore_tier::ArchivedSegment {
+            hash: meta.segment_hash.as_slice().try_into().unwrap(),
+            min_key: meta.min_key.clone(),
+            max_key: meta.max_key.clone(),
+        }])
+        .await;
+    // Local data outside the archived segment's key range entirely.
+    fresh.put(b"logs", b"zzz-local-only", b"local-val").await.unwrap();
+
+    // A range overlapping the archived segment must take the slow path and
+    // still return the archived record merged with local.
+    let overlapping = fresh.range(b"logs", b"archived-key", b"archived-kez").await.unwrap();
+    assert_eq!(overlapping, vec![(b"archived-key".to_vec(), b"archived-val".to_vec())]);
+
+    // A range that cannot possibly overlap the archived segment (entirely
+    // above its max_key) must take the fast path and still return the correct
+    // local-only result.
+    let local_only = fresh.range(b"logs", b"zzz-local-only", b"zzz-local-onlz").await.unwrap();
+    assert_eq!(local_only, vec![(b"zzz-local-only".to_vec(), b"local-val".to_vec())]);
+}
+
+#[tokio::test]
+async fn prefix_returns_correct_results_whether_or_not_archived_overlap_exists() {
+    let local_dir = TempDir::new().unwrap();
+    let remote_dir = TempDir::new().unwrap();
+
+    let meta = {
+        let engine = open(local_dir.path(), remote_dir.path()).await;
+        engine.put(b"logs", b"pfx-a-1", b"a1").await.unwrap();
+        let meta = engine.flush_to_segments().await.unwrap();
+        engine.archive_segments(vec![meta.clone()]).await.unwrap();
+        meta
+    };
+
+    let fresh_dir = TempDir::new().unwrap();
+    let fresh = open(fresh_dir.path(), remote_dir.path()).await;
+    fresh
+        .register_archived(vec![edgestore_tier::ArchivedSegment {
+            hash: meta.segment_hash.as_slice().try_into().unwrap(),
+            min_key: meta.min_key.clone(),
+            max_key: meta.max_key.clone(),
+        }])
+        .await;
+    fresh.put(b"logs", b"pfx-b-1", b"b1").await.unwrap();
+
+    // "pfx-a" overlaps the archived segment's key range -> slow path.
+    let via_archived = fresh.prefix(b"logs", b"pfx-a").await.unwrap();
+    assert_eq!(via_archived, vec![(b"pfx-a-1".to_vec(), b"a1".to_vec())]);
+
+    // "pfx-b" cannot overlap the archived segment ("pfx-a-1"'s range) -> fast path.
+    let local_only = fresh.prefix(b"logs", b"pfx-b").await.unwrap();
+    assert_eq!(local_only, vec![(b"pfx-b-1".to_vec(), b"b1".to_vec())]);
+}
+
+#[tokio::test]
 async fn index_and_search_text_pass_through_to_local_engine() {
     let local_dir = TempDir::new().unwrap();
     let remote_dir = TempDir::new().unwrap();

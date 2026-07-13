@@ -1,6 +1,4 @@
-use edgestore::segment::{
-    SegmentReader, SegmentWriter, SPARSE_INDEX_STRIDE,
-};
+use edgestore::segment::{SegmentReader, SegmentWriter, SPARSE_INDEX_STRIDE};
 use edgestore::types::{encode_key, MemEntry, Operation, SegmentMeta};
 use edgestore::{EdgestoreConfig, Engine};
 use std::io::{Seek, SeekFrom, Write};
@@ -152,7 +150,10 @@ fn test_segment_meta_cohort_and_death_time() {
 
     let meta: SegmentMeta = engine.flush_to_segments().unwrap();
 
-    assert!(meta.cohort_bucket != 0 || meta.death_time > 0, "cohort fields unset");
+    assert!(
+        meta.cohort_bucket != 0 || meta.death_time > 0,
+        "cohort fields unset"
+    );
     assert!(meta.death_time > 0, "death_time is zero");
 }
 
@@ -191,9 +192,7 @@ fn test_manifest_replay_after_multiple_flushes() {
                 .put(b"ns", format!("key1-{:04}", i).as_bytes(), b"val1")
                 .unwrap();
         }
-        engine
-            .put(b"ns", batch1_key, b"batch1-value")
-            .unwrap();
+        engine.put(b"ns", batch1_key, b"batch1-value").unwrap();
         engine.flush_to_segments().unwrap();
 
         for i in 0u32..50 {
@@ -201,9 +200,7 @@ fn test_manifest_replay_after_multiple_flushes() {
                 .put(b"ns", format!("key2-{:04}", i).as_bytes(), b"val2")
                 .unwrap();
         }
-        engine
-            .put(b"ns", batch2_key, b"batch2-value")
-            .unwrap();
+        engine.put(b"ns", batch2_key, b"batch2-value").unwrap();
         engine.flush_to_segments().unwrap();
     }
 
@@ -304,7 +301,11 @@ fn test_range_exclusive_end() {
 
     // Memtable path: range [a, b) must return only key a.
     let results = engine.range(b"ns", b"a", b"b").unwrap();
-    assert_eq!(results.len(), 1, "memtable: range [a, b) must exclude key b");
+    assert_eq!(
+        results.len(),
+        1,
+        "memtable: range [a, b) must exclude key b"
+    );
     assert_eq!(results[0].0, b"a", "memtable: only key a must be returned");
     assert!(
         results.iter().all(|(k, _)| k.as_slice() != b"b"),

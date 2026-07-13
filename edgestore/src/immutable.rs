@@ -161,8 +161,8 @@ impl ImmutableEngine {
         prefix: &[u8],
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
-        let end = prefix_upper_bound(&enc_prefix)
-            .unwrap_or_else(|| vec![0xFF; enc_prefix.len() + 1]);
+        let end =
+            prefix_upper_bound(&enc_prefix).unwrap_or_else(|| vec![0xFF; enc_prefix.len() + 1]);
         self.range_encoded(&enc_prefix, &end)
     }
 
@@ -206,7 +206,12 @@ impl ImmutableEngine {
         let mut heap = BinaryHeap::new();
         for (ri, seg) in per_reader.iter().enumerate() {
             if let Some((k, e)) = seg.first() {
-                heap.push(Item { key: k, entry: e, reader_idx: ri, elem_idx: 0 });
+                heap.push(Item {
+                    key: k,
+                    entry: e,
+                    reader_idx: ri,
+                    elem_idx: 0,
+                });
             }
         }
 
@@ -218,7 +223,12 @@ impl ImmutableEngine {
             let next_idx = item.elem_idx + 1;
             if next_idx < seg.len() {
                 let (k, e) = &seg[next_idx];
-                heap.push(Item { key: k, entry: e, reader_idx: item.reader_idx, elem_idx: next_idx });
+                heap.push(Item {
+                    key: k,
+                    entry: e,
+                    reader_idx: item.reader_idx,
+                    elem_idx: next_idx,
+                });
             }
             match last_key {
                 Some(ref lk) if lk == item.key => {
@@ -284,9 +294,11 @@ mod tests {
             sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
             let mut writer = SegmentWriter::new(dir.path().to_path_buf(), seg_id as u64, 3600);
             let meta = writer.flush(&sorted).unwrap();
-            let dat_bytes = std::fs::read(dir.path().join(format!("segment-{:08}.dat", seg_id))).unwrap();
+            let dat_bytes =
+                std::fs::read(dir.path().join(format!("segment-{:08}.dat", seg_id))).unwrap();
             let hash: [u8; 32] = meta.segment_hash.as_slice().try_into().unwrap();
-            let reader = InMemorySegmentReader::from_bytes(seg_id as u64, hash, meta, &dat_bytes).unwrap();
+            let reader =
+                InMemorySegmentReader::from_bytes(seg_id as u64, hash, meta, &dat_bytes).unwrap();
             readers.push(reader);
         }
         ImmutableEngine::from_readers(readers)
@@ -363,7 +375,14 @@ mod tests {
         let mut seg = Vec::new();
         for i in 0..10u64 {
             let key = encode_key(ns, format!("pref-{}", i).as_bytes());
-            seg.push((key, make_put_entry(&encode_key(ns, format!("pref-{}", i).as_bytes()), b"val", i + 1)));
+            seg.push((
+                key,
+                make_put_entry(
+                    &encode_key(ns, format!("pref-{}", i).as_bytes()),
+                    b"val",
+                    i + 1,
+                ),
+            ));
         }
 
         let engine = build_engine_with_segments(vec![seg]);
@@ -385,10 +404,8 @@ mod tests {
             ttl: 0,
         };
 
-        let engine = build_engine_with_segments(vec![vec![
-            (key.clone(), put_entry),
-            (key, del_entry),
-        ]]);
+        let engine =
+            build_engine_with_segments(vec![vec![(key.clone(), put_entry), (key, del_entry)]]);
 
         let got = engine.get(ns, b"deleted").unwrap();
         assert!(got.is_none(), "delete tombstone must filter out the key");
@@ -420,11 +437,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ns = b"ns";
 
-        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10_000u64).map(|i| {
-            let enc = encode_key(ns, &i.to_be_bytes());
-            let e = make_put_entry(&enc, b"value", i + 1);
-            (enc, e)
-        }).collect();
+        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10_000u64)
+            .map(|i| {
+                let enc = encode_key(ns, &i.to_be_bytes());
+                let e = make_put_entry(&enc, b"value", i + 1);
+                (enc, e)
+            })
+            .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
@@ -438,7 +457,9 @@ mod tests {
             assert_eq!(got, Some(b"value".to_vec()), "key {} must be found", i);
         }
 
-        let results = engine.range(ns, &0u64.to_be_bytes(), &10_000u64.to_be_bytes()).unwrap();
+        let results = engine
+            .range(ns, &0u64.to_be_bytes(), &10_000u64.to_be_bytes())
+            .unwrap();
         assert_eq!(results.len(), 10_000, "range must include all 10K keys");
     }
 
@@ -457,20 +478,35 @@ mod tests {
         assert_eq!(segs.len(), 1, "one segment");
 
         let seg = &segs[0];
-        assert!(seg["hash"].as_str().map(|h| h.len() == 64).unwrap_or(false), "hash is 64 hex chars");
-        assert!(seg["record_count"].as_u64().unwrap() > 0, "record_count > 0");
+        assert!(
+            seg["hash"].as_str().map(|h| h.len() == 64).unwrap_or(false),
+            "hash is 64 hex chars"
+        );
+        assert!(
+            seg["record_count"].as_u64().unwrap() > 0,
+            "record_count > 0"
+        );
 
         let min_hex = seg["min_key"].as_str().expect("min_key is a hex string");
         let max_hex = seg["max_key"].as_str().expect("max_key is a hex string");
-        assert!(!hex::decode(min_hex).unwrap().is_empty(), "min_key hex decodes to non-empty bytes");
-        assert!(!hex::decode(max_hex).unwrap().is_empty(), "max_key hex decodes to non-empty bytes");
+        assert!(
+            !hex::decode(min_hex).unwrap().is_empty(),
+            "min_key hex decodes to non-empty bytes"
+        );
+        assert!(
+            !hex::decode(max_hex).unwrap().is_empty(),
+            "max_key hex decodes to non-empty bytes"
+        );
     }
 
     #[test]
     fn test_prefix_upper_bound_all_0xff() {
         assert_eq!(prefix_upper_bound(&[0xFF, 0xFF, 0xFF]), None);
         assert_eq!(prefix_upper_bound(&[0x01, 0xFF, 0xFF]), Some(vec![0x02]));
-        assert_eq!(prefix_upper_bound(&[0x01, 0x02, 0xFE]), Some(vec![0x01, 0x02, 0xFF]));
+        assert_eq!(
+            prefix_upper_bound(&[0x01, 0x02, 0xFE]),
+            Some(vec![0x01, 0x02, 0xFF])
+        );
     }
 
     #[test]
@@ -483,7 +519,11 @@ mod tests {
         let e2 = make_put_entry(&key2, b"v2", 2);
         let engine = build_engine_with_segments(vec![vec![(key1, e1), (key2, e2)]]);
         let results = engine.prefix(ns, prefix_bytes).unwrap();
-        assert_eq!(results.len(), 2, "prefix ending in 0xFF must find both keys");
+        assert_eq!(
+            results.len(),
+            2,
+            "prefix ending in 0xFF must find both keys"
+        );
     }
 
     #[test]
@@ -507,9 +547,15 @@ mod tests {
         ]);
 
         let got = engine.get(ns, b"contested").unwrap();
-        assert!(got.is_none(), "cross-segment delete (lsn=2) must win over put (lsn=1)");
+        assert!(
+            got.is_none(),
+            "cross-segment delete (lsn=2) must win over put (lsn=1)"
+        );
 
         let range = engine.range(ns, b"", b"\xff").unwrap();
-        assert!(range.is_empty(), "range must exclude cross-segment deleted key");
+        assert!(
+            range.is_empty(),
+            "range must exclude cross-segment deleted key"
+        );
     }
 }

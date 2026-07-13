@@ -22,10 +22,12 @@ pub(crate) struct ManifestEntry {
 }
 
 fn write_framed_entry(file: &mut File, entry: &ManifestEntry) -> Result<(), EdgestoreError> {
-    let json = serde_json::to_vec(entry)
-        .map_err(|e| EdgestoreError::ManifestCorrupt(e.to_string()))?;
+    let json =
+        serde_json::to_vec(entry).map_err(|e| EdgestoreError::ManifestCorrupt(e.to_string()))?;
     if json.len() > 1_000_000 {
-        return Err(EdgestoreError::ManifestCorrupt("entry too large".to_string()));
+        return Err(EdgestoreError::ManifestCorrupt(
+            "entry too large".to_string(),
+        ));
     }
     let crc = crc32c::crc32c(&json);
     let len = json.len() as u32;
@@ -89,7 +91,10 @@ impl Manifest {
                 let entry_len = u32::from_le_bytes(frame_hdr[4..8].try_into().unwrap()) as usize;
 
                 if entry_len > 1_000_000 {
-                    eprintln!("manifest: entry_len {} too large, stopping replay", entry_len);
+                    eprintln!(
+                        "manifest: entry_len {} too large, stopping replay",
+                        entry_len
+                    );
                     break;
                 }
 
@@ -102,7 +107,10 @@ impl Manifest {
 
                 let computed_crc = crc32c::crc32c(&json_bytes);
                 if computed_crc != stored_crc {
-                    eprintln!("manifest: CRC32C mismatch (stored={}, computed={}), skipping entry", stored_crc, computed_crc);
+                    eprintln!(
+                        "manifest: CRC32C mismatch (stored={}, computed={}), skipping entry",
+                        stored_crc, computed_crc
+                    );
                     continue;
                 }
 
@@ -129,7 +137,11 @@ impl Manifest {
 
         file.seek(SeekFrom::End(0))?;
 
-        Ok(Manifest { path: path.to_path_buf(), file, segments })
+        Ok(Manifest {
+            path: path.to_path_buf(),
+            file,
+            segments,
+        })
     }
 
     /// Append a new segment to the manifest.
@@ -268,8 +280,12 @@ mod tests {
     fn test_entry_serialization_frame_format() {
         let dir = TempDir::new().unwrap();
         let mut f = std::fs::OpenOptions::new()
-            .create(true).read(true).write(true).truncate(false)
-            .open(dir.path().join("test.bin")).unwrap();
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.path().join("test.bin"))
+            .unwrap();
 
         let entry = ManifestEntry {
             entry_type: ManifestEntryType::Add,

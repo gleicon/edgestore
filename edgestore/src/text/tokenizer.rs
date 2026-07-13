@@ -45,7 +45,10 @@ pub fn tokenize(text: &str) -> Vec<Token> {
             continue;
         }
         let stemmed = stem(&lower);
-        tokens.push(Token { term: stemmed, position });
+        tokens.push(Token {
+            term: stemmed,
+            position,
+        });
         position += 1;
     }
 

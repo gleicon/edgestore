@@ -22,7 +22,11 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     for i in 1..=a_len {
         curr_row[0] = i;
         for j in 1..=b_len {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             curr_row[j] = (curr_row[j - 1] + 1)
                 .min(prev_row[j] + 1)
                 .min(prev_row[j - 1] + cost);

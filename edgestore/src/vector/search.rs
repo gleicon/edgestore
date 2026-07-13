@@ -143,7 +143,9 @@ mod tests {
         // Put 10 distinct vectors
         for i in 0..10u8 {
             let data = vec![i; 128 * 4];
-            engine.vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &data).unwrap();
+            engine
+                .vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &data)
+                .unwrap();
         }
 
         let query = VectorRecord {
@@ -164,7 +166,9 @@ mod tests {
         for i in 0..5u8 {
             let val = i + 1;
             let data = vec![val; 128 * 4];
-            engine.vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &data).unwrap();
+            engine
+                .vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &data)
+                .unwrap();
         }
 
         // Query matches vector 0 exactly → should be closest
@@ -174,14 +178,15 @@ mod tests {
             data: vec![1u8; 128 * 4],
         };
         let results = vector_search(&engine, b"ns", &query, 5, Metric::Cosine).unwrap();
-        assert!(
-            !results.is_empty(),
-            "should have results"
-        );
+        assert!(!results.is_empty(), "should have results");
         // All vectors are proportional (1,1,1...), (2,2,2...), etc.
         // Cosine distance to self = 0, to proportional = 0
         // So all should have distance ≈ 0
-        assert!(results[0].distance < 1e-4, "first result should be ~0 distance, got {}", results[0].distance);
+        assert!(
+            results[0].distance < 1e-4,
+            "first result should be ~0 distance, got {}",
+            results[0].distance
+        );
     }
 
     #[test]
@@ -192,10 +197,10 @@ mod tests {
         // Put vectors with different magnitudes
         for i in 0..5u8 {
             let val = (i + 1) as f32;
-            let bytes: Vec<u8> = (0..128)
-                .flat_map(|_| val.to_le_bytes().to_vec())
-                .collect();
-            engine.vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &bytes).unwrap();
+            let bytes: Vec<u8> = (0..128).flat_map(|_| val.to_le_bytes().to_vec()).collect();
+            engine
+                .vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &bytes)
+                .unwrap();
         }
 
         // Query is vector 1 (all 1.0s)
@@ -209,7 +214,11 @@ mod tests {
         let results = vector_search(&engine, b"ns", &query, 5, Metric::L2).unwrap();
         assert!(!results.is_empty());
         // L2 to self should be 0
-        assert!(results[0].distance < 1e-4, "first L2 result should be ~0, got {}", results[0].distance);
+        assert!(
+            results[0].distance < 1e-4,
+            "first L2 result should be ~0, got {}",
+            results[0].distance
+        );
     }
 
     #[test]
@@ -226,7 +235,9 @@ mod tests {
             let mut bytes = vec![0u8; 128 * 4];
             let offset = (i as usize) * 4;
             bytes[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
-            engine.vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &bytes).unwrap();
+            engine
+                .vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &bytes)
+                .unwrap();
         }
 
         // Query is [1, 0, 0, ...] (aligned with key0 on x-axis)
@@ -242,10 +253,20 @@ mod tests {
         // Dot product with [1,0,0] is maximized by key0 ([10,0,0])
         // key1 and key2 are orthogonal → dot product = 0
         // key0 should have the smallest (most negative) distance = -10
-        assert_eq!(results[0].key, vec![0u8], "key0 should have highest dot product with x-axis query");
+        assert_eq!(
+            results[0].key,
+            vec![0u8],
+            "key0 should have highest dot product with x-axis query"
+        );
         // Verify key1 and key2 have distance 0 (orthogonal → dot = 0)
-        assert!(results[1].distance.abs() < 1e-4, "orthogonal vectors should have dot product ~0");
-        assert!(results[2].distance.abs() < 1e-4, "orthogonal vectors should have dot product ~0");
+        assert!(
+            results[1].distance.abs() < 1e-4,
+            "orthogonal vectors should have dot product ~0"
+        );
+        assert!(
+            results[2].distance.abs() < 1e-4,
+            "orthogonal vectors should have dot product ~0"
+        );
     }
 
     #[test]
@@ -255,7 +276,9 @@ mod tests {
 
         for i in 0..3u8 {
             let data = vec![i; 128 * 4];
-            engine.vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &data).unwrap();
+            engine
+                .vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &data)
+                .unwrap();
         }
 
         engine.vector_delete(b"ns", &[1]).unwrap();
@@ -279,7 +302,9 @@ mod tests {
 
         // Put 64-dim vector
         let data = vec![0u8; 64 * 4];
-        engine.vector_put(b"ns", b"key", 64, crate::vector::types::Dtype::F32, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key", 64, crate::vector::types::Dtype::F32, &data)
+            .unwrap();
 
         // Search with 128-dim query → should skip the mismatched record
         let query = VectorRecord {
@@ -298,7 +323,9 @@ mod tests {
 
         // Put f32 vector
         let data = vec![0u8; 128 * 4];
-        engine.vector_put(b"ns", b"key", 128, crate::vector::types::Dtype::F32, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key", 128, crate::vector::types::Dtype::F32, &data)
+            .unwrap();
 
         // Search with i8 query → should skip the mismatched record
         let query = VectorRecord {
@@ -320,7 +347,9 @@ mod tests {
             let val = ((i + 1) * 10) as f32;
             let mut bytes = vec![0u8; 128 * 4];
             bytes[0..4].copy_from_slice(&val.to_le_bytes());
-            engine.vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &bytes).unwrap();
+            engine
+                .vector_put(b"ns", &[i], 128, crate::vector::types::Dtype::F32, &bytes)
+                .unwrap();
         }
 
         // Query is [1,0,0,...] (closest to key0 = [10,0,0,...])

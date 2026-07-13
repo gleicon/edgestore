@@ -168,15 +168,49 @@ impl MetricsSnapshot {
 
 impl std::fmt::Display for MetricsSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "puts:                  {} ({} ns avg)", self.puts, self.put_avg_ns())?;
-        writeln!(f, "gets:                  {} ({} ns avg)", self.gets, self.get_avg_ns())?;
-        writeln!(f, "deletes:               {} ({} ns avg)", self.deletes, self.delete_avg_ns())?;
-        writeln!(f, "ranges:                {} ({} ns avg)", self.ranges, self.range_avg_ns())?;
-        writeln!(f, "prefixes:              {} ({} ns avg)", self.prefixes, self.prefix_avg_ns())?;
-        writeln!(f, "transactions committed: {} ({} ns avg)", self.transactions_committed, self.transaction_commit_avg_ns())?;
-        writeln!(f, "transactions rolled back: {}", self.transactions_rolled_back)?;
+        writeln!(
+            f,
+            "puts:                  {} ({} ns avg)",
+            self.puts,
+            self.put_avg_ns()
+        )?;
+        writeln!(
+            f,
+            "gets:                  {} ({} ns avg)",
+            self.gets,
+            self.get_avg_ns()
+        )?;
+        writeln!(
+            f,
+            "deletes:               {} ({} ns avg)",
+            self.deletes,
+            self.delete_avg_ns()
+        )?;
+        writeln!(
+            f,
+            "ranges:                {} ({} ns avg)",
+            self.ranges,
+            self.range_avg_ns()
+        )?;
+        writeln!(
+            f,
+            "prefixes:              {} ({} ns avg)",
+            self.prefixes,
+            self.prefix_avg_ns()
+        )?;
+        writeln!(
+            f,
+            "transactions committed: {} ({} ns avg)",
+            self.transactions_committed,
+            self.transaction_commit_avg_ns()
+        )?;
+        writeln!(
+            f,
+            "transactions rolled back: {}",
+            self.transactions_rolled_back
+        )?;
         writeln!(f, "compactions:           {}", self.compactions)?;
         writeln!(f, "segment flushes:       {}", self.segment_flushes)?;
-        write!(  f, "wal rotations:         {}", self.wal_rotations)
+        write!(f, "wal rotations:         {}", self.wal_rotations)
     }
 }

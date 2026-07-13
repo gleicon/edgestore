@@ -75,14 +75,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Replica: read-only engine + anti-entropy pull loop ─────────────────
     let mut replica_cfg = EdgestoreConfig::new(replica_dir.path());
     replica_cfg.readonly = true; // open_replica sets this automatically
-    let replica = ReplicatedEngine::open_replica(
-        EdgestoreConfig::new(replica_dir.path()),
-        &primary_url,
-    )?;
+    let replica =
+        ReplicatedEngine::open_replica(EdgestoreConfig::new(replica_dir.path()), &primary_url)?;
     println!("Replica connected to {}", primary_url);
 
     // Verify replica rejects writes.
-    match replica.engine().lock().unwrap().put(b"catalog", b"rogue", b"write") {
+    match replica
+        .engine()
+        .lock()
+        .unwrap()
+        .put(b"catalog", b"rogue", b"write")
+    {
         Err(EdgestoreError::ReadOnly) => println!("Replica: write correctly rejected (ReadOnly)."),
         other => panic!("Expected ReadOnly, got {:?}", other),
     }
@@ -93,7 +96,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(Duration::from_secs(35));
 
     // Replica should now have the primary's data.
-    let items = replica.engine().lock().unwrap().range(b"catalog", b"", b"\xff")?;
+    let items = replica
+        .engine()
+        .lock()
+        .unwrap()
+        .range(b"catalog", b"", b"\xff")?;
     println!(
         "Replica: {} items visible after sync (expected 3).",
         items.len()

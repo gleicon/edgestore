@@ -5,7 +5,10 @@
 //! construction time.
 
 use crate::error::EdgestoreError;
-use crate::segment::{build_xor_filter, deserialize_entry, filter_contains, find_block_offset, SEGMENT_BLOCK_MAGIC, SEGMENT_BLOCK_SIZE};
+use crate::segment::{
+    build_xor_filter, deserialize_entry, filter_contains, find_block_offset, SEGMENT_BLOCK_MAGIC,
+    SEGMENT_BLOCK_SIZE,
+};
 use crate::types::{MemEntry, SegmentId, SegmentMeta};
 
 /// Read-only segment that lives entirely in memory.
@@ -41,7 +44,9 @@ impl InMemorySegmentReader {
         bytes: &[u8],
     ) -> Result<Self, EdgestoreError> {
         if bytes.len() < 8 {
-            return Err(EdgestoreError::SegmentCorrupt("in-memory segment too short".to_string()));
+            return Err(EdgestoreError::SegmentCorrupt(
+                "in-memory segment too short".to_string(),
+            ));
         }
 
         let mut all_keys: Vec<Vec<u8>> = Vec::new();
@@ -56,14 +61,16 @@ impl InMemorySegmentReader {
             if magic != SEGMENT_BLOCK_MAGIC {
                 break; // hit padding or end
             }
-            let compressed_len = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+            let compressed_len =
+                u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
             if offset + 8 + compressed_len > bytes.len() {
                 break;
             }
 
             let compressed = &bytes[offset + 8..offset + 8 + compressed_len];
-            let decompressed = zstd::decode_all(compressed)
-                .map_err(|e| EdgestoreError::SegmentCorrupt(format!("in-memory zstd decode: {}", e)))?;
+            let decompressed = zstd::decode_all(compressed).map_err(|e| {
+                EdgestoreError::SegmentCorrupt(format!("in-memory zstd decode: {}", e))
+            })?;
 
             // Parse entries from this block.
             let mut pos = 0usize;
@@ -119,18 +126,27 @@ impl InMemorySegmentReader {
             if current_offset + 8 > bytes.len() {
                 break;
             }
-            let magic = u32::from_le_bytes(bytes[current_offset..current_offset + 4].try_into().unwrap());
+            let magic = u32::from_le_bytes(
+                bytes[current_offset..current_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            );
             if magic != SEGMENT_BLOCK_MAGIC {
                 break;
             }
-            let compressed_len = u32::from_le_bytes(bytes[current_offset + 4..current_offset + 8].try_into().unwrap()) as usize;
+            let compressed_len = u32::from_le_bytes(
+                bytes[current_offset + 4..current_offset + 8]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
             if current_offset + 8 + compressed_len > bytes.len() {
                 break;
             }
 
             let compressed = &bytes[current_offset + 8..current_offset + 8 + compressed_len];
-            let decompressed = zstd::decode_all(compressed)
-                .map_err(|e| EdgestoreError::SegmentCorrupt(format!("in-memory get zstd: {}", e)))?;
+            let decompressed = zstd::decode_all(compressed).map_err(|e| {
+                EdgestoreError::SegmentCorrupt(format!("in-memory get zstd: {}", e))
+            })?;
 
             let mut pos = 0usize;
             let mut block_has_key = false;
@@ -157,7 +173,11 @@ impl InMemorySegmentReader {
             // across block boundaries are possible). Continue scanning.
             // If this block's keys were all < key, continue to next block.
             // If this block's first key > key, we can stop (blocks are sorted).
-            let block_first_key = self.index.iter().find(|(_, off)| *off as usize == current_offset).map(|(k, _)| k.clone());
+            let block_first_key = self
+                .index
+                .iter()
+                .find(|(_, off)| *off as usize == current_offset)
+                .map(|(k, _)| k.clone());
             if let Some(first) = block_first_key {
                 if first.as_slice() > key && !block_has_key {
                     // This block starts after our key; no later block can contain it.
@@ -194,18 +214,27 @@ impl InMemorySegmentReader {
             if current_offset + 8 > bytes.len() {
                 break;
             }
-            let magic = u32::from_le_bytes(bytes[current_offset..current_offset + 4].try_into().unwrap());
+            let magic = u32::from_le_bytes(
+                bytes[current_offset..current_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            );
             if magic != SEGMENT_BLOCK_MAGIC {
                 break;
             }
-            let compressed_len = u32::from_le_bytes(bytes[current_offset + 4..current_offset + 8].try_into().unwrap()) as usize;
+            let compressed_len = u32::from_le_bytes(
+                bytes[current_offset + 4..current_offset + 8]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
             if current_offset + 8 + compressed_len > bytes.len() {
                 break;
             }
 
             let compressed = &bytes[current_offset + 8..current_offset + 8 + compressed_len];
-            let decompressed = zstd::decode_all(compressed)
-                .map_err(|e| EdgestoreError::SegmentCorrupt(format!("in-memory range zstd: {}", e)))?;
+            let decompressed = zstd::decode_all(compressed).map_err(|e| {
+                EdgestoreError::SegmentCorrupt(format!("in-memory range zstd: {}", e))
+            })?;
 
             let mut pos = 0usize;
             let mut past_end = false;
@@ -273,7 +302,13 @@ mod tests {
         let meta = writer.flush(&entries).unwrap();
 
         let dat_bytes = std::fs::read(dir.path().join("segment-00000000.dat")).unwrap();
-        let reader = InMemorySegmentReader::from_bytes(0, meta.segment_hash.as_slice().try_into().unwrap(), meta, &dat_bytes).unwrap();
+        let reader = InMemorySegmentReader::from_bytes(
+            0,
+            meta.segment_hash.as_slice().try_into().unwrap(),
+            meta,
+            &dat_bytes,
+        )
+        .unwrap();
 
         let result = reader.get(&encode_key(ns, user_key)).unwrap();
         assert_eq!(result.map(|e| e.value), Some(Some(value.to_vec())));
@@ -292,7 +327,13 @@ mod tests {
         let meta = writer.flush(&entries).unwrap();
 
         let dat_bytes = std::fs::read(dir.path().join("segment-00000000.dat")).unwrap();
-        let reader = InMemorySegmentReader::from_bytes(0, meta.segment_hash.as_slice().try_into().unwrap(), meta, &dat_bytes).unwrap();
+        let reader = InMemorySegmentReader::from_bytes(
+            0,
+            meta.segment_hash.as_slice().try_into().unwrap(),
+            meta,
+            &dat_bytes,
+        )
+        .unwrap();
 
         let result = reader.get(&encode_key(ns, b"not-present")).unwrap();
         assert!(result.is_none());
@@ -303,20 +344,30 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ns = b"ns";
 
-        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10u64).map(|i| {
-            let enc = encode_key(ns, format!("key-{:04}", i).as_bytes());
-            let e = make_put_entry(&enc, format!("val-{}", i).as_bytes(), i + 1);
-            (enc, e)
-        }).collect();
+        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10u64)
+            .map(|i| {
+                let enc = encode_key(ns, format!("key-{:04}", i).as_bytes());
+                let e = make_put_entry(&enc, format!("val-{}", i).as_bytes(), i + 1);
+                (enc, e)
+            })
+            .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
         let meta = writer.flush(&entries).unwrap();
 
         let dat_bytes = std::fs::read(dir.path().join("segment-00000000.dat")).unwrap();
-        let reader = InMemorySegmentReader::from_bytes(0, meta.segment_hash.as_slice().try_into().unwrap(), meta, &dat_bytes).unwrap();
+        let reader = InMemorySegmentReader::from_bytes(
+            0,
+            meta.segment_hash.as_slice().try_into().unwrap(),
+            meta,
+            &dat_bytes,
+        )
+        .unwrap();
 
-        let results = reader.range_scan(&encode_key(ns, b"key-0002"), &encode_key(ns, b"key-0007")).unwrap();
+        let results = reader
+            .range_scan(&encode_key(ns, b"key-0002"), &encode_key(ns, b"key-0007"))
+            .unwrap();
         assert_eq!(results.len(), 5, "range should return 5 entries");
         let raw_keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
         let mut sorted = raw_keys.clone();
@@ -329,18 +380,26 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ns = b"ns";
 
-        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..1000u64).map(|i| {
-            let enc = encode_key(ns, &i.to_be_bytes());
-            let e = make_put_entry(&enc, b"value", i + 1);
-            (enc, e)
-        }).collect();
+        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..1000u64)
+            .map(|i| {
+                let enc = encode_key(ns, &i.to_be_bytes());
+                let e = make_put_entry(&enc, b"value", i + 1);
+                (enc, e)
+            })
+            .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
         let meta = writer.flush(&entries).unwrap();
 
         let dat_bytes = std::fs::read(dir.path().join("segment-00000000.dat")).unwrap();
-        let reader = InMemorySegmentReader::from_bytes(0, meta.segment_hash.as_slice().try_into().unwrap(), meta, &dat_bytes).unwrap();
+        let reader = InMemorySegmentReader::from_bytes(
+            0,
+            meta.segment_hash.as_slice().try_into().unwrap(),
+            meta,
+            &dat_bytes,
+        )
+        .unwrap();
 
         // Spot-check lookups.
         for i in [0u64, 500, 999] {
@@ -349,7 +408,12 @@ mod tests {
         }
 
         // Range scan over all keys.
-        let results = reader.range_scan(&encode_key(ns, &0u64.to_be_bytes()), &encode_key(ns, &1000u64.to_be_bytes())).unwrap();
+        let results = reader
+            .range_scan(
+                &encode_key(ns, &0u64.to_be_bytes()),
+                &encode_key(ns, &1000u64.to_be_bytes()),
+            )
+            .unwrap();
         assert_eq!(results.len(), 1000, "range must include all 1000 keys");
     }
 }

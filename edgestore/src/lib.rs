@@ -31,10 +31,10 @@ pub mod config;
 pub mod error;
 /// FDP (Flexible Data Placement) storage backends.
 pub mod fdp_backend;
-/// Range-level Merkle tree for anti-entropy probes.
-pub mod merkle;
 /// Read-only in-memory engine for serverless / WASM environments (Phase 9).
 pub mod immutable;
+/// Range-level Merkle tree for anti-entropy probes.
+pub mod merkle;
 /// Engine metrics and snapshots.
 pub mod metrics;
 /// Remote segment store abstraction.
@@ -62,33 +62,35 @@ pub mod recovery;
 pub mod segment;
 /// Multi-record transaction batch.
 pub mod transaction;
-/// Write-ahead log format and I/O (internal).
-pub mod wal;
 /// Vector storage, distance, and search (internal modules with public re-exports).
 pub mod vector;
+/// Write-ahead log format and I/O (internal).
+pub mod wal;
 
 pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
 pub use engine::{Engine, ImportResult};
 pub use error::EdgestoreError;
+pub use fdp_backend::{FdpStorageBackend, MockFdpBackend};
+pub use immutable::ImmutableEngine;
 pub use merkle::RangeMerkleTree;
 pub use metrics::MetricsSnapshot;
 pub use remote_store::RemoteStore;
 pub use replication::{HostId, ReplicationProtocol, SegmentRef};
+pub use segment::in_memory::InMemorySegmentReader;
 pub use snapshot::{Snapshot, SnapshotRegistry};
-pub use fdp_backend::{FdpStorageBackend, MockFdpBackend};
-pub use storage_backend::{DefaultStorageBackend, MemoryStorageBackend, PlacementHint, StorageBackend};
-pub use transaction::Transaction;
+pub use storage_backend::{
+    DefaultStorageBackend, MemoryStorageBackend, PlacementHint, StorageBackend,
+};
 pub use text::engine::{text_namespace, SearchOptions, TextEngine, TextSearchResult};
 pub use text::facet::{filter_by_facets, FacetFilter};
 pub use text::index::{bm25_score, score_document, InvertedIndex, Posting};
 pub use text::tokenizer::{tokenize, Token};
-pub use text::typo::{is_one_edit_away, levenshtein};
 pub use text::types::{decode_text_record, FacetValue};
+pub use text::typo::{is_one_edit_away, levenshtein};
+pub use transaction::Transaction;
 pub use vector::api::{vector_namespace, VectorEngine};
-pub use vector::distance::{distance, distance_scalar, Metric, total_cmp_f32};
+pub use vector::distance::{distance, distance_scalar, total_cmp_f32, Metric};
 pub use vector::hnsw::HnswIndex;
 pub use vector::search::{vector_search, VectorSearchResult};
 pub use vector::types::{Dtype, VectorRecord};
-pub use immutable::ImmutableEngine;
-pub use segment::in_memory::InMemorySegmentReader;

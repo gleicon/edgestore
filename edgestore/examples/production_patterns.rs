@@ -58,7 +58,9 @@ fn pattern_flush_callback() {
         });
 
     for i in 0u32..5 {
-        engine.put(b"events", format!("e{:04}", i).as_bytes(), b"payload").unwrap();
+        engine
+            .put(b"events", format!("e{:04}", i).as_bytes(), b"payload")
+            .unwrap();
     }
 
     engine.flush_to_segments().unwrap(); // fires callback once
@@ -88,9 +90,15 @@ fn pattern_vector_count() {
 
     // Insert 3 vectors (4-dim f32 = 16 bytes each).
     let v: Vec<u8> = (0u32..4).flat_map(|_| 1.0f32.to_le_bytes()).collect();
-    engine.vector_put(b"products", b"p1", 4, Dtype::F32, &v).unwrap();
-    engine.vector_put(b"products", b"p2", 4, Dtype::F32, &v).unwrap();
-    engine.vector_put(b"products", b"p3", 4, Dtype::F32, &v).unwrap();
+    engine
+        .vector_put(b"products", b"p1", 4, Dtype::F32, &v)
+        .unwrap();
+    engine
+        .vector_put(b"products", b"p2", 4, Dtype::F32, &v)
+        .unwrap();
+    engine
+        .vector_put(b"products", b"p3", 4, Dtype::F32, &v)
+        .unwrap();
 
     // Index still not loaded (only stored as KV bytes so far).
     println!(
@@ -112,8 +120,14 @@ fn pattern_vector_count() {
 
     // After a restart, preload_vector_index reloads from the sidecar file.
     // vector_count returns Some again without rebuilding or scanning.
-    let query = VectorRecord { dims: 4, dtype: Dtype::F32, data: v };
-    engine.vector_search(b"products", &query, 2, Metric::Cosine).unwrap();
+    let query = VectorRecord {
+        dims: 4,
+        dtype: Dtype::F32,
+        data: v,
+    };
+    engine
+        .vector_search(b"products", &query, 2, Metric::Cosine)
+        .unwrap();
     println!();
 }
 
@@ -140,7 +154,10 @@ fn pattern_readonly_guard() {
 
     // Reads work fine.
     let val = replica.get(b"catalog", b"item1").unwrap();
-    println!("  Replica reads item1: {:?}", val.map(|v| String::from_utf8_lossy(&v).into_owned()));
+    println!(
+        "  Replica reads item1: {:?}",
+        val.map(|v| String::from_utf8_lossy(&v).into_owned())
+    );
 
     // All write paths return Err(ReadOnly) — no divergence possible.
     match replica.put(b"catalog", b"item3", b"rogue write") {

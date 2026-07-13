@@ -25,8 +25,18 @@ const MAX_COMPRESSED_LEN: u32 = 64 * 1024 * 1024; // 64 MiB
 ///   ns_len(u16-BE) ns_bytes key_len(u32-LE) key_bytes
 ///   value_hash(32-bytes) val_len(u32-LE) val_bytes
 pub(crate) fn serialize_record(rec: &WalRecord) -> Vec<u8> {
-    let cap = 8 + 8 + 8 + 4 + 1 + 2 + rec.ns_bytes.len() + 4 + rec.key_bytes.len()
-        + 32 + 4 + rec.value_bytes.len();
+    let cap = 8
+        + 8
+        + 8
+        + 4
+        + 1
+        + 2
+        + rec.ns_bytes.len()
+        + 4
+        + rec.key_bytes.len()
+        + 32
+        + 4
+        + rec.value_bytes.len();
     let mut buf = Vec::with_capacity(cap);
 
     buf.extend_from_slice(&rec.txid.to_le_bytes());
@@ -58,9 +68,7 @@ pub(crate) fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError
             if buf.len() < end {
                 return Err(EdgestoreError::CorruptRecord(format!(
                     "buffer too short: {} (need {} more at offset {})",
-                    $label,
-                    $n,
-                    start
+                    $label, $n, start
                 )));
             }
             #[allow(unused_assignments)]
@@ -178,11 +186,11 @@ fn read_and_validate_header(r: &mut impl Read) -> Result<(), EdgestoreError> {
 
 impl WalWriter {
     /// Create a new WAL file, writing the 8-byte header.
-    pub(crate) fn create(path: &Path, config: &EdgestoreConfig) -> Result<WalWriter, EdgestoreError> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)?;
+    pub(crate) fn create(
+        path: &Path,
+        config: &EdgestoreConfig,
+    ) -> Result<WalWriter, EdgestoreError> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
 
         write_wal_header(&mut file)?;
         file.flush()?;
@@ -410,7 +418,8 @@ mod tests {
     fn wal_writer_open_wrong_magic() {
         let mut tmp = NamedTempFile::new().unwrap();
         // Write garbage magic
-        tmp.write_all(&[0xFF, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0]).unwrap();
+        tmp.write_all(&[0xFF, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0])
+            .unwrap();
         tmp.flush().unwrap();
 
         let cfg = test_config(tmp.path());
@@ -437,7 +446,10 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(EdgestoreError::FormatVersion { expected: 1, got: 99 })
+                Err(EdgestoreError::FormatVersion {
+                    expected: 1,
+                    got: 99
+                })
             ),
             "expected FormatVersion{{expected:1,got:99}}, got {:?}",
             result
@@ -492,10 +504,7 @@ mod tests {
         // First record should be fine; the corrupt frame is skipped;
         // third record should also be recovered.
         // We expect at least the first record.
-        assert!(
-            !records.is_empty(),
-            "expected at least 1 record, got 0"
-        );
+        assert!(!records.is_empty(), "expected at least 1 record, got 0");
         // The corrupt record (whichever frame byte 50 lands in) should be skipped.
         assert!(
             records.len() < 3,

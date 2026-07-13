@@ -103,12 +103,12 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Create a new Snapshot. Called by Engine::snapshot().
-    pub fn new(
-        snapshot_id: u64,
-        registry: SnapshotRegistry,
-        readers: Vec<SegmentReader>,
-    ) -> Self {
-        Snapshot { snapshot_id, registry, readers }
+    pub fn new(snapshot_id: u64, registry: SnapshotRegistry, readers: Vec<SegmentReader>) -> Self {
+        Snapshot {
+            snapshot_id,
+            registry,
+            readers,
+        }
     }
 
     /// Look up a single key in the snapshot.
@@ -184,7 +184,12 @@ impl Snapshot {
         let mut heap = BinaryHeap::new();
         for (ri, seg) in per_reader.iter().enumerate() {
             if let Some((k, e)) = seg.first() {
-                heap.push(Item { key: k, entry: e, reader_idx: ri, elem_idx: 0 });
+                heap.push(Item {
+                    key: k,
+                    entry: e,
+                    reader_idx: ri,
+                    elem_idx: 0,
+                });
             }
         }
         let mut results: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_len);
@@ -195,7 +200,12 @@ impl Snapshot {
             let next_idx = item.elem_idx + 1;
             if next_idx < seg.len() {
                 let (k, e) = &seg[next_idx];
-                heap.push(Item { key: k, entry: e, reader_idx: item.reader_idx, elem_idx: next_idx });
+                heap.push(Item {
+                    key: k,
+                    entry: e,
+                    reader_idx: item.reader_idx,
+                    elem_idx: next_idx,
+                });
             }
             match last_key {
                 Some(ref lk) if lk == item.key => {
@@ -354,11 +364,13 @@ mod tests {
         let ns = b"ns";
 
         // Write 10 entries into a single segment.
-        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10u64).map(|i| {
-            let enc = encode_key(ns, format!("key-{:04}", i).as_bytes());
-            let e = make_put_entry(&enc, format!("val-{}", i).as_bytes(), i + 1);
-            (enc, e)
-        }).collect();
+        let mut entries: Vec<(Vec<u8>, MemEntry)> = (0..10u64)
+            .map(|i| {
+                let enc = encode_key(ns, format!("key-{:04}", i).as_bytes());
+                let e = make_put_entry(&enc, format!("val-{}", i).as_bytes(), i + 1);
+                (enc, e)
+            })
+            .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);

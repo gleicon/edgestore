@@ -137,9 +137,15 @@ mod tests {
         let encoded = encode_text_record(&rec);
         let decoded = decode_text_record(&encoded).unwrap();
         assert_eq!(decoded.text, "hello world");
-        assert_eq!(decoded.facets.get("category"), Some(&FacetValue::String("news".to_string())));
+        assert_eq!(
+            decoded.facets.get("category"),
+            Some(&FacetValue::String("news".to_string()))
+        );
         assert_eq!(decoded.facets.get("views"), Some(&FacetValue::Number(42)));
-        assert_eq!(decoded.facets.get("published"), Some(&FacetValue::Bool(true)));
+        assert_eq!(
+            decoded.facets.get("published"),
+            Some(&FacetValue::Bool(true))
+        );
     }
 
     #[test]

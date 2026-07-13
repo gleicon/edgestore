@@ -1,5 +1,5 @@
 use crate::error::EdgestoreError;
-use crate::types::{Lsn, WalRecord, Operation};
+use crate::types::{Lsn, Operation, WalRecord};
 
 #[derive(Debug, PartialEq)]
 enum TxState {
@@ -26,9 +26,18 @@ impl Transaction {
     }
 
     /// Append a put operation to this transaction.
-    pub fn put(&mut self, ns: &[u8], key: &[u8], val: &[u8], lsn: Lsn, timestamp: i64) -> Result<(), EdgestoreError> {
+    pub fn put(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        val: &[u8],
+        lsn: Lsn,
+        timestamp: i64,
+    ) -> Result<(), EdgestoreError> {
         if self.state != TxState::Active {
-            return Err(EdgestoreError::InvalidOperation("transaction not active".to_string()));
+            return Err(EdgestoreError::InvalidOperation(
+                "transaction not active".to_string(),
+            ));
         }
         let record = WalRecord {
             txid: self.txid,
@@ -47,9 +56,19 @@ impl Transaction {
     }
 
     /// Append a put-with-TTL operation to this transaction.
-    pub fn put_with_ttl(&mut self, ns: &[u8], key: &[u8], val: &[u8], ttl_secs: u32, lsn: Lsn, timestamp: i64) -> Result<(), EdgestoreError> {
+    pub fn put_with_ttl(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        val: &[u8],
+        ttl_secs: u32,
+        lsn: Lsn,
+        timestamp: i64,
+    ) -> Result<(), EdgestoreError> {
         if self.state != TxState::Active {
-            return Err(EdgestoreError::InvalidOperation("transaction not active".to_string()));
+            return Err(EdgestoreError::InvalidOperation(
+                "transaction not active".to_string(),
+            ));
         }
         let record = WalRecord {
             txid: self.txid,
@@ -68,9 +87,17 @@ impl Transaction {
     }
 
     /// Append a delete operation to this transaction.
-    pub fn delete(&mut self, ns: &[u8], key: &[u8], lsn: Lsn, timestamp: i64) -> Result<(), EdgestoreError> {
+    pub fn delete(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        lsn: Lsn,
+        timestamp: i64,
+    ) -> Result<(), EdgestoreError> {
         if self.state != TxState::Active {
-            return Err(EdgestoreError::InvalidOperation("transaction not active".to_string()));
+            return Err(EdgestoreError::InvalidOperation(
+                "transaction not active".to_string(),
+            ));
         }
         let record = WalRecord {
             txid: self.txid,
@@ -101,8 +128,12 @@ impl Transaction {
                 self.state = TxState::Committed;
                 Ok(std::mem::take(&mut self.pending))
             }
-            TxState::Committed => Err(EdgestoreError::InvalidOperation("already committed".to_string())),
-            TxState::RolledBack => Err(EdgestoreError::InvalidOperation("already rolled back".to_string())),
+            TxState::Committed => Err(EdgestoreError::InvalidOperation(
+                "already committed".to_string(),
+            )),
+            TxState::RolledBack => Err(EdgestoreError::InvalidOperation(
+                "already rolled back".to_string(),
+            )),
         }
     }
 

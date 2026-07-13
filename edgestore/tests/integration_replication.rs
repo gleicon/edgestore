@@ -7,11 +7,10 @@
 /// SC1 and SC5 (HTTP stack tests) live in edgestore-repl/tests/integration_replication.rs.
 /// SC4 (FilesystemRemoteStore round-trip) lives in edgestore-repl/tests/integration_replication.rs
 /// to avoid a circular dependency (edgestore-repl depends on edgestore).
-
 use std::time::Duration;
 
-use edgestore::{EdgestoreConfig, Engine, ImportResult};
 use edgestore::replication::SegmentRef;
+use edgestore::{EdgestoreConfig, Engine, ImportResult};
 use tempfile::TempDir;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

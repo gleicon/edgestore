@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use edgestore::{EdgestoreConfig, EdgestoreError, Engine, FacetValue, RemoteStore, TextEngine, TextSearchResult};
+use edgestore::{
+    EdgestoreConfig, EdgestoreError, Engine, FacetValue, RemoteStore, TextEngine, TextSearchResult,
+};
 use edgestore_tier::{ArchivedSegment, TieredEngine};
 
 /// Async wrapper around the synchronous `edgestore_tier::TieredEngine` — same
@@ -27,7 +29,10 @@ impl AsyncTieredEngine {
     /// Opens the local engine and wraps it with the given `RemoteStore` backend.
     /// Sidecar upload and text-index stripping are both off — use
     /// `open_with_options` to enable either.
-    pub async fn open(config: EdgestoreConfig, remote: Box<dyn RemoteStore>) -> Result<Self, EdgestoreError> {
+    pub async fn open(
+        config: EdgestoreConfig,
+        remote: Box<dyn RemoteStore>,
+    ) -> Result<Self, EdgestoreError> {
         Self::open_with_options(config, remote, false, false).await
     }
 
@@ -41,16 +46,27 @@ impl AsyncTieredEngine {
     ) -> Result<Self, EdgestoreError> {
         let flush_notify = Arc::new(tokio::sync::Notify::new());
         let notify_for_callback = flush_notify.clone();
-        let engine = tokio::task::spawn_blocking(move || -> Result<TieredEngine, EdgestoreError> {
-            let local = Engine::open(config)?.with_on_segment_flushed(move |_meta| {
-                notify_for_callback.notify_one();
-            });
-            Ok(TieredEngine::new(local, remote).with_sidecars(with_sidecars).with_text_stripping(with_text_stripping))
-        })
-        .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))??;
+        let engine =
+            tokio::task::spawn_blocking(move || -> Result<TieredEngine, EdgestoreError> {
+                let local = Engine::open(config)?.with_on_segment_flushed(move |_meta| {
+                    notify_for_callback.notify_one();
+                });
+                Ok(TieredEngine::new(local, remote)
+                    .with_sidecars(with_sidecars)
+                    .with_text_stripping(with_text_stripping))
+            })
+            .await
+            .map_err(|e| {
+                EdgestoreError::Io(std::io::Error::other(format!(
+                    "spawn_blocking failed: {}",
+                    e
+                )))
+            })??;
 
-        Ok(AsyncTieredEngine { inner: Arc::new(RwLock::new(engine)), flush_notify })
+        Ok(AsyncTieredEngine {
+            inner: Arc::new(RwLock::new(engine)),
+            flush_notify,
+        })
     }
 
     /// A handle that resolves the instant any segment is flushed locally (explicit
@@ -80,7 +96,12 @@ impl AsyncTieredEngine {
             Ok::<_, EdgestoreError>((local_val, needs_archive))
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))??;
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })??;
 
         let (local_val, needs_archive) = fast;
         if local_val.is_some() || !needs_archive {
@@ -94,7 +115,12 @@ impl AsyncTieredEngine {
             engine.get(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     pub async fn put(&self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<u64, EdgestoreError> {
@@ -107,10 +133,21 @@ impl AsyncTieredEngine {
             engine.put(&ns, &key, &val)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
-    pub async fn put_with_ttl(&self, ns: &[u8], key: &[u8], val: &[u8], ttl_secs: u32) -> Result<u64, EdgestoreError> {
+    pub async fn put_with_ttl(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+        val: &[u8],
+        ttl_secs: u32,
+    ) -> Result<u64, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let val = val.to_vec();
@@ -120,7 +157,12 @@ impl AsyncTieredEngine {
             engine.put_with_ttl(&ns, &key, &val, ttl_secs)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     pub async fn delete(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
@@ -132,10 +174,20 @@ impl AsyncTieredEngine {
             engine.delete(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
-    pub async fn range(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    pub async fn range(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let ns = ns.to_vec();
         let start = start.to_vec();
         let end = end.to_vec();
@@ -155,7 +207,12 @@ impl AsyncTieredEngine {
             }
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?;
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?;
         if let Some(result) = fast {
             return result;
         }
@@ -167,10 +224,19 @@ impl AsyncTieredEngine {
             engine.range(&ns, &start, &end)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
-    pub async fn prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    pub async fn prefix(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let ns = ns.to_vec();
         let prefix = prefix.to_vec();
         let inner = self.inner.clone();
@@ -186,7 +252,12 @@ impl AsyncTieredEngine {
             }
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?;
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?;
         if let Some(result) = fast {
             return result;
         }
@@ -196,7 +267,12 @@ impl AsyncTieredEngine {
             engine.prefix(&ns, &prefix)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     pub async fn flush(&self) -> Result<(), EdgestoreError> {
@@ -206,7 +282,12 @@ impl AsyncTieredEngine {
             engine.flush()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Runs one deathtime-cohort compaction pass — heavy I/O, runs on spawn_blocking.
@@ -217,19 +298,32 @@ impl AsyncTieredEngine {
             engine.compact_once()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Removes one segment from local storage only (files + manifest entry) —
     /// does not touch the remote archive. See `TieredEngine::prune_local_segment`.
-    pub async fn prune_local_segment(&self, segment_id: edgestore::types::SegmentId) -> Result<(), EdgestoreError> {
+    pub async fn prune_local_segment(
+        &self,
+        segment_id: edgestore::types::SegmentId,
+    ) -> Result<(), EdgestoreError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.prune_local_segment(segment_id)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Flushes the local memtable to a new immutable segment file (hot→warm).
@@ -240,7 +334,12 @@ impl AsyncTieredEngine {
             engine.local_mut().flush_to_segments()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Lists local segment metadata (id, hash, key bounds) — the input `archive_segments` needs.
@@ -273,12 +372,22 @@ impl AsyncTieredEngine {
             engine.local_mut().index_text(&ns, &key, &text, facets)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// BM25 search — reaches through to the local `Engine` directly (local-only,
     /// same as `range`/`prefix`; see struct docs).
-    pub async fn search_text(&self, ns: &[u8], query: &str, k: usize) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+    pub async fn search_text(
+        &self,
+        ns: &[u8],
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
         let ns = ns.to_vec();
         let query = query.to_string();
         let inner = self.inner.clone();
@@ -287,19 +396,32 @@ impl AsyncTieredEngine {
             engine.local().search_text(&ns, &query, k)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Uploads the given local segments to the remote store and records them as
     /// archived. Does not delete local files — that remains the caller's decision.
-    pub async fn archive_segments(&self, metas: Vec<edgestore::types::SegmentMeta>) -> Result<(), EdgestoreError> {
+    pub async fn archive_segments(
+        &self,
+        metas: Vec<edgestore::types::SegmentMeta>,
+    ) -> Result<(), EdgestoreError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.archive_segments(&metas)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     pub async fn archived_segments(&self) -> Vec<ArchivedSegment> {
@@ -320,14 +442,24 @@ impl AsyncTieredEngine {
             engine.fetch_all_archived()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Downloads+imports only the archived segments whose `[min_key, max_key]` bounds
     /// overlap the given local-namespace key range — the selective alternative to
     /// `fetch_all_archived` that range/prefix-shaped callers (e.g. time-series queries)
     /// need, since `TieredEngine` itself only does read-through for `get()`.
-    pub async fn fetch_archived_overlapping(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<(), EdgestoreError> {
+    pub async fn fetch_archived_overlapping(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<(), EdgestoreError> {
         let ns = ns.to_vec();
         let start = start.to_vec();
         let end = end.to_vec();
@@ -337,7 +469,12 @@ impl AsyncTieredEngine {
             engine.fetch_archived_overlapping(&ns, &start, &end)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Downloads a segment's raw bytes without importing it locally — for building
@@ -350,7 +487,12 @@ impl AsyncTieredEngine {
             engine.download_segment(&hash)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     pub async fn register_archived(&self, segments: Vec<ArchivedSegment>) {

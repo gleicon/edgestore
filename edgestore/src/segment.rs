@@ -82,10 +82,21 @@ pub(crate) fn deserialize_entry(
             )))
         }
     };
-    let value = if op == Operation::Delete { None } else { Some(val_bytes) };
+    let value = if op == Operation::Delete {
+        None
+    } else {
+        Some(val_bytes)
+    };
     Ok((
         key.clone(),
-        MemEntry { key, value, op, lsn, timestamp, ttl },
+        MemEntry {
+            key,
+            value,
+            op,
+            lsn,
+            timestamp,
+            ttl,
+        },
     ))
 }
 
@@ -126,8 +137,9 @@ pub(crate) fn read_xf_file(path: &Path) -> Result<xorf::Xor8, EdgestoreError> {
         .map_err(|_| EdgestoreError::SegmentCorrupt("xf: truncated block_length".to_string()))?;
     let block_length = u64::from_le_bytes(buf8) as usize;
 
-    f.read_exact(&mut buf8)
-        .map_err(|_| EdgestoreError::SegmentCorrupt("xf: truncated fingerprints_len".to_string()))?;
+    f.read_exact(&mut buf8).map_err(|_| {
+        EdgestoreError::SegmentCorrupt("xf: truncated fingerprints_len".to_string())
+    })?;
     let fp_len = u64::from_le_bytes(buf8) as usize;
     if fp_len > 1_000_000 {
         return Err(EdgestoreError::SegmentCorrupt(
@@ -172,7 +184,9 @@ pub fn read_idx_file(path: &Path) -> Result<Vec<(Vec<u8>, u64)>, EdgestoreError>
         .map_err(|_| EdgestoreError::SegmentCorrupt("idx: truncated count".to_string()))?;
     let count = u64::from_le_bytes(buf8) as usize;
     if count > 10_000_000 {
-        return Err(EdgestoreError::SegmentCorrupt("idx: count too large".to_string()));
+        return Err(EdgestoreError::SegmentCorrupt(
+            "idx: count too large".to_string(),
+        ));
     }
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
@@ -203,13 +217,29 @@ pub struct SegmentWriter {
 impl SegmentWriter {
     /// Create a new [`SegmentWriter`] for the given segment id.
     pub fn new(base_path: PathBuf, segment_id: SegmentId, cohort_window_secs: u64) -> Self {
-        SegmentWriter { base_path, segment_id, cohort_window_secs }
+        SegmentWriter {
+            base_path,
+            segment_id,
+            cohort_window_secs,
+        }
     }
 
-    fn dat_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.dat", self.segment_id)) }
-    fn idx_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.idx", self.segment_id)) }
-    fn xf_path(&self) -> PathBuf  { self.base_path.join(format!("segment-{:08}.xf",  self.segment_id)) }
-    fn meta_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.meta", self.segment_id)) }
+    fn dat_path(&self) -> PathBuf {
+        self.base_path
+            .join(format!("segment-{:08}.dat", self.segment_id))
+    }
+    fn idx_path(&self) -> PathBuf {
+        self.base_path
+            .join(format!("segment-{:08}.idx", self.segment_id))
+    }
+    fn xf_path(&self) -> PathBuf {
+        self.base_path
+            .join(format!("segment-{:08}.xf", self.segment_id))
+    }
+    fn meta_path(&self) -> PathBuf {
+        self.base_path
+            .join(format!("segment-{:08}.meta", self.segment_id))
+    }
 
     #[allow(clippy::type_complexity)]
     fn write_dat_and_index(
@@ -257,7 +287,10 @@ impl SegmentWriter {
     }
 
     /// Write the provided entries to disk and return the resulting segment metadata.
-    pub fn flush(&mut self, entries: &[(Vec<u8>, MemEntry)]) -> Result<SegmentMeta, EdgestoreError> {
+    pub fn flush(
+        &mut self,
+        entries: &[(Vec<u8>, MemEntry)],
+    ) -> Result<SegmentMeta, EdgestoreError> {
         if entries.is_empty() {
             return Err(EdgestoreError::SegmentCorrupt("empty entries".to_string()));
         }
@@ -279,13 +312,13 @@ impl SegmentWriter {
             .max()
             .unwrap_or(0);
 
-        let mut key_hashes: Vec<[u8; 32]> = keys
-            .iter()
-            .map(|k| *blake3::hash(k).as_bytes())
-            .collect();
+        let mut key_hashes: Vec<[u8; 32]> =
+            keys.iter().map(|k| *blake3::hash(k).as_bytes()).collect();
         key_hashes.sort_unstable();
         let mut hasher = blake3::Hasher::new();
-        for h in &key_hashes { hasher.update(h); }
+        for h in &key_hashes {
+            hasher.update(h);
+        }
         let merkle_root = hasher.finalize().as_bytes().to_vec();
 
         let min_key = entries.first().map(|(k, _)| k.clone()).unwrap();
@@ -358,13 +391,19 @@ pub struct SegmentReader {
 }
 
 impl SegmentReader {
-    fn dat_path(&self) -> PathBuf { self.base_path.join(format!("segment-{:08}.dat", self.segment_id)) }
+    fn dat_path(&self) -> PathBuf {
+        self.base_path
+            .join(format!("segment-{:08}.dat", self.segment_id))
+    }
 
     /// Open an existing segment from disk.
-    pub fn open(base_path: PathBuf, segment_id: SegmentId) -> Result<SegmentReader, EdgestoreError> {
+    pub fn open(
+        base_path: PathBuf,
+        segment_id: SegmentId,
+    ) -> Result<SegmentReader, EdgestoreError> {
         let meta_path = base_path.join(format!("segment-{:08}.meta", segment_id));
-        let xf_path  = base_path.join(format!("segment-{:08}.xf",   segment_id));
-        let idx_path = base_path.join(format!("segment-{:08}.idx",  segment_id));
+        let xf_path = base_path.join(format!("segment-{:08}.xf", segment_id));
+        let idx_path = base_path.join(format!("segment-{:08}.idx", segment_id));
 
         let meta_file = std::fs::File::open(&meta_path)?;
         let meta: SegmentMeta = serde_json::from_reader(meta_file)
@@ -372,7 +411,13 @@ impl SegmentReader {
 
         let filter = read_xf_file(&xf_path)?;
         let index = read_idx_file(&idx_path)?;
-        Ok(SegmentReader { base_path, segment_id, meta, filter, index })
+        Ok(SegmentReader {
+            base_path,
+            segment_id,
+            meta,
+            filter,
+            index,
+        })
     }
 
     #[allow(clippy::type_complexity)]
@@ -409,7 +454,9 @@ impl SegmentReader {
         let decompressed = zstd::decode_all(compressed.as_slice())
             .map_err(|e| EdgestoreError::SegmentCorrupt(format!("zstd decode: {}", e)))?;
         if decompressed.len() > MAX_DECOMPRESSED {
-            return Err(EdgestoreError::SegmentCorrupt("decompressed block too large".to_string()));
+            return Err(EdgestoreError::SegmentCorrupt(
+                "decompressed block too large".to_string(),
+            ));
         }
 
         let mut entries = Vec::new();
@@ -437,12 +484,20 @@ impl SegmentReader {
         let mut current_offset = start_offset;
 
         loop {
-            if current_offset >= dat_len { break; }
+            if current_offset >= dat_len {
+                break;
+            }
             let (entries, aligned_size) = self.read_block_at(&mut dat, current_offset)?;
-            if entries.is_empty() || aligned_size == 0 { break; }
+            if entries.is_empty() || aligned_size == 0 {
+                break;
+            }
             for (k, entry) in &entries {
-                if k == key { return Ok(Some(entry.clone())); }
-                if k.as_slice() > key { return Ok(None); }
+                if k == key {
+                    return Ok(Some(entry.clone()));
+                }
+                if k.as_slice() > key {
+                    return Ok(None);
+                }
             }
             current_offset += aligned_size as u64;
         }
@@ -465,15 +520,26 @@ impl SegmentReader {
         let mut results = Vec::new();
 
         loop {
-            if current_offset >= dat_len { break; }
+            if current_offset >= dat_len {
+                break;
+            }
             let (entries, aligned_size) = self.read_block_at(&mut dat, current_offset)?;
-            if entries.is_empty() || aligned_size == 0 { break; }
+            if entries.is_empty() || aligned_size == 0 {
+                break;
+            }
             let mut past_end = false;
             for (k, entry) in entries {
-                if k.as_slice() >= end { past_end = true; break; }
-                if k.as_slice() >= start { results.push((k, entry)); }
+                if k.as_slice() >= end {
+                    past_end = true;
+                    break;
+                }
+                if k.as_slice() >= start {
+                    results.push((k, entry));
+                }
             }
-            if past_end { break; }
+            if past_end {
+                break;
+            }
             current_offset += aligned_size as u64;
         }
         Ok(results)
@@ -481,9 +547,11 @@ impl SegmentReader {
 }
 
 fn find_block_offset(index: &[(Vec<u8>, u64)], query_key: &[u8]) -> u64 {
-    if index.is_empty() { return 8; } // skip file header
-    // PERFORMANCE: binary search via partition_point — O(log n).
-    // Previously linear scan — O(n). Regression: test_find_block_offset_binary_search.
+    if index.is_empty() {
+        return 8;
+    } // skip file header
+      // PERFORMANCE: binary search via partition_point — O(log n).
+      // Previously linear scan — O(n). Regression: test_find_block_offset_binary_search.
     let pos = index.partition_point(|(k, _)| k.as_slice() <= query_key);
     if pos == 0 {
         index[0].1
@@ -503,7 +571,10 @@ pub(crate) struct SegmentStore {
 }
 
 impl SegmentStore {
-    pub(crate) fn open(base_path: PathBuf, cohort_window_secs: u64) -> Result<SegmentStore, EdgestoreError> {
+    pub(crate) fn open(
+        base_path: PathBuf,
+        cohort_window_secs: u64,
+    ) -> Result<SegmentStore, EdgestoreError> {
         let manifest_path = base_path.join("manifest.mf");
         let manifest = Manifest::open(&manifest_path)?;
 
@@ -511,11 +582,19 @@ impl SegmentStore {
         let mut next_id: SegmentId = 0;
         for meta in manifest.list_segments() {
             let reader = SegmentReader::open(base_path.clone(), meta.segment_id)?;
-            if meta.segment_id >= next_id { next_id = meta.segment_id + 1; }
+            if meta.segment_id >= next_id {
+                next_id = meta.segment_id + 1;
+            }
             readers.push(reader);
         }
 
-        Ok(SegmentStore { base_path, manifest, readers, next_segment_id: next_id, cohort_window_secs })
+        Ok(SegmentStore {
+            base_path,
+            manifest,
+            readers,
+            next_segment_id: next_id,
+            cohort_window_secs,
+        })
     }
 
     pub(crate) fn flush_memtable(
@@ -524,9 +603,12 @@ impl SegmentStore {
     ) -> Result<SegmentMeta, EdgestoreError> {
         let raw = memtable.iter();
         if raw.is_empty() {
-            return Err(EdgestoreError::SegmentCorrupt("memtable is empty".to_string()));
+            return Err(EdgestoreError::SegmentCorrupt(
+                "memtable is empty".to_string(),
+            ));
         }
-        let entries: Vec<(Vec<u8>, MemEntry)> = raw.into_iter()
+        let entries: Vec<(Vec<u8>, MemEntry)> = raw
+            .into_iter()
             .map(|(k, e)| (k.to_vec(), e.clone()))
             .collect();
 
@@ -551,7 +633,8 @@ impl SegmentStore {
     /// Clone readers for the given segment IDs (used by snapshots).
     pub(crate) fn clone_readers_for(&self, ids: &[SegmentId]) -> Vec<SegmentReader> {
         let id_set: std::collections::HashSet<SegmentId> = ids.iter().copied().collect();
-        self.readers.iter()
+        self.readers
+            .iter()
             .filter(|r| id_set.contains(&r.segment_id))
             .cloned()
             .collect()
@@ -608,7 +691,9 @@ impl SegmentStore {
         self.manifest.add_segment(new_meta)?;
         self.readers.push(new_reader);
         for ext in &["dat", "idx", "xf", "meta"] {
-            let path = self.base_path.join(format!("segment-{:08}.{}", old_id, ext));
+            let path = self
+                .base_path
+                .join(format!("segment-{:08}.{}", old_id, ext));
             if path.exists() {
                 std::fs::remove_file(&path).map_err(EdgestoreError::Io)?;
             }
@@ -700,7 +785,12 @@ impl SegmentStore {
         let mut heap = BinaryHeap::new();
         for (ri, seg) in per_reader.iter().enumerate() {
             if let Some((k, e)) = seg.first() {
-                heap.push(Item { key: k, entry: e, reader_idx: ri, elem_idx: 0 });
+                heap.push(Item {
+                    key: k,
+                    entry: e,
+                    reader_idx: ri,
+                    elem_idx: 0,
+                });
             }
         }
         let mut results: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(total_len);
@@ -711,7 +801,12 @@ impl SegmentStore {
             let next_idx = item.elem_idx + 1;
             if next_idx < seg.len() {
                 let (k, e) = &seg[next_idx];
-                heap.push(Item { key: k, entry: e, reader_idx: item.reader_idx, elem_idx: next_idx });
+                heap.push(Item {
+                    key: k,
+                    entry: e,
+                    reader_idx: item.reader_idx,
+                    elem_idx: next_idx,
+                });
             }
             match last_key {
                 Some(ref lk) if lk == item.key => {
@@ -768,16 +863,25 @@ mod tests {
     }
 
     fn make_delete(lsn: u64, key: &[u8]) -> MemEntry {
-        MemEntry { key: key.to_vec(), value: None, op: Operation::Delete, lsn, timestamp: 0, ttl: 0 }
+        MemEntry {
+            key: key.to_vec(),
+            value: None,
+            op: Operation::Delete,
+            lsn,
+            timestamp: 0,
+            ttl: 0,
+        }
     }
 
     fn sorted_entries(n: usize) -> Vec<(Vec<u8>, MemEntry)> {
-        let mut v: Vec<(Vec<u8>, MemEntry)> = (0..n).map(|i| {
-            let k = encode_key(b"ns", format!("key-{:04}", i).as_bytes());
-            let val = format!("val-{:04}", i);
-            let e = make_entry(i as u64 + 1, &k, val.as_bytes());
-            (k, e)
-        }).collect();
+        let mut v: Vec<(Vec<u8>, MemEntry)> = (0..n)
+            .map(|i| {
+                let k = encode_key(b"ns", format!("key-{:04}", i).as_bytes());
+                let val = format!("val-{:04}", i);
+                let e = make_entry(i as u64 + 1, &k, val.as_bytes());
+                (k, e)
+            })
+            .collect();
         v.sort_by(|(a, _), (b, _)| a.cmp(b));
         v
     }
@@ -870,12 +974,18 @@ mod tests {
     #[test]
     fn test_xor_filter_no_false_negatives() {
         let dir = TempDir::new().unwrap();
-        let keys: Vec<Vec<u8>> = (0..100u32).map(|i| format!("key-{:04}", i).into_bytes()).collect();
+        let keys: Vec<Vec<u8>> = (0..100u32)
+            .map(|i| format!("key-{:04}", i).into_bytes())
+            .collect();
         let filter = build_xor_filter(&keys).unwrap();
         write_xf_file(&filter, &dir.path().join("test.xf")).unwrap();
         let filter2 = read_xf_file(&dir.path().join("test.xf")).unwrap();
         for key in &keys {
-            assert!(filter_contains(&filter2, key), "false negative for {:?}", key);
+            assert!(
+                filter_contains(&filter2, key),
+                "false negative for {:?}",
+                key
+            );
         }
     }
 
@@ -926,7 +1036,7 @@ mod tests {
 
         let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
         let start = encode_key(b"ns", b"key-0100");
-        let end   = encode_key(b"ns", b"key-0200");
+        let end = encode_key(b"ns", b"key-0200");
         let results = reader.range_scan(&start, &end).unwrap();
         assert_eq!(results.len(), 100);
     }
@@ -1017,9 +1127,7 @@ mod tests {
 
         let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
         let entry1 = make_delete(2, &key);
-        let meta = writer.flush(&vec![
-            (key.clone(), entry1),
-        ]).unwrap();
+        let meta = writer.flush(&vec![(key.clone(), entry1)]).unwrap();
 
         let mut store = SegmentStore::open(dir.path().to_path_buf(), 3600).unwrap();
         let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
@@ -1052,7 +1160,11 @@ mod tests {
 
         store.remove_segment(id).unwrap();
 
-        assert_eq!(store.manifest.list_segments().len(), 0, "manifest must not list removed segment");
+        assert_eq!(
+            store.manifest.list_segments().len(),
+            0,
+            "manifest must not list removed segment"
+        );
         assert!(!dir.path().join(format!("segment-{:08}.dat", id)).exists());
         assert_eq!(store.readers.len(), 0);
     }

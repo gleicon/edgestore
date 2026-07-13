@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use crate::memtable::{BTreeMemTable, MemTable};
 use crate::types::Compression;
-use crate::memtable::{MemTable, BTreeMemTable};
+use std::path::PathBuf;
 
 /// Database configuration.
 pub struct EdgestoreConfig {
@@ -58,7 +58,10 @@ impl std::fmt::Debug for EdgestoreConfig {
             .field("compression_wal", &self.compression_wal)
             .field("compression_segments", &self.compression_segments)
             .field("xor_filter_fpr", &self.xor_filter_fpr)
-            .field("compaction_write_budget_bytes", &self.compaction_write_budget_bytes)
+            .field(
+                "compaction_write_budget_bytes",
+                &self.compaction_write_budget_bytes,
+            )
             .field("fdp_enabled", &self.fdp_enabled)
             .field("hnsw_max_ram_bytes", &self.hnsw_max_ram_bytes)
             .field("readonly", &self.readonly)

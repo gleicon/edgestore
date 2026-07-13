@@ -18,18 +18,10 @@ pub trait VectorEngine {
     ) -> Result<Lsn, EdgestoreError>;
 
     /// Retrieve a vector record by namespace and key.
-    fn vector_get(
-        &self,
-        ns: &[u8],
-        key: &[u8],
-    ) -> Result<Option<VectorRecord>, EdgestoreError>;
+    fn vector_get(&self, ns: &[u8], key: &[u8]) -> Result<Option<VectorRecord>, EdgestoreError>;
 
     /// Delete a vector record by namespace and key.
-    fn vector_delete(
-        &mut self,
-        ns: &[u8],
-        key: &[u8],
-    ) -> Result<Lsn, EdgestoreError>;
+    fn vector_delete(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError>;
 }
 
 /// Generate the synthetic namespace for vector storage.
@@ -63,7 +55,9 @@ mod tests {
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
 
         let data = vec![0xAB; 128 * 4];
-        engine.vector_put(b"ns", b"key1", 128, Dtype::F32, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key1", 128, Dtype::F32, &data)
+            .unwrap();
 
         let record = engine.vector_get(b"ns", b"key1").unwrap().unwrap();
         assert_eq!(record.dims, 128);
@@ -90,7 +84,9 @@ mod tests {
 
         // Store vector under "ns"
         let data = vec![0xAB; 128 * 4];
-        engine.vector_put(b"ns", b"key1", 128, Dtype::F32, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key1", 128, Dtype::F32, &data)
+            .unwrap();
 
         // Plain get on "ns" should return None (data is under __vec__ns)
         let plain = engine.get(b"ns", b"key1").unwrap();
@@ -107,7 +103,9 @@ mod tests {
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
 
         let data = vec![0xAB; 128 * 4];
-        engine.vector_put(b"ns", b"key1", 128, Dtype::F32, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key1", 128, Dtype::F32, &data)
+            .unwrap();
         assert!(engine.vector_get(b"ns", b"key1").unwrap().is_some());
 
         engine.vector_delete(b"ns", b"key1").unwrap();
@@ -120,7 +118,9 @@ mod tests {
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
 
         let data = vec![0xCD; 64 * 2];
-        engine.vector_put(b"ns", b"key1", 64, Dtype::F16, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key1", 64, Dtype::F16, &data)
+            .unwrap();
 
         let record = engine.vector_get(b"ns", b"key1").unwrap().unwrap();
         assert_eq!(record.dims, 64);
@@ -134,7 +134,9 @@ mod tests {
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
 
         let data = vec![0xEF; 256];
-        engine.vector_put(b"ns", b"key1", 256, Dtype::I8, &data).unwrap();
+        engine
+            .vector_put(b"ns", b"key1", 256, Dtype::I8, &data)
+            .unwrap();
 
         let record = engine.vector_get(b"ns", b"key1").unwrap().unwrap();
         assert_eq!(record.dims, 256);

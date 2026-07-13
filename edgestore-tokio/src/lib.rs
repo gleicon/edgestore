@@ -9,12 +9,12 @@ mod tiered;
 pub use tiered::AsyncTieredEngine;
 
 use edgestore::{
-    EdgestoreConfig, EdgestoreError, Engine, FacetValue, ImportResult, MetricsSnapshot, SearchOptions, SegmentRef,
-    TextEngine, TextSearchResult, VectorEngine,
     types::SegmentMeta,
     vector::distance::Metric,
     vector::search::VectorSearchResult,
     vector::types::{Dtype, VectorRecord},
+    EdgestoreConfig, EdgestoreError, Engine, FacetValue, ImportResult, MetricsSnapshot,
+    SearchOptions, SegmentRef, TextEngine, TextSearchResult, VectorEngine,
 };
 
 /// Async wrapper around the synchronous `edgestore::Engine`.
@@ -73,9 +73,12 @@ impl AsyncEngine {
     pub async fn open(config: EdgestoreConfig) -> Result<Self, EdgestoreError> {
         let engine = tokio::task::spawn_blocking(move || Engine::open(config))
             .await
-            .map_err(|e| EdgestoreError::Io(std::io::Error::other(
-                format!("spawn_blocking failed: {}", e),
-            )))??;
+            .map_err(|e| {
+                EdgestoreError::Io(std::io::Error::other(format!(
+                    "spawn_blocking failed: {}",
+                    e
+                )))
+            })??;
         Ok(AsyncEngine {
             inner: Arc::new(RwLock::new(engine)),
         })
@@ -91,8 +94,12 @@ impl AsyncEngine {
             engine.get(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Lightweight write — acquires write lock and returns immediately.
@@ -106,8 +113,12 @@ impl AsyncEngine {
             engine.put(&ns, &key, &val)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Lightweight write with TTL — record expires via deathtime-cohort compaction.
@@ -127,8 +138,12 @@ impl AsyncEngine {
             engine.put_with_ttl(&ns, &key, &val, ttl_secs)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Lightweight delete.
@@ -141,12 +156,20 @@ impl AsyncEngine {
             engine.delete(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Heavy prefix scan — runs on spawn_blocking.
-    pub async fn prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    pub async fn prefix(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let ns = ns.to_vec();
         let prefix = prefix.to_vec();
         let inner = self.inner.clone();
@@ -155,8 +178,12 @@ impl AsyncEngine {
             engine.prefix(&ns, &prefix)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Vector put — lightweight write.
@@ -177,12 +204,20 @@ impl AsyncEngine {
             engine.vector_put(&ns, &key, dims, dtype, &data)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Vector get — lightweight read.
-    pub async fn vector_get(&self, ns: &[u8], key: &[u8]) -> Result<Option<VectorRecord>, EdgestoreError> {
+    pub async fn vector_get(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+    ) -> Result<Option<VectorRecord>, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let inner = self.inner.clone();
@@ -191,8 +226,12 @@ impl AsyncEngine {
             engine.vector_get(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Vector delete — lightweight write.
@@ -205,8 +244,12 @@ impl AsyncEngine {
             engine.vector_delete(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Vector search — heavy operation, runs on spawn_blocking.
@@ -225,8 +268,12 @@ impl AsyncEngine {
             engine.vector_search(&ns, &query, k, metric)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Build vector index — heavy operation, runs on spawn_blocking.
@@ -238,8 +285,12 @@ impl AsyncEngine {
             engine.build_vector_index(&ns)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Preload vector index — heavy operation, runs on spawn_blocking.
@@ -251,8 +302,12 @@ impl AsyncEngine {
             engine.preload_vector_index(&ns)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Flush WAL.
@@ -263,8 +318,12 @@ impl AsyncEngine {
             engine.flush()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Flush the current memtable to a new immutable segment file — heavy I/O, runs on spawn_blocking.
@@ -275,8 +334,12 @@ impl AsyncEngine {
             engine.flush_to_segments()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Local segment manifest (hash + id per segment) — used by replication/backup callers.
@@ -287,8 +350,12 @@ impl AsyncEngine {
             engine.export_manifest()
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Index a document for BM25 full-text search — lightweight write.
@@ -308,12 +375,21 @@ impl AsyncEngine {
             engine.index_text(&ns, &key, &text, facets)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// BM25 search — heavy operation (scoring), runs on spawn_blocking.
-    pub async fn search_text(&self, ns: &[u8], query: &str, k: usize) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+    pub async fn search_text(
+        &self,
+        ns: &[u8],
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
         let ns = ns.to_vec();
         let query = query.to_string();
         let inner = self.inner.clone();
@@ -322,8 +398,12 @@ impl AsyncEngine {
             engine.search_text(&ns, &query, k)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// BM25 search with facet filters / typo tolerance — heavy, runs on spawn_blocking.
@@ -341,8 +421,12 @@ impl AsyncEngine {
             engine.search_text_with_options(&ns, &query, &options)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Remove a document from the text index — lightweight write.
@@ -355,8 +439,12 @@ impl AsyncEngine {
             engine.delete_text(&ns, &key)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 
     /// Get metrics snapshot.
@@ -384,8 +472,12 @@ impl AsyncEngine {
             engine.import_segment(&data, &expected_hash)
         })
         .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e),
-        )))?
+        .map_err(|e| {
+            EdgestoreError::Io(std::io::Error::other(format!(
+                "spawn_blocking failed: {}",
+                e
+            )))
+        })?
     }
 }
 
@@ -398,7 +490,9 @@ mod tests {
     use tempfile::TempDir;
 
     async fn open_async_engine(dir: &TempDir) -> AsyncEngine {
-        AsyncEngine::open(EdgestoreConfig::new(dir.path())).await.unwrap()
+        AsyncEngine::open(EdgestoreConfig::new(dir.path()))
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -416,7 +510,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let engine = open_async_engine(&dir).await;
 
-        engine.put_with_ttl(b"ns", b"key", b"val", 3600).await.unwrap();
+        engine
+            .put_with_ttl(b"ns", b"key", b"val", 3600)
+            .await
+            .unwrap();
         let val = engine.get(b"ns", b"key").await.unwrap();
         assert_eq!(val, Some(b"val".to_vec()));
     }
@@ -440,8 +537,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let engine = open_async_engine(&dir).await;
 
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).await.unwrap();
-        engine.index_text(b"ns", b"doc2", "goodbye world", std::collections::HashMap::new()).await.unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .await
+            .unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc2",
+                "goodbye world",
+                std::collections::HashMap::new(),
+            )
+            .await
+            .unwrap();
 
         let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -453,7 +566,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let engine = open_async_engine(&dir).await;
 
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).await.unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .await
+            .unwrap();
         engine.delete_text(b"ns", b"doc1").await.unwrap();
 
         let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
@@ -490,11 +611,21 @@ mod tests {
         for i in 0..20 {
             let v = vec![i as f32 * 0.1; 4];
             let bytes = v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
-            engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).await.unwrap();
+            engine
+                .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+                .await
+                .unwrap();
         }
 
-        let query = VectorRecord { dims, dtype: Dtype::F32, data: vec![0.5f32.to_le_bytes(); 4].concat() };
-        let results = engine.vector_search(b"ns", &query, 3, Metric::L2).await.unwrap();
+        let query = VectorRecord {
+            dims,
+            dtype: Dtype::F32,
+            data: vec![0.5f32.to_le_bytes(); 4].concat(),
+        };
+        let results = engine
+            .vector_search(b"ns", &query, 3, Metric::L2)
+            .await
+            .unwrap();
         assert!(!results.is_empty());
     }
 
@@ -507,13 +638,23 @@ mod tests {
         for i in 0..20 {
             let v = vec![i as f32 * 0.1; 4];
             let bytes = v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
-            engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).await.unwrap();
+            engine
+                .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+                .await
+                .unwrap();
         }
 
         engine.build_vector_index(b"ns").await.unwrap();
 
-        let query = VectorRecord { dims, dtype: Dtype::F32, data: vec![0.5f32.to_le_bytes(); 4].concat() };
-        let results = engine.vector_search(b"ns", &query, 3, Metric::L2).await.unwrap();
+        let query = VectorRecord {
+            dims,
+            dtype: Dtype::F32,
+            data: vec![0.5f32.to_le_bytes(); 4].concat(),
+        };
+        let results = engine
+            .vector_search(b"ns", &query, 3, Metric::L2)
+            .await
+            .unwrap();
         assert!(!results.is_empty());
     }
 }

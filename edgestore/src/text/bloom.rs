@@ -84,11 +84,21 @@ impl BloomFilter {
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = capacity.max(1);
         // m = -(n ln p) / (ln 2)^2 ; k = (m/n) ln 2 — standard optimal sizing.
-        let m = (-(capacity as f64) * TARGET_FPR.ln() / std::f64::consts::LN_2.powi(2)).ceil() as usize;
+        let m =
+            (-(capacity as f64) * TARGET_FPR.ln() / std::f64::consts::LN_2.powi(2)).ceil() as usize;
         let num_words = m.div_ceil(64).max(1);
         let num_bits = num_words * 64;
-        let num_hashes = (((num_bits as f64 / capacity as f64) * std::f64::consts::LN_2).round() as u32).clamp(1, 30);
-        BloomFilter { bits: vec![0u64; num_words], num_bits, num_hashes, capacity, count: 0, seed: RandomState::new() }
+        let num_hashes = (((num_bits as f64 / capacity as f64) * std::f64::consts::LN_2).round()
+            as u32)
+            .clamp(1, 30);
+        BloomFilter {
+            bits: vec![0u64; num_words],
+            num_bits,
+            num_hashes,
+            capacity,
+            count: 0,
+            seed: RandomState::new(),
+        }
     }
 
     /// Creates an empty filter with the default starting capacity.
@@ -121,8 +131,14 @@ impl BloomFilter {
     /// avoids an allocation that collecting a `&self`-borrowing iterator into a `Vec`
     /// would need. The `hash_pair` call that produces `h1`/`h2` still needs `&self`
     /// (for the seed), but that borrow ends as soon as it returns the owned values.
-    fn positions(h1: u64, h2: u64, num_bits: usize, num_hashes: u32) -> impl Iterator<Item = usize> {
-        (0..num_hashes).map(move |i| (h1.wrapping_add((i as u64).wrapping_mul(h2)) as usize) % num_bits)
+    fn positions(
+        h1: u64,
+        h2: u64,
+        num_bits: usize,
+        num_hashes: u32,
+    ) -> impl Iterator<Item = usize> {
+        (0..num_hashes)
+            .map(move |i| (h1.wrapping_add((i as u64).wrapping_mul(h2)) as usize) % num_bits)
     }
 
     /// Records `item` as present.
@@ -139,7 +155,8 @@ impl BloomFilter {
     /// (could be a false positive) — must fall back to a real check.
     pub fn might_contain(&self, item: &[u8]) -> bool {
         let (h1, h2) = self.hash_pair(item);
-        Self::positions(h1, h2, self.num_bits, self.num_hashes).all(|pos| self.bits[pos / 64] & (1 << (pos % 64)) != 0)
+        Self::positions(h1, h2, self.num_bits, self.num_hashes)
+            .all(|pos| self.bits[pos / 64] & (1 << (pos % 64)) != 0)
     }
 }
 
@@ -150,19 +167,26 @@ mod tests {
     #[test]
     fn never_false_negative_for_inserted_items() {
         let mut filter = BloomFilter::with_capacity(10_000);
-        let items: Vec<Vec<u8>> = (0..10_000).map(|i| format!("doc-{i}").into_bytes()).collect();
+        let items: Vec<Vec<u8>> = (0..10_000)
+            .map(|i| format!("doc-{i}").into_bytes())
+            .collect();
         for item in &items {
             filter.insert(item);
         }
         for item in &items {
-            assert!(filter.might_contain(item), "inserted item must never be reported as absent");
+            assert!(
+                filter.might_contain(item),
+                "inserted item must never be reported as absent"
+            );
         }
     }
 
     #[test]
     fn false_positive_rate_is_low_at_designed_capacity() {
         let mut filter = BloomFilter::with_capacity(200_000);
-        let inserted: Vec<Vec<u8>> = (0..200_000).map(|i| format!("doc-{i}").into_bytes()).collect();
+        let inserted: Vec<Vec<u8>> = (0..200_000)
+            .map(|i| format!("doc-{i}").into_bytes())
+            .collect();
         for item in &inserted {
             filter.insert(item);
         }
@@ -176,7 +200,10 @@ mod tests {
             }
         }
         let fpr = false_positives as f64 / probes as f64;
-        assert!(fpr < 0.05, "false positive rate {fpr} should be well under 5% at designed capacity (target ~1%)");
+        assert!(
+            fpr < 0.05,
+            "false positive rate {fpr} should be well under 5% at designed capacity (target ~1%)"
+        );
     }
 
     #[test]

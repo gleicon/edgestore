@@ -53,9 +53,7 @@ impl ReplicationProtocol for HttpReplicationClient {
             .map_err(|e| EdgestoreError::ReplicationError(format!("GET /merkle: {}", e)))?;
 
         let resp: MerkleResponse = rmp_serde::from_read(response.into_reader())
-            .map_err(|e| {
-                EdgestoreError::ReplicationError(format!("GET /merkle decode: {}", e))
-            })?;
+            .map_err(|e| EdgestoreError::ReplicationError(format!("GET /merkle decode: {}", e)))?;
 
         if resp.root.len() != 32 {
             return Err(EdgestoreError::ReplicationError(format!(
@@ -79,8 +77,8 @@ impl ReplicationProtocol for HttpReplicationClient {
             .call()
             .map_err(|e| EdgestoreError::ReplicationError(format!("GET /segments: {}", e)))?;
 
-        let entries: Vec<SegmentEntry> = rmp_serde::from_read(response.into_reader())
-            .map_err(|e| {
+        let entries: Vec<SegmentEntry> =
+            rmp_serde::from_read(response.into_reader()).map_err(|e| {
                 EdgestoreError::ReplicationError(format!("GET /segments decode: {}", e))
             })?;
 
@@ -108,22 +106,14 @@ impl ReplicationProtocol for HttpReplicationClient {
         let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
         let url = format!("{}/segments/{}", self.base_url, hash_hex);
 
-        let response = ureq::get(&url)
-            .call()
-            .map_err(|e| {
-                EdgestoreError::ReplicationError(format!("GET /segments/{}: {}", hash_hex, e))
-            })?;
+        let response = ureq::get(&url).call().map_err(|e| {
+            EdgestoreError::ReplicationError(format!("GET /segments/{}: {}", hash_hex, e))
+        })?;
 
         let mut data = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut data)
-            .map_err(|e| {
-                EdgestoreError::ReplicationError(format!(
-                    "GET /segments/{} read body: {}",
-                    hash_hex, e
-                ))
-            })?;
+        response.into_reader().read_to_end(&mut data).map_err(|e| {
+            EdgestoreError::ReplicationError(format!("GET /segments/{} read body: {}", hash_hex, e))
+        })?;
 
         Ok(data)
     }

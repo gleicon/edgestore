@@ -1,7 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use edgestore::{
-    Dtype, Engine, Metric, VectorEngine, VectorRecord,
-};
+use edgestore::{Dtype, Engine, Metric, VectorEngine, VectorRecord};
 use tempfile::TempDir;
 
 fn lcg_sequence(seed: u64, n: usize) -> Vec<f32> {
@@ -40,7 +38,15 @@ fn bench_hnsw_vs_flat(c: &mut Criterion) {
                     v.push((center[d] + noise).clamp(0.0, 1.0));
                 }
                 let bytes = f32s_to_bytes(&v);
-                engine.vector_put(b"ns", &[(cluster * per_cluster + i) as u8], dims as u16, Dtype::F32, &bytes).unwrap();
+                engine
+                    .vector_put(
+                        b"ns",
+                        &[(cluster * per_cluster + i) as u8],
+                        dims as u16,
+                        Dtype::F32,
+                        &bytes,
+                    )
+                    .unwrap();
             }
         }
 
@@ -56,29 +62,25 @@ fn bench_hnsw_vs_flat(c: &mut Criterion) {
         };
 
         // Benchmark flat scan
-        group.bench_with_input(
-            BenchmarkId::new("flat_scan", n),
-            &n,
-            |b, _| {
-                b.iter(|| {
-                    // Drop and reopen to clear HNSW cache, forcing flat scan
-                    let results = engine.vector_search(b"ns", black_box(&query), 10, Metric::L2).unwrap();
-                    black_box(results);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flat_scan", n), &n, |b, _| {
+            b.iter(|| {
+                // Drop and reopen to clear HNSW cache, forcing flat scan
+                let results = engine
+                    .vector_search(b"ns", black_box(&query), 10, Metric::L2)
+                    .unwrap();
+                black_box(results);
+            });
+        });
 
         // Benchmark HNSW
-        group.bench_with_input(
-            BenchmarkId::new("hnsw", n),
-            &n,
-            |b, _| {
-                b.iter(|| {
-                    let results = engine.vector_search(b"ns", black_box(&query), 10, Metric::L2).unwrap();
-                    black_box(results);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hnsw", n), &n, |b, _| {
+            b.iter(|| {
+                let results = engine
+                    .vector_search(b"ns", black_box(&query), 10, Metric::L2)
+                    .unwrap();
+                black_box(results);
+            });
+        });
     }
 
     group.finish();

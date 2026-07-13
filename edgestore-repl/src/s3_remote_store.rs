@@ -54,7 +54,7 @@ use edgestore::RemoteStore;
 /// let data = b"hello edgestore";
 /// store.upload(&hash, data).expect("upload");
 /// ```
-    pub struct S3RemoteStore {
+pub struct S3RemoteStore {
     client: aws_sdk_s3::Client,
     bucket: String,
     prefix: String,
@@ -92,9 +92,7 @@ impl S3RemoteStore {
         let (client, owned_runtime) = match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 let client = tokio::task::block_in_place(|| {
-                    handle.block_on(async {
-                        Self::build_client(endpoint_url).await
-                    })
+                    handle.block_on(async { Self::build_client(endpoint_url).await })
                 });
                 (client, None)
             }
@@ -107,9 +105,7 @@ impl S3RemoteStore {
                             "failed to create Tokio runtime: {e}"
                         ))
                     })?;
-                let client = rt.block_on(async {
-                    Self::build_client(endpoint_url).await
-                });
+                let client = rt.block_on(async { Self::build_client(endpoint_url).await });
                 (client, Some(Arc::new(rt)))
             }
         };
@@ -123,12 +119,10 @@ impl S3RemoteStore {
     }
 
     async fn build_client(endpoint_url: Option<&str>) -> aws_sdk_s3::Client {
-        let region_provider =
-            RegionProviderChain::default_provider().or_else("us-east-1");
+        let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
 
         let mut config_loader =
-            aws_config::defaults(BehaviorVersion::latest())
-                .region(region_provider);
+            aws_config::defaults(BehaviorVersion::latest()).region(region_provider);
 
         if let Some(url) = endpoint_url {
             config_loader = config_loader.endpoint_url(url.to_string());
@@ -181,9 +175,7 @@ impl S3RemoteStore {
         R: Send,
     {
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(future))
-            }
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
             Err(_) => {
                 // We are not inside a runtime, so we must own one.
                 self.owned_runtime
@@ -208,9 +200,7 @@ impl RemoteStore for S3RemoteStore {
                 .send()
                 .await
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 upload failed for {key}: {e}"
-                    ))
+                    EdgestoreError::ReplicationError(format!("S3 upload failed for {key}: {e}"))
                 })
         })?;
 
@@ -229,9 +219,7 @@ impl RemoteStore for S3RemoteStore {
                 .send()
                 .await
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 download failed for {key}: {e}"
-                    ))
+                    EdgestoreError::ReplicationError(format!("S3 download failed for {key}: {e}"))
                 })?;
 
             output
@@ -240,9 +228,7 @@ impl RemoteStore for S3RemoteStore {
                 .await
                 .map(|d| d.into_bytes().to_vec())
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 body stream error for {key}: {e}"
-                    ))
+                    EdgestoreError::ReplicationError(format!("S3 body stream error for {key}: {e}"))
                 })
         })
     }
@@ -265,11 +251,9 @@ impl RemoteStore for S3RemoteStore {
             }
 
             let output = self.block_on(async {
-                req.send().await.map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 list failed: {e}"
-                    ))
-                })
+                req.send()
+                    .await
+                    .map_err(|e| EdgestoreError::ReplicationError(format!("S3 list failed: {e}")))
             })?;
 
             if let Some(contents) = output.contents {
@@ -282,13 +266,7 @@ impl RemoteStore for S3RemoteStore {
                         if let Some(stem) = stem {
                             if stem.len() == 64 {
                                 let parsed: Option<[u8; 32]> = (0..32)
-                                    .map(|i| {
-                                        u8::from_str_radix(
-                                            &stem[i * 2..i * 2 + 2],
-                                            16,
-                                        )
-                                        .ok()
-                                    })
+                                    .map(|i| u8::from_str_radix(&stem[i * 2..i * 2 + 2], 16).ok())
                                     .collect::<Option<Vec<u8>>>()
                                     .and_then(|v| v.try_into().ok());
 
@@ -322,21 +300,14 @@ impl RemoteStore for S3RemoteStore {
                 .send()
                 .await
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 delete failed for {key}: {e}"
-                    ))
+                    EdgestoreError::ReplicationError(format!("S3 delete failed for {key}: {e}"))
                 })
         })?;
 
         Ok(())
     }
 
-    fn upload_aux(
-        &self,
-        hash: &[u8; 32],
-        ext: &str,
-        data: &[u8],
-    ) -> Result<(), EdgestoreError> {
+    fn upload_aux(&self, hash: &[u8; 32], ext: &str, data: &[u8]) -> Result<(), EdgestoreError> {
         Self::validate_ext(ext)?;
         let key = self.aux_key(hash, ext);
         self.block_on(async {
@@ -348,9 +319,7 @@ impl RemoteStore for S3RemoteStore {
                 .send()
                 .await
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 upload_aux failed for {key}: {e}"
-                    ))
+                    EdgestoreError::ReplicationError(format!("S3 upload_aux failed for {key}: {e}"))
                 })
         })?;
         Ok(())
@@ -378,9 +347,7 @@ impl RemoteStore for S3RemoteStore {
                 .await
                 .map(|d| d.into_bytes().to_vec())
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 body stream error for {key}: {e}"
-                    ))
+                    EdgestoreError::ReplicationError(format!("S3 body stream error for {key}: {e}"))
                 })
         })
     }
@@ -392,8 +359,8 @@ mod tests {
 
     fn make_store() -> Option<S3RemoteStore> {
         let endpoint = std::env::var("EDGESTORE_S3_ENDPOINT_URL").ok()?;
-        let bucket = std::env::var("EDGESTORE_S3_BUCKET")
-            .unwrap_or_else(|_| "edgestore-test".to_string());
+        let bucket =
+            std::env::var("EDGESTORE_S3_BUCKET").unwrap_or_else(|_| "edgestore-test".to_string());
         S3RemoteStore::new(&bucket, Some("test/"), Some(&endpoint)).ok()
     }
 
@@ -492,8 +459,8 @@ mod tests {
                 return;
             }
         };
-        let bucket = std::env::var("EDGESTORE_S3_BUCKET")
-            .unwrap_or_else(|_| "edgestore-test".to_string());
+        let bucket =
+            std::env::var("EDGESTORE_S3_BUCKET").unwrap_or_else(|_| "edgestore-test".to_string());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {

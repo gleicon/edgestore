@@ -12,8 +12,8 @@ use edgestore_tier::TieredEngine;
 
 fn make_s3_store() -> Option<S3RemoteStore> {
     let endpoint = std::env::var("EDGESTORE_S3_ENDPOINT_URL").ok()?;
-    let bucket = std::env::var("EDGESTORE_S3_BUCKET")
-        .unwrap_or_else(|_| "edgestore-test".to_string());
+    let bucket =
+        std::env::var("EDGESTORE_S3_BUCKET").unwrap_or_else(|_| "edgestore-test".to_string());
     S3RemoteStore::new(&bucket, Some("tiered_test/"), Some(&endpoint)).ok()
 }
 

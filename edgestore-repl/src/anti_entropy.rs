@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use edgestore::{Engine, ImportResult, RemoteStore};
 use edgestore::replication::ReplicationProtocol;
+use edgestore::{Engine, ImportResult, RemoteStore};
 
 use crate::http_client::HttpReplicationClient;
 
@@ -94,17 +94,15 @@ impl AntiEntropyLoop {
     /// Returns the `JoinHandle` for the background thread. The thread runs until the
     /// process exits.
     pub fn start(self) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(self.interval_secs));
-                run_once(
-                    &self.engine,
-                    &self.peer_url,
-                    &self.peer_id,
-                    &self.db_path,
-                    self.remote_store.as_deref(),
-                );
-            }
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(self.interval_secs));
+            run_once(
+                &self.engine,
+                &self.peer_url,
+                &self.peer_id,
+                &self.db_path,
+                self.remote_store.as_deref(),
+            );
         })
     }
 }
@@ -194,7 +192,10 @@ fn run_once(
     let pending_hashes: Vec<Vec<u8>> = cursor.segments_pending.clone();
     for hash_vec in &pending_hashes {
         if hash_vec.len() != 32 {
-            eprintln!("[anti_entropy] skipping malformed hash (len={})", hash_vec.len());
+            eprintln!(
+                "[anti_entropy] skipping malformed hash (len={})",
+                hash_vec.len()
+            );
             continue;
         }
 
@@ -222,7 +223,10 @@ fn run_once(
         };
 
         match result {
-            Ok(ImportResult::Applied { keys_written, keys_skipped }) => {
+            Ok(ImportResult::Applied {
+                keys_written,
+                keys_skipped,
+            }) => {
                 // Remove from pending and update total.
                 cursor.segments_pending.retain(|h| h != hash_vec);
                 cursor.segments_applied_total += 1;
@@ -286,9 +290,7 @@ fn cursor_file_path(db_path: &Path, peer_id: &str) -> PathBuf {
 /// Corrupt cursor is treated as empty to avoid blocking sync on bad state.
 fn load_cursor(cursor_path: &Path) -> PeerCursor {
     match std::fs::File::open(cursor_path) {
-        Ok(file) => {
-            rmp_serde::from_read(file).unwrap_or_default()
-        }
+        Ok(file) => rmp_serde::from_read(file).unwrap_or_default(),
         Err(_) => PeerCursor::default(),
     }
 }
@@ -304,8 +306,7 @@ fn flush_cursor(cursor: &PeerCursor, cursor_path: &Path) -> Result<(), std::io::
 
     let tmp_path = cursor_path.with_extension("cursor.tmp");
 
-    let bytes = rmp_serde::to_vec(cursor)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let bytes = rmp_serde::to_vec(cursor).map_err(|e| std::io::Error::other(e.to_string()))?;
 
     std::fs::write(&tmp_path, &bytes)?;
     std::fs::rename(&tmp_path, cursor_path)?;
@@ -325,5 +326,3 @@ fn now_secs() -> u64 {
 fn hex_str(hash: &[u8; 32]) -> String {
     hash.iter().map(|b| format!("{:02x}", b)).collect()
 }
-
-

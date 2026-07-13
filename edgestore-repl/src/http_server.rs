@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use edgestore::Engine;
 use edgestore::EdgestoreError;
+use edgestore::Engine;
 
 /// MessagePack wire struct for GET /merkle response.
 #[derive(Serialize, Deserialize)]
@@ -88,31 +88,19 @@ fn parse_url(url: &str) -> (Vec<&str>, bool) {
 
     let debug_json = query_part.split('&').any(|kv| kv == "debug=json");
 
-    let parts: Vec<&str> = path_part
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let parts: Vec<&str> = path_part.split('/').filter(|s| !s.is_empty()).collect();
 
     (parts, debug_json)
 }
 
 /// Respond with a MessagePack-serialized value, or JSON if `debug_json` is set.
-fn respond_msgpack<T: Serialize>(
-    request: tiny_http::Request,
-    value: &T,
-    debug_json: bool,
-) {
+fn respond_msgpack<T: Serialize>(request: tiny_http::Request, value: &T, debug_json: bool) {
     if debug_json {
         match serde_json::to_vec(value) {
             Ok(json_bytes) => {
-                let response = tiny_http::Response::from_data(json_bytes)
-                    .with_header(
-                        tiny_http::Header::from_bytes(
-                            "Content-Type",
-                            "application/json",
-                        )
-                        .unwrap(),
-                    );
+                let response = tiny_http::Response::from_data(json_bytes).with_header(
+                    tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
+                );
                 let _ = request.respond(response);
             }
             Err(e) => {
@@ -122,14 +110,9 @@ fn respond_msgpack<T: Serialize>(
     } else {
         match rmp_serde::to_vec_named(value) {
             Ok(msgpack_bytes) => {
-                let response = tiny_http::Response::from_data(msgpack_bytes)
-                    .with_header(
-                        tiny_http::Header::from_bytes(
-                            "Content-Type",
-                            "application/msgpack",
-                        )
-                        .unwrap(),
-                    );
+                let response = tiny_http::Response::from_data(msgpack_bytes).with_header(
+                    tiny_http::Header::from_bytes("Content-Type", "application/msgpack").unwrap(),
+                );
                 let _ = request.respond(response);
             }
             Err(e) => {
@@ -141,14 +124,9 @@ fn respond_msgpack<T: Serialize>(
 
 /// Respond with raw bytes and `application/octet-stream`.
 fn respond_raw(request: tiny_http::Request, data: Vec<u8>) {
-    let response = tiny_http::Response::from_data(data)
-        .with_header(
-            tiny_http::Header::from_bytes(
-                "Content-Type",
-                "application/octet-stream",
-            )
-            .unwrap(),
-        );
+    let response = tiny_http::Response::from_data(data).with_header(
+        tiny_http::Header::from_bytes("Content-Type", "application/octet-stream").unwrap(),
+    );
     let _ = request.respond(response);
 }
 
@@ -176,7 +154,9 @@ fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) 
             match engine.lock() {
                 Ok(eng) => match eng.range_merkle_root() {
                     Ok(root) => {
-                        let resp = MerkleResponse { root: root.to_vec() };
+                        let resp = MerkleResponse {
+                            root: root.to_vec(),
+                        };
                         respond_msgpack(request, &resp, debug_json);
                     }
                     Err(e) => {

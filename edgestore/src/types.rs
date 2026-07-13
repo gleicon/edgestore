@@ -1,5 +1,5 @@
-use byteorder::{BigEndian, WriteBytesExt};
 use crate::error::EdgestoreError;
+use byteorder::{BigEndian, WriteBytesExt};
 use serde::{Deserialize, Serialize};
 
 /// Log sequence number (monotonically increasing per database).

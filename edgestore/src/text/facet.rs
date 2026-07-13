@@ -1,5 +1,5 @@
-use crate::text::types::FacetValue;
 use crate::text::index::Posting;
+use crate::text::types::FacetValue;
 
 /// A filter to apply to search results based on facet values.
 #[derive(Debug, Clone)]
@@ -19,12 +19,12 @@ pub fn filter_by_facets(postings: &[Posting], filters: &[FacetFilter]) -> Vec<Po
     postings
         .iter()
         .filter(|posting| {
-            filters.iter().all(|filter| {
-                match posting.facets.get(&filter.field) {
+            filters
+                .iter()
+                .all(|filter| match posting.facets.get(&filter.field) {
                     Some(facet_value) => facet_value == &filter.value,
                     None => false,
-                }
-            })
+                })
         })
         .cloned()
         .collect()
@@ -47,11 +47,17 @@ mod tests {
     #[test]
     fn test_filter_by_facets_exact_match() {
         let mut facets1 = HashMap::new();
-        facets1.insert("category".to_string(), FacetValue::String("news".to_string()));
+        facets1.insert(
+            "category".to_string(),
+            FacetValue::String("news".to_string()),
+        );
         let p1 = make_posting(1, facets1);
 
         let mut facets2 = HashMap::new();
-        facets2.insert("category".to_string(), FacetValue::String("sports".to_string()));
+        facets2.insert(
+            "category".to_string(),
+            FacetValue::String("sports".to_string()),
+        );
         let p2 = make_posting(2, facets2);
 
         let filters = vec![FacetFilter {
@@ -67,7 +73,10 @@ mod tests {
     #[test]
     fn test_filter_by_facets_empty_filters() {
         let mut facets = HashMap::new();
-        facets.insert("category".to_string(), FacetValue::String("news".to_string()));
+        facets.insert(
+            "category".to_string(),
+            FacetValue::String("news".to_string()),
+        );
         let p = make_posting(1, facets);
 
         let result = filter_by_facets(&[p.clone()], &[]);
@@ -77,7 +86,10 @@ mod tests {
     #[test]
     fn test_filter_by_facets_no_match() {
         let mut facets = HashMap::new();
-        facets.insert("category".to_string(), FacetValue::String("news".to_string()));
+        facets.insert(
+            "category".to_string(),
+            FacetValue::String("news".to_string()),
+        );
         let p = make_posting(1, facets);
 
         let filters = vec![FacetFilter {
@@ -92,12 +104,18 @@ mod tests {
     #[test]
     fn test_filter_multiple_facets() {
         let mut facets1 = HashMap::new();
-        facets1.insert("category".to_string(), FacetValue::String("news".to_string()));
+        facets1.insert(
+            "category".to_string(),
+            FacetValue::String("news".to_string()),
+        );
         facets1.insert("published".to_string(), FacetValue::Bool(true));
         let p1 = make_posting(1, facets1);
 
         let mut facets2 = HashMap::new();
-        facets2.insert("category".to_string(), FacetValue::String("news".to_string()));
+        facets2.insert(
+            "category".to_string(),
+            FacetValue::String("news".to_string()),
+        );
         facets2.insert("published".to_string(), FacetValue::Bool(false));
         let p2 = make_posting(2, facets2);
 

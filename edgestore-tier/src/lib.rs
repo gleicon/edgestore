@@ -347,7 +347,10 @@ impl TieredEngine {
     /// When `with_sidecars(true)` is set, also uploads `.idx`, `.xf`, and `.meta`
     /// files alongside each `.dat`. Sidecar upload errors are logged but do not fail
     /// the archive — the `.dat` alone is sufficient for correctness.
-    pub fn archive_segments(&mut self, metas: &[edgestore::types::SegmentMeta]) -> Result<(), EdgestoreError> {
+    pub fn archive_segments(
+        &mut self,
+        metas: &[edgestore::types::SegmentMeta],
+    ) -> Result<(), EdgestoreError> {
         let base = self.local.db_path().to_path_buf();
 
         for meta in metas {
@@ -395,8 +398,7 @@ impl TieredEngine {
                 if let Err(e) = self.local.strip_text_index(meta.segment_id) {
                     eprintln!(
                         "[edgestore-tier] strip_text_index skipped for segment {}: {}",
-                        meta.segment_id,
-                        e
+                        meta.segment_id, e
                     );
                 }
             }
@@ -483,9 +485,11 @@ impl TieredEngine {
     /// check that's wrong in the "no overlap" direction would silently drop
     /// archived data from a query's results.
     fn has_unfetched_archived_overlap(&self, enc_start: &[u8], enc_end: &[u8]) -> bool {
-        self.archived
-            .iter()
-            .any(|seg| seg.max_key.as_slice() >= enc_start && seg.min_key.as_slice() < enc_end && !self.fetched.contains_key(&seg.hash))
+        self.archived.iter().any(|seg| {
+            seg.max_key.as_slice() >= enc_start
+                && seg.min_key.as_slice() < enc_end
+                && !self.fetched.contains_key(&seg.hash)
+        })
     }
 
     /// True if any archived segment whose key range contains `enc_key` (inclusive
@@ -494,9 +498,11 @@ impl TieredEngine {
     /// `has_unfetched_archived_overlap`, where `min_key < enc_end` would falsely
     /// exclude a segment whose min_key equals the queried key.
     fn has_unfetched_archived_point(&self, enc_key: &[u8]) -> bool {
-        self.archived
-            .iter()
-            .any(|seg| seg.min_key.as_slice() <= enc_key && seg.max_key.as_slice() >= enc_key && !self.fetched.contains_key(&seg.hash))
+        self.archived.iter().any(|seg| {
+            seg.min_key.as_slice() <= enc_key
+                && seg.max_key.as_slice() >= enc_key
+                && !self.fetched.contains_key(&seg.hash)
+        })
     }
 
     /// True if answering `get(ns, key)` might require fetching an archived segment.
@@ -518,20 +524,30 @@ impl TieredEngine {
 
     /// Local-only range scan, no archived read-through. Only a complete answer
     /// when `range_needs_archived_fetch` is `false` for the same arguments.
-    pub fn local_only_range(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    pub fn local_only_range(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         self.local.range(ns, start, end)
     }
 
     /// Same condition as `range_needs_archived_fetch`, for `prefix`.
     pub fn prefix_needs_archived_fetch(&self, ns: &[u8], prefix: &[u8]) -> bool {
         let enc_prefix = encode_key(ns, prefix);
-        let enc_end = edgestore::types::prefix_upper_bound(&enc_prefix).unwrap_or_else(|| vec![0xFF; enc_prefix.len() + 1]);
+        let enc_end = edgestore::types::prefix_upper_bound(&enc_prefix)
+            .unwrap_or_else(|| vec![0xFF; enc_prefix.len() + 1]);
         self.has_unfetched_archived_overlap(&enc_prefix, &enc_end)
     }
 
     /// Local-only prefix scan, no archived read-through. Only a complete answer
     /// when `prefix_needs_archived_fetch` is `false` for the same arguments.
-    pub fn local_only_prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    pub fn local_only_prefix(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         self.local.prefix(ns, prefix)
     }
 
@@ -574,7 +590,8 @@ impl TieredEngine {
                     Err(e) => {
                         eprintln!(
                             "[edgestore-tier] ephemeral download skipped for {}: {}",
-                            hex_hash(&hash), e
+                            hex_hash(&hash),
+                            e
                         );
                         continue;
                     }
@@ -671,7 +688,10 @@ impl TieredEngine {
             match self.remote.download(hash) {
                 Ok(data) => {
                     match self.local.import_segment(&data, hash)? {
-                        ImportResult::Applied { keys_written, keys_skipped } => {
+                        ImportResult::Applied {
+                            keys_written,
+                            keys_skipped,
+                        } => {
                             eprintln!(
                                 "[edgestore-tier] imported {} ({} written, {} skipped)",
                                 hex_hash(hash),
@@ -750,7 +770,10 @@ impl TieredEngine {
     /// entry, does not touch the remote archive. Intended for callers that have
     /// already confirmed (via `archived_segments()`) that a segment is durably
     /// archived, and are pruning local disk after some retention policy.
-    pub fn prune_local_segment(&mut self, segment_id: edgestore::types::SegmentId) -> Result<(), EdgestoreError> {
+    pub fn prune_local_segment(
+        &mut self,
+        segment_id: edgestore::types::SegmentId,
+    ) -> Result<(), EdgestoreError> {
         self.local.prune_local_segment(segment_id)
     }
 
@@ -764,7 +787,10 @@ impl TieredEngine {
         // Evict until there is room for the new entry.
         while self.segment_cache_bytes + incoming > self.segment_cache_max_bytes {
             match self.segment_cache.pop_lru() {
-                Some((_, evicted)) => self.segment_cache_bytes = self.segment_cache_bytes.saturating_sub(evicted.len()),
+                Some((_, evicted)) => {
+                    self.segment_cache_bytes =
+                        self.segment_cache_bytes.saturating_sub(evicted.len())
+                }
                 None => break,
             }
         }
@@ -778,7 +804,9 @@ impl TieredEngine {
 
 /// Encode a 32-byte hash as a 64-character lowercase hex string.
 fn hex_hash(hash: &[u8; 32]) -> String {
-    hash.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    hash.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 /// Build a minimal `SegmentMeta` from an archived segment hash for use with
@@ -816,7 +844,8 @@ fn merge_local_wins(
     if archived.is_empty() {
         return local;
     }
-    let local_keys: std::collections::HashSet<Vec<u8>> = local.iter().map(|(k, _)| k.clone()).collect();
+    let local_keys: std::collections::HashSet<Vec<u8>> =
+        local.iter().map(|(k, _)| k.clone()).collect();
     let mut result = local;
     for (k, v) in archived {
         if !local_keys.contains(&k) {
@@ -877,7 +906,10 @@ mod tests {
 
         // Archive segments to remote.
         tiered.archive_segments(&metas).unwrap();
-        assert!(!tiered.archived_segments().is_empty(), "should have archived segments");
+        assert!(
+            !tiered.archived_segments().is_empty(),
+            "should have archived segments"
+        );
 
         // Create a brand-new engine on a fresh directory.
         // The new engine has none of the local segments.
@@ -1045,7 +1077,11 @@ mod tests {
 
         // Range before warming — archived data served ephemerally.
         let vals = fresh_tiered.range(b"ns", b"a", b"d").unwrap();
-        assert_eq!(vals.len(), 3, "range before warming serves archived data ephemerally");
+        assert_eq!(
+            vals.len(),
+            3,
+            "range before warming serves archived data ephemerally"
+        );
 
         // Warm all archived segments into local storage.
         fresh_tiered.fetch_all_archived().unwrap();
@@ -1098,7 +1134,9 @@ mod tests {
         tiered.put(b"logs", b"2030", b"new-data").unwrap();
         let meta_late = tiered.local_mut().flush_to_segments().unwrap();
 
-        tiered.archive_segments(&[meta_early.clone(), meta_late.clone()]).unwrap();
+        tiered
+            .archive_segments(&[meta_early.clone(), meta_late.clone()])
+            .unwrap();
 
         // Fresh engine with archived list.
         let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh5")))
@@ -1109,15 +1147,25 @@ mod tests {
         fresh_tiered.register_archived(tiered.archived_segments());
 
         // Fetch only the range overlapping the early key.
-        fresh_tiered.fetch_archived_overlapping(b"logs", b"2020", b"2021").unwrap();
+        fresh_tiered
+            .fetch_archived_overlapping(b"logs", b"2020", b"2021")
+            .unwrap();
 
         // Early key is now local.
         let early = fresh_tiered.get(b"logs", b"2020").unwrap();
-        assert_eq!(early, Some(b"old-data".to_vec()), "overlapping segment fetched");
+        assert_eq!(
+            early,
+            Some(b"old-data".to_vec()),
+            "overlapping segment fetched"
+        );
 
         // Late key not locally imported — range() reads it ephemerally from archive.
         let scan = fresh_tiered.range(b"logs", b"2025", b"2035").unwrap();
-        assert_eq!(scan.len(), 1, "range reads non-imported archived segment ephemerally");
+        assert_eq!(
+            scan.len(),
+            1,
+            "range reads non-imported archived segment ephemerally"
+        );
     }
 
     #[test]
@@ -1186,8 +1234,14 @@ mod tests {
 
         // Range scan after warming must include all keys.
         fresh_tiered.fetch_all_archived().unwrap();
-        let vals = fresh_tiered.range(b"ns", &0u64.to_be_bytes(), &10_000u64.to_be_bytes()).unwrap();
-        assert_eq!(vals.len(), 10_000, "range after warming must include all 10K keys");
+        let vals = fresh_tiered
+            .range(b"ns", &0u64.to_be_bytes(), &10_000u64.to_be_bytes())
+            .unwrap();
+        assert_eq!(
+            vals.len(),
+            10_000,
+            "range after warming must include all 10K keys"
+        );
     }
 
     #[test]
@@ -1204,9 +1258,9 @@ mod tests {
 
         // Spawn archive in one thread (separate local dir to avoid WriterBusy),
         // reads in the main thread.
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use std::thread;
-        use std::sync::atomic::{AtomicBool, Ordering};
 
         let done = Arc::new(AtomicBool::new(false));
         let done_clone = done.clone();
@@ -1271,7 +1325,10 @@ mod tests {
         // fetch_segment must return Err on hash mismatch (get() swallows the error).
         let hash = tiered.archived_segments()[0].hash;
         let result = fresh_tiered.fetch_segment(&hash);
-        assert!(result.is_err(), "corrupt segment hash mismatch must be rejected");
+        assert!(
+            result.is_err(),
+            "corrupt segment hash mismatch must be rejected"
+        );
     }
 
     // ── Mock RemoteStore for fault injection ─────────────────────────────────
@@ -1298,18 +1355,32 @@ mod tests {
 
     impl RemoteStore for FaultyRemoteStore {
         fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
-            if self.fail_next_upload.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                return Err(EdgestoreError::ReplicationError("injected upload fault".to_string()));
+            if self
+                .fail_next_upload
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(EdgestoreError::ReplicationError(
+                    "injected upload fault".to_string(),
+                ));
             }
-            if let Some(delay) = std::time::Duration::from_millis(self.delay_ms.load(std::sync::atomic::Ordering::SeqCst)).checked_mul(1) {
+            if let Some(delay) = std::time::Duration::from_millis(
+                self.delay_ms.load(std::sync::atomic::Ordering::SeqCst),
+            )
+            .checked_mul(1)
+            {
                 std::thread::sleep(delay);
             }
             self.inner.upload(hash, data)
         }
 
         fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
-            if self.fail_next_download.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                return Err(EdgestoreError::ReplicationError("injected download fault".to_string()));
+            if self
+                .fail_next_download
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(EdgestoreError::ReplicationError(
+                    "injected download fault".to_string(),
+                ));
             }
             self.inner.download(hash)
         }
@@ -1331,7 +1402,9 @@ mod tests {
         let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
         let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let remote = FaultyRemoteStore::new(inner_remote);
-        remote.fail_next_upload.store(true, std::sync::atomic::Ordering::SeqCst);
+        remote
+            .fail_next_upload
+            .store(true, std::sync::atomic::Ordering::SeqCst);
 
         let mut tiered = TieredEngine::new(local, Box::new(remote));
         tiered.put(b"ns", b"key", b"val").unwrap();
@@ -1359,10 +1432,13 @@ mod tests {
         tiered.archive_segments(&metas).unwrap();
 
         // Fresh engine with injected download fault.
-        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fault"))).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fault"))).unwrap();
         let fresh_inner = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let fresh_remote = FaultyRemoteStore::new(fresh_inner);
-        fresh_remote.fail_next_download.store(true, std::sync::atomic::Ordering::SeqCst);
+        fresh_remote
+            .fail_next_download
+            .store(true, std::sync::atomic::Ordering::SeqCst);
 
         let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
         fresh_tiered.register_archived(tiered.archived_segments());
@@ -1386,8 +1462,10 @@ mod tests {
         let hash = archived[0].hash;
 
         // Two fresh engines on separate local dirs fetch the same segment concurrently.
-        let fresh_local_a = Engine::open(EdgestoreConfig::new(local_dir.path().join("concurrent_a"))).unwrap();
-        let fresh_local_b = Engine::open(EdgestoreConfig::new(local_dir.path().join("concurrent_b"))).unwrap();
+        let fresh_local_a =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("concurrent_a"))).unwrap();
+        let fresh_local_b =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("concurrent_b"))).unwrap();
         let remote_a = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let remote_b = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
 
@@ -1466,19 +1544,26 @@ mod tests {
 
         let has_ext = |ext: &str| remote_files.iter().any(|f| f.ends_with(ext));
         assert!(has_ext(".seg"), ".dat (as .seg) must be present");
-        assert!(!has_ext(".idx"), ".idx sidecar must NOT be present without with_sidecars");
-        assert!(!has_ext(".xf"), ".xf sidecar must NOT be present without with_sidecars");
-        assert!(!has_ext(".meta"), ".meta sidecar must NOT be present without with_sidecars");
+        assert!(
+            !has_ext(".idx"),
+            ".idx sidecar must NOT be present without with_sidecars"
+        );
+        assert!(
+            !has_ext(".xf"),
+            ".xf sidecar must NOT be present without with_sidecars"
+        );
+        assert!(
+            !has_ext(".meta"),
+            ".meta sidecar must NOT be present without with_sidecars"
+        );
     }
 
     #[test]
     fn test_sidecar_download_roundtrip_via_remote_store() {
         let (_dir, remote_dir, _tiered) = make_tiered();
 
-        let local = Engine::open(EdgestoreConfig::new(
-            remote_dir.path().join("arch_local"),
-        ))
-        .unwrap();
+        let local =
+            Engine::open(EdgestoreConfig::new(remote_dir.path().join("arch_local"))).unwrap();
         let remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let mut tiered = TieredEngine::new(local, Box::new(remote)).with_sidecars(true);
 
@@ -1494,7 +1579,11 @@ mod tests {
         let xf_bytes = reader.download_aux(&hash, "xf");
         let meta_bytes = reader.download_aux(&hash, "meta");
 
-        assert!(idx_bytes.is_ok(), "idx sidecar downloadable: {:?}", idx_bytes.err());
+        assert!(
+            idx_bytes.is_ok(),
+            "idx sidecar downloadable: {:?}",
+            idx_bytes.err()
+        );
         assert!(xf_bytes.is_ok(), "xf sidecar downloadable");
         assert!(meta_bytes.is_ok(), "meta sidecar downloadable");
         assert!(!idx_bytes.unwrap().is_empty(), "idx sidecar non-empty");
@@ -1526,9 +1615,8 @@ mod tests {
         }
 
         let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
-        let remote = NoAuxStore(
-            FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap(),
-        );
+        let remote =
+            NoAuxStore(FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap());
         let mut tiered = TieredEngine::new(local, Box::new(remote)).with_sidecars(true);
 
         tiered.put(b"ns", b"key", b"val").unwrap();
@@ -1536,8 +1624,13 @@ mod tests {
         let metas = tiered.local().list_segment_metas();
 
         // Must succeed even though upload_aux will return Err for every sidecar.
-        tiered.archive_segments(&metas).expect("archive must succeed despite upload_aux Err");
-        assert!(!tiered.archived_segments().is_empty(), "segment recorded as archived");
+        tiered
+            .archive_segments(&metas)
+            .expect("archive must succeed despite upload_aux Err");
+        assert!(
+            !tiered.archived_segments().is_empty(),
+            "segment recorded as archived"
+        );
 
         // .dat is present in remote; sidecars are absent.
         let remote_files: Vec<String> = std::fs::read_dir(remote_dir.path())
@@ -1545,8 +1638,14 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert!(remote_files.iter().any(|f| f.ends_with(".seg")), ".dat must be archived");
-        assert!(!remote_files.iter().any(|f| f.ends_with(".idx")), ".idx must be absent");
+        assert!(
+            remote_files.iter().any(|f| f.ends_with(".seg")),
+            ".dat must be archived"
+        );
+        assert!(
+            !remote_files.iter().any(|f| f.ends_with(".idx")),
+            ".idx must be absent"
+        );
     }
 
     #[test]
@@ -1557,7 +1656,9 @@ mod tests {
         let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
         let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let remote = FaultyRemoteStore::new(inner_remote);
-        remote.delay_ms.store(50, std::sync::atomic::Ordering::SeqCst);
+        remote
+            .delay_ms
+            .store(50, std::sync::atomic::Ordering::SeqCst);
 
         let mut tiered = TieredEngine::new(local, Box::new(remote));
         tiered.put(b"ns", b"key", b"val").unwrap();
@@ -1568,7 +1669,11 @@ mod tests {
         tiered.archive_segments(&metas).unwrap();
         let elapsed = start.elapsed().as_millis() as u64;
 
-        assert!(elapsed >= 50, "delay should have been applied: {} ms", elapsed);
+        assert!(
+            elapsed >= 50,
+            "delay should have been applied: {} ms",
+            elapsed
+        );
     }
 
     #[test]
@@ -1587,7 +1692,8 @@ mod tests {
         let metas = tiered.local().list_segment_metas();
         tiered.archive_segments(&metas).unwrap();
 
-        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("throttle"))).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("throttle"))).unwrap();
         let fresh_inner = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let fresh_remote = ThrottlingRemoteStore::new(fresh_inner, 2);
         let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
@@ -1608,17 +1714,25 @@ mod tests {
 
     impl ThrottlingRemoteStore {
         fn new(inner: FilesystemRemoteStore, max_fails: u64) -> Self {
-            Self { inner, fail_count: AtomicU64::new(0), max_fails }
+            Self {
+                inner,
+                fail_count: AtomicU64::new(0),
+                max_fails,
+            }
         }
 
         fn try_inner<F, T>(&self, f: F) -> Result<T, EdgestoreError>
-        where F: FnOnce(&FilesystemRemoteStore) -> Result<T, EdgestoreError>
+        where
+            F: FnOnce(&FilesystemRemoteStore) -> Result<T, EdgestoreError>,
         {
-            let count = self.fail_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let count = self
+                .fail_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if count < self.max_fails {
-                return Err(EdgestoreError::ReplicationError(
-                    format!("throttled: 503 Slow Down (attempt {})", count + 1)
-                ));
+                return Err(EdgestoreError::ReplicationError(format!(
+                    "throttled: 503 Slow Down (attempt {})",
+                    count + 1
+                )));
             }
             f(&self.inner)
         }
@@ -1656,12 +1770,9 @@ mod tests {
         tiered.archive_segments(&metas).unwrap();
 
         // Simulate eviction: open a fresh tiered engine with same remote but empty local.
-        let fresh_local = Engine::open(EdgestoreConfig::new(
-            local_dir.path().join("fresh_range"),
-        ))
-        .unwrap();
-        let fresh_remote =
-            FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_range"))).unwrap();
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote));
         for m in &metas {
             fresh.register_archived(vec![ArchivedSegment {
@@ -1686,12 +1797,9 @@ mod tests {
         let metas = tiered.local().list_segment_metas();
         tiered.archive_segments(&metas).unwrap();
 
-        let fresh_local = Engine::open(EdgestoreConfig::new(
-            local_dir.path().join("fresh_prefix"),
-        ))
-        .unwrap();
-        let fresh_remote =
-            FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_prefix"))).unwrap();
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote));
         for m in &metas {
             fresh.register_archived(vec![ArchivedSegment {
@@ -1702,7 +1810,11 @@ mod tests {
         }
 
         let results = fresh.prefix(b"ns", b"foo:").unwrap();
-        assert_eq!(results.len(), 2, "prefix must return only foo: keys from archive");
+        assert_eq!(
+            results.len(),
+            2,
+            "prefix must return only foo: keys from archive"
+        );
     }
 
     #[test]
@@ -1715,12 +1827,9 @@ mod tests {
         tiered.archive_segments(&metas).unwrap();
 
         // Fresh engine: seed archived list, then write a newer local value.
-        let fresh_local = Engine::open(EdgestoreConfig::new(
-            local_dir.path().join("fresh_lww"),
-        ))
-        .unwrap();
-        let fresh_remote =
-            FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_lww"))).unwrap();
+        let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote));
         for m in &metas {
             fresh.register_archived(vec![ArchivedSegment {
@@ -1732,8 +1841,15 @@ mod tests {
         fresh.put(b"ns", b"key", b"local-value").unwrap();
 
         let results = fresh.range(b"ns", b"", b"\xff").unwrap();
-        let val = results.iter().find(|(k, _)| k == b"key").map(|(_, v)| v.as_slice());
-        assert_eq!(val, Some(b"local-value" as &[u8]), "local write must win over archived copy");
+        let val = results
+            .iter()
+            .find(|(k, _)| k == b"key")
+            .map(|(_, v)| v.as_slice());
+        assert_eq!(
+            val,
+            Some(b"local-value" as &[u8]),
+            "local write must win over archived copy"
+        );
     }
 
     // ── Issue 2: strip_text_index tests ─────────────────────────────────────
@@ -1746,7 +1862,12 @@ mod tests {
         tiered.put(b"ns", b"kv-key", b"kv-value").unwrap();
         tiered
             .local_mut()
-            .index_text(b"docs", b"doc1", "hello world", std::collections::HashMap::new())
+            .index_text(
+                b"docs",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
             .unwrap();
         tiered.local_mut().flush_to_segments().unwrap();
 
@@ -1756,23 +1877,34 @@ mod tests {
 
         // Strip text index from local.
         let new_meta = tiered.local_mut().strip_text_index(seg_id).unwrap();
-        assert!(new_meta.text_index_stripped, "new segment must be marked stripped");
+        assert!(
+            new_meta.text_index_stripped,
+            "new segment must be marked stripped"
+        );
 
         // KV record must still be readable.
         let got = tiered.get(b"ns", b"kv-key").unwrap();
-        assert_eq!(got, Some(b"kv-value".to_vec()), "KV record must survive stripping");
+        assert_eq!(
+            got,
+            Some(b"kv-value".to_vec()),
+            "KV record must survive stripping"
+        );
     }
 
     #[test]
     fn test_strip_text_index_via_archive_with_text_stripping() {
         let (local_dir, remote_dir, mut tiered) = make_tiered();
-        let mut tiered = TieredEngine::new(tiered.local, tiered.remote)
-            .with_text_stripping(true);
+        let mut tiered = TieredEngine::new(tiered.local, tiered.remote).with_text_stripping(true);
 
         tiered.put(b"ns", b"kv", b"value").unwrap();
         tiered
             .local_mut()
-            .index_text(b"docs", b"doc1", "some text", std::collections::HashMap::new())
+            .index_text(
+                b"docs",
+                b"doc1",
+                "some text",
+                std::collections::HashMap::new(),
+            )
             .unwrap();
         tiered.local_mut().flush_to_segments().unwrap();
 
@@ -1790,7 +1922,10 @@ mod tests {
         // (Segments with no text records return unchanged meta — so count varies
         //  depending on where the text index flushed. Just verify the API didn't error.)
         let got = tiered.get(b"ns", b"kv").unwrap();
-        assert!(got.is_some(), "KV access must still work after text stripping");
+        assert!(
+            got.is_some(),
+            "KV access must still work after text stripping"
+        );
         let _ = stripped; // presence or absence is implementation-dependent
     }
 
@@ -1803,9 +1938,10 @@ mod tests {
         let metas = tiered.local().list_segment_metas();
         tiered.archive_segments(&metas).unwrap();
 
-        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_cache")))
-            .unwrap();
-        let fresh_remote = edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_cache"))).unwrap();
+        let fresh_remote =
+            edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote))
             .with_segment_cache_bytes(64 * 1024 * 1024);
         for m in &metas {
@@ -1824,7 +1960,10 @@ mod tests {
         let r2 = fresh.range(b"ns", b"x", b"z").unwrap();
         assert_eq!(r2, r1, "cached range must return identical results");
 
-        assert!(fresh.segment_cache_bytes > 0, "cache must hold resident bytes");
+        assert!(
+            fresh.segment_cache_bytes > 0,
+            "cache must hold resident bytes"
+        );
     }
 
     #[test]
@@ -1836,12 +1975,13 @@ mod tests {
         let metas = tiered.local().list_segment_metas();
         tiered.archive_segments(&metas).unwrap();
 
-        let fresh_local = Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_evict")))
-            .unwrap();
-        let fresh_remote = edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_evict"))).unwrap();
+        let fresh_remote =
+            edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         // Cache max = 1 byte — every segment evicts immediately after insert.
-        let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote))
-            .with_segment_cache_bytes(1);
+        let mut fresh =
+            TieredEngine::new(fresh_local, Box::new(fresh_remote)).with_segment_cache_bytes(1);
         for m in &metas {
             fresh.register_archived(vec![ArchivedSegment {
                 hash: m.segment_hash.as_slice().try_into().unwrap(),
@@ -1881,14 +2021,10 @@ mod tests {
         base.archive_segments(&metas).unwrap();
 
         // Fresh engine with enough byte budget to hold all 70 segments.
-        let fresh_local = Engine::open(EdgestoreConfig::new(
-            local_dir.path().join("fresh_70"),
-        ))
-        .unwrap();
-        let fresh_remote = edgestore_repl::FilesystemRemoteStore::new(
-            remote_dir.path().to_path_buf(),
-        )
-        .unwrap();
+        let fresh_local =
+            Engine::open(EdgestoreConfig::new(local_dir.path().join("fresh_70"))).unwrap();
+        let fresh_remote =
+            edgestore_repl::FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
         let mut fresh = TieredEngine::new(fresh_local, Box::new(fresh_remote))
             .with_segment_cache_bytes(64 * 1024 * 1024);
         for m in &metas {
@@ -1902,7 +2038,11 @@ mod tests {
         // Trigger 70 ephemeral downloads — previously the 65th would have
         // caused a silent byte-counter overcount.
         let results = fresh.range(b"ns", b"key0000", b"key9999").unwrap();
-        assert_eq!(results.len(), 70, "all 70 entries visible after >64 segments cached");
+        assert_eq!(
+            results.len(),
+            70,
+            "all 70 entries visible after >64 segments cached"
+        );
     }
 
     #[test]

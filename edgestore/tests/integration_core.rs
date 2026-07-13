@@ -69,11 +69,7 @@ fn test_wal_file_header_format() {
 
     // Magic: "EDGW"
     assert!(bytes.len() >= 8, "WAL file too short to contain header");
-    assert_eq!(
-        &bytes[..4],
-        &[0x45, 0x44, 0x47, 0x57],
-        "WAL magic mismatch"
-    );
+    assert_eq!(&bytes[..4], &[0x45, 0x44, 0x47, 0x57], "WAL magic mismatch");
     // Version = 1
     assert_eq!(bytes[4], 1, "WAL version mismatch");
     // Reserved bytes must be zero
@@ -165,7 +161,9 @@ fn test_crash_recovery_no_acknowledged_writes_lost() {
         for i in 0u32..50 {
             let key = format!("key-{:03}", i);
             let val = format!("val-{:03}", i);
-            engine.put(b"crash_test", key.as_bytes(), val.as_bytes()).unwrap();
+            engine
+                .put(b"crash_test", key.as_bytes(), val.as_bytes())
+                .unwrap();
         }
         engine.flush().unwrap();
     }
@@ -229,7 +227,8 @@ fn test_transaction_group_commit() {
     for i in 0u32..100 {
         let key = format!("txkey-{:03}", i);
         let val = format!("txval-{:03}", i);
-        tx.put(b"group", key.as_bytes(), val.as_bytes(), 0, 0).unwrap();
+        tx.put(b"group", key.as_bytes(), val.as_bytes(), 0, 0)
+            .unwrap();
     }
     engine.commit_transaction(tx).unwrap();
 
@@ -294,7 +293,9 @@ fn test_wal_rotation() {
         for i in base..base + batch_size {
             let key = format!("rotkey-{:03}", i);
             let val = format!("rotval-1234567890-{:03}", i);
-            engine.put(b"rotation", key.as_bytes(), val.as_bytes()).unwrap();
+            engine
+                .put(b"rotation", key.as_bytes(), val.as_bytes())
+                .unwrap();
         }
         engine.flush().unwrap();
         // Dropping engine releases the lockfile; next iteration reopens.
@@ -329,7 +330,9 @@ fn test_put_with_ttl_stored_in_wal() {
     let dir = TempDir::new().unwrap();
     {
         let mut engine = open_engine(&dir);
-        engine.put_with_ttl(b"ns", b"ttl_key", b"ttl_val", 3600).unwrap();
+        engine
+            .put_with_ttl(b"ns", b"ttl_key", b"ttl_val", 3600)
+            .unwrap();
         engine.flush().unwrap();
     }
 
@@ -390,15 +393,24 @@ fn test_ttl_lazy_expiry_visible_before_compaction() {
     let dir = tempfile::TempDir::new().unwrap();
     let config = EdgestoreConfig::new(dir.path());
     let mut engine = Engine::open(config).unwrap();
-    engine.put_with_ttl(b"ns", b"expiring", b"still_here", 1).unwrap();
+    engine
+        .put_with_ttl(b"ns", b"expiring", b"still_here", 1)
+        .unwrap();
     // Flush memtable to a segment so compaction can act on it.
     engine.flush_to_segments().unwrap();
     std::thread::sleep(std::time::Duration::from_secs(2));
     let val = engine.get(b"ns", b"expiring").unwrap();
-    assert_eq!(val, Some(b"still_here".to_vec()), "lazy expiry: value must be visible before compaction even after TTL expires");
+    assert_eq!(
+        val,
+        Some(b"still_here".to_vec()),
+        "lazy expiry: value must be visible before compaction even after TTL expires"
+    );
     engine.compact_once().unwrap();
     let val_after = engine.get(b"ns", b"expiring").unwrap();
-    assert_eq!(val_after, None, "value must be gone after compaction removes expired cohort");
+    assert_eq!(
+        val_after, None,
+        "value must be gone after compaction removes expired cohort"
+    );
 }
 
 #[test]
@@ -465,7 +477,9 @@ fn test_operation_timing() {
     // Gets from memtable (hot path — all keys still in memtable)
     time_op(&format!("{N} gets (memtable)"), || {
         for i in 0..N {
-            engine.get(b"bench", format!("key-{:06}", i).as_bytes()).unwrap();
+            engine
+                .get(b"bench", format!("key-{:06}", i).as_bytes())
+                .unwrap();
         }
     });
 
@@ -477,7 +491,9 @@ fn test_operation_timing() {
     // Gets from segments (cold path — memtable cleared after flush)
     time_op(&format!("{N} gets (segment)"), || {
         for i in 0..N {
-            engine.get(b"bench", format!("key-{:06}", i).as_bytes()).unwrap();
+            engine
+                .get(b"bench", format!("key-{:06}", i).as_bytes())
+                .unwrap();
         }
     });
 
@@ -499,7 +515,9 @@ fn test_operation_timing() {
 
     // Range scan across all N segment-backed keys
     time_op(&format!("range scan {N} keys (segment)"), || {
-        engine.range(b"bench", b"key-000000", b"key-999999").unwrap()
+        engine
+            .range(b"bench", b"key-000000", b"key-999999")
+            .unwrap()
     });
 
     // Prefix scan

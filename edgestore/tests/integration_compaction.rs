@@ -6,7 +6,6 @@
 ///   SC3 (COMPACT-06): Snapshot pins survive compaction; pins released on drop
 ///   SC4 (COMPACT-04): compaction_write_budget_bytes stops mid-cycle
 ///   SC5 (COMPACT-07): merkle_root on output segment matches recomputed value
-
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -115,9 +114,7 @@ fn test_range_scan_overlapping_segments() {
     let mut engine = open_engine_small_segments(&dir);
 
     // Write the overlap key first (will be in an early segment)
-    engine
-        .put(b"ns", b"overlap_key", b"v1_old")
-        .unwrap();
+    engine.put(b"ns", b"overlap_key", b"v1_old").unwrap();
 
     // Flush to ensure this is in its own segment before the overwrite (ignore if empty)
     let _ = engine.flush_to_segments();
@@ -130,9 +127,7 @@ fn test_range_scan_overlapping_segments() {
     }
 
     // Write the overlap key again with new value (newer LSN)
-    engine
-        .put(b"ns", b"overlap_key", b"v1_new")
-        .unwrap();
+    engine.put(b"ns", b"overlap_key", b"v1_new").unwrap();
 
     // Flush any remaining memtable (ignore error if empty)
     let _ = engine.flush_to_segments();
@@ -149,21 +144,18 @@ fn test_range_scan_overlapping_segments() {
     );
 
     // Do a range scan that includes "overlap_key" and the unique keys
-    let results = engine
-        .range(b"ns", b"", b"\xFF\xFF\xFF\xFF")
-        .unwrap();
+    let results = engine.range(b"ns", b"", b"\xFF\xFF\xFF\xFF").unwrap();
 
     // Verify overlap_key maps to the latest value
-    let overlap = results
-        .iter()
-        .find(|(k, _)| k == b"overlap_key");
+    let overlap = results.iter().find(|(k, _)| k == b"overlap_key");
     assert!(
         overlap.is_some(),
         "overlap_key should be present in range results"
     );
     let (_, val) = overlap.unwrap();
     assert_eq!(
-        val, b"v1_new",
+        val,
+        b"v1_new",
         "COMPACT-05: LWW must return newest value for overlap_key; got {:?}",
         String::from_utf8_lossy(val)
     );
@@ -175,7 +167,8 @@ fn test_range_scan_overlapping_segments() {
     }
     for (k, count) in &key_counts {
         assert_eq!(
-            *count, 1,
+            *count,
+            1,
             "key {:?} appears {} times in range results (expected 1 — no duplicates)",
             String::from_utf8_lossy(k),
             count
@@ -214,7 +207,12 @@ fn test_snapshot_survives_compaction() {
     // Write keys with TTL=1s
     for i in 0u32..15 {
         engine
-            .put_with_ttl(b"ns", format!("snap-key-{:04}", i).as_bytes(), b"snap-val", 1)
+            .put_with_ttl(
+                b"ns",
+                format!("snap-key-{:04}", i).as_bytes(),
+                b"snap-val",
+                1,
+            )
             .unwrap();
     }
 
@@ -371,10 +369,7 @@ fn test_compaction_write_budget_enforced() {
         use edgestore::types::{encode_key, MemEntry, Operation};
         let entries: Vec<(Vec<u8>, MemEntry)> = (0..5u64)
             .map(|j| {
-                let key = encode_key(
-                    b"ns",
-                    format!("cohort{}-key{}", cohort_idx, j).as_bytes(),
-                );
+                let key = encode_key(b"ns", format!("cohort{}-key{}", cohort_idx, j).as_bytes());
                 let entry = MemEntry {
                     key: key.clone(),
                     value: Some(format!("val-{}-{}", cohort_idx, j).into_bytes()),
@@ -461,7 +456,7 @@ fn test_merkle_root_correct_after_compaction() {
 
     let cohort_window_secs: u64 = 3600;
     let write_time_nanos: i64 = 3_600_000_000_000; // 1 hour in nanos
-    // now_nanos = write_time + 2s → kills ttl=1 records, keeps ttl=0 records
+                                                   // now_nanos = write_time + 2s → kills ttl=1 records, keeps ttl=0 records
     let now_nanos_compact: i64 = write_time_nanos + 2_000_000_000;
 
     use edgestore::compactor::CohortInfo;
@@ -568,6 +563,9 @@ fn test_merkle_root_correct_after_compaction() {
     );
 
     // Also verify stats
-    assert_eq!(stats.live_records_relocated, 4, "4 live records should be relocated");
+    assert_eq!(
+        stats.live_records_relocated, 4,
+        "4 live records should be relocated"
+    );
     assert_eq!(stats.segments_written, 1);
 }

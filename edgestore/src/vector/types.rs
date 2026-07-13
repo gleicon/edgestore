@@ -207,7 +207,7 @@ mod tests {
         let mut bytes = vec![0u8; 3 + 100];
         bytes[0] = 0;
         bytes[1] = 128; // dims = 128
-        bytes[2] = 0;   // dtype = F32
+        bytes[2] = 0; // dtype = F32
         let err = decode_vector_record(&bytes).unwrap_err();
         assert!(matches!(err, EdgestoreError::DimensionMismatch { .. }));
     }

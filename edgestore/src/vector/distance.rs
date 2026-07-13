@@ -86,16 +86,28 @@ fn f16_to_f32(bits: u16) -> f32 {
         // Zero or subnormal
         if mant == 0 {
             // Zero
-            if sign == 1 { -0.0 } else { 0.0 }
+            if sign == 1 {
+                -0.0
+            } else {
+                0.0
+            }
         } else {
             // Subnormal
             let val = (mant as f32) * (2f32.powi(-24));
-            if sign == 1 { -val } else { val }
+            if sign == 1 {
+                -val
+            } else {
+                val
+            }
         }
     } else if exp == 31 {
         // Infinity or NaN
         if mant == 0 {
-            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
+            if sign == 1 {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            }
         } else {
             f32::NAN
         }
@@ -287,7 +299,11 @@ mod tests {
     fn test_cosine_identical() {
         let a = vec![1.0f32, 2.0, 3.0];
         let d = distance_scalar(&a, &a, Metric::Cosine);
-        assert!((d - 0.0).abs() < 1e-6, "cosine distance to self should be 0, got {}", d);
+        assert!(
+            (d - 0.0).abs() < 1e-6,
+            "cosine distance to self should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -295,14 +311,22 @@ mod tests {
         let a = vec![1.0f32, 0.0, 0.0];
         let b = vec![0.0f32, 1.0, 0.0];
         let d = distance_scalar(&a, &b, Metric::Cosine);
-        assert!((d - 1.0).abs() < 1e-6, "cosine distance of orthogonal vectors should be 1, got {}", d);
+        assert!(
+            (d - 1.0).abs() < 1e-6,
+            "cosine distance of orthogonal vectors should be 1, got {}",
+            d
+        );
     }
 
     #[test]
     fn test_l2_identical() {
         let a = vec![1.0f32, 2.0, 3.0];
         let d = distance_scalar(&a, &a, Metric::L2);
-        assert!((d - 0.0).abs() < 1e-6, "L2 distance to self should be 0, got {}", d);
+        assert!(
+            (d - 0.0).abs() < 1e-6,
+            "L2 distance to self should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -311,7 +335,12 @@ mod tests {
         let b = vec![4.0f32, 0.0, 1.0];
         let d = distance_scalar(&a, &b, Metric::L2);
         let expected = ((9.0f32 + 4.0 + 4.0) as f32).sqrt();
-        assert!((d - expected).abs() < 1e-5, "L2 distance mismatch: got {}, expected {}", d, expected);
+        assert!(
+            (d - expected).abs() < 1e-5,
+            "L2 distance mismatch: got {}, expected {}",
+            d,
+            expected
+        );
     }
 
     #[test]
@@ -322,7 +351,12 @@ mod tests {
         let d_ab = distance_scalar(&a, &b, Metric::DotProduct);
         let d_ac = distance_scalar(&a, &c, Metric::DotProduct);
         // a·b = 1, a·c = 0, so -a·b < -a·c → d_ab < d_ac
-        assert!(d_ab < d_ac, "dot product ordering: d_ab={} should be < d_ac={}", d_ab, d_ac);
+        assert!(
+            d_ab < d_ac,
+            "dot product ordering: d_ab={} should be < d_ac={}",
+            d_ab,
+            d_ac
+        );
     }
 
     #[test]
@@ -369,7 +403,12 @@ mod tests {
 
         let d_l2 = distance(&a_f16, &b_f16, Dtype::F16, Metric::L2).unwrap();
         let expected = ((4.0f32 + 4.0) as f32).sqrt();
-        assert!((d_l2 - expected).abs() < 0.1, "f16 L2 mismatch: got {}, expected {}", d_l2, expected);
+        assert!(
+            (d_l2 - expected).abs() < 0.1,
+            "f16 L2 mismatch: got {}, expected {}",
+            d_l2,
+            expected
+        );
     }
 
     #[test]
@@ -379,7 +418,12 @@ mod tests {
 
         let d_l2 = distance(&a_i8, &b_i8, Dtype::I8, Metric::L2).unwrap();
         let expected = ((4.0f32 + 4.0) as f32).sqrt();
-        assert!((d_l2 - expected).abs() < 1e-5, "i8 L2 mismatch: got {}, expected {}", d_l2, expected);
+        assert!(
+            (d_l2 - expected).abs() < 1e-5,
+            "i8 L2 mismatch: got {}, expected {}",
+            d_l2,
+            expected
+        );
     }
 
     #[test]
@@ -389,6 +433,11 @@ mod tests {
 
         let d_l2 = distance(&a, &b, Dtype::F32, Metric::L2).unwrap();
         let expected = ((4.0f32 + 4.0) as f32).sqrt();
-        assert!((d_l2 - expected).abs() < 1e-5, "API L2 mismatch: got {}, expected {}", d_l2, expected);
+        assert!(
+            (d_l2 - expected).abs() < 1e-5,
+            "API L2 mismatch: got {}, expected {}",
+            d_l2,
+            expected
+        );
     }
 }

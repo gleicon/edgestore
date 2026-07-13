@@ -271,14 +271,13 @@ fn handle_create(cmd: Create) -> Result<(), Box<dyn std::error::Error>> {
     // Create directory if it doesn't exist
     std::fs::create_dir_all(&cmd.path)
         .map_err(|e| format!("Failed to create database directory: {}", e))?;
-    
+
     // Create config with default settings
     let config = EdgestoreConfig::new(&cmd.path);
-    
+
     // Open the engine (this creates all necessary files)
-    let _engine = Engine::open(config)
-        .map_err(|e| format!("Failed to create database: {}", e))?;
-    
+    let _engine = Engine::open(config).map_err(|e| format!("Failed to create database: {}", e))?;
+
     println!("Created database at {}", cmd.path.display());
     Ok(())
 }
@@ -288,16 +287,15 @@ fn handle_stats(cmd: Stats) -> Result<(), Box<dyn std::error::Error>> {
     if !cmd.path.exists() {
         return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
     }
-    
+
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    
-    let engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-    
+
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
+
     // Collect statistics
     let stats = collect_stats(&cmd.path, &engine)?;
-    
+
     if cmd.json {
         // Output as JSON
         let json = serde_json::to_string_pretty(&stats)?;
@@ -306,7 +304,7 @@ fn handle_stats(cmd: Stats) -> Result<(), Box<dyn std::error::Error>> {
         // Output as formatted table
         print_stats_table(&stats);
     }
-    
+
     Ok(())
 }
 
@@ -315,34 +313,34 @@ fn handle_put(cmd: Put) -> Result<(), Box<dyn std::error::Error>> {
     if !cmd.path.exists() {
         return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
     }
-    
+
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let mut engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-    
+    let mut engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
+
     // Decode value if hex flag is set
     let value_bytes = if cmd.hex {
-        hex::decode(&cmd.value)
-            .map_err(|e| format!("Invalid hex value: {}", e))?
+        hex::decode(&cmd.value).map_err(|e| format!("Invalid hex value: {}", e))?
     } else {
         cmd.value.into_bytes()
     };
-    
+
     // Store the key-value pair
     let namespace = cmd.namespace.as_bytes();
     let key = cmd.key.as_bytes();
-    
+
     if let Some(ttl) = cmd.ttl_seconds {
-        engine.put_with_ttl(namespace, key, &value_bytes, ttl)
+        engine
+            .put_with_ttl(namespace, key, &value_bytes, ttl)
             .map_err(|e| format!("Failed to store key with TTL: {}", e))?;
         println!("Stored key '{}' with TTL {} seconds", cmd.key, ttl);
     } else {
-        engine.put(namespace, key, &value_bytes)
+        engine
+            .put(namespace, key, &value_bytes)
             .map_err(|e| format!("Failed to store key: {}", e))?;
         println!("Stored key '{}'", cmd.key);
     }
-    
+
     Ok(())
 }
 
@@ -351,16 +349,15 @@ fn handle_get(cmd: Get) -> Result<(), Box<dyn std::error::Error>> {
     if !cmd.path.exists() {
         return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
     }
-    
+
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-    
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
+
     // Retrieve the value
     let namespace = cmd.namespace.as_bytes();
     let key = cmd.key.as_bytes();
-    
+
     match engine.get(namespace, key) {
         Ok(Some(value)) => {
             if cmd.hex {
@@ -390,19 +387,19 @@ fn handle_delete(cmd: Delete) -> Result<(), Box<dyn std::error::Error>> {
     if !cmd.path.exists() {
         return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
     }
-    
+
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let mut engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-    
+    let mut engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
+
     // Delete the key
     let namespace = cmd.namespace.as_bytes();
     let key = cmd.key.as_bytes();
-    
-    engine.delete(namespace, key)
+
+    engine
+        .delete(namespace, key)
         .map_err(|e| format!("Failed to delete key: {}", e))?;
-    
+
     println!("Deleted key '{}'", cmd.key);
     Ok(())
 }
@@ -412,28 +409,28 @@ fn handle_range(cmd: Range) -> Result<(), Box<dyn std::error::Error>> {
     if !cmd.path.exists() {
         return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
     }
-    
+
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-    
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
+
     // Perform range scan
     let namespace = cmd.namespace.as_bytes();
     let start = cmd.start.as_bytes();
     let end = cmd.end.as_bytes();
-    
-    let results = engine.range(namespace, start, end)
+
+    let results = engine
+        .range(namespace, start, end)
         .map_err(|e| format!("Failed to perform range scan: {}", e))?;
-    
+
     // Apply limit if specified
     let limit = cmd.limit.unwrap_or(results.len());
     let count = results.len().min(limit);
-    
+
     // Output results
     for (key, value) in results.iter().take(limit) {
         let key_str = String::from_utf8_lossy(key);
-        
+
         if cmd.hex {
             // Output both key and value as hex
             println!("{}={}", hex::encode(key), hex::encode(value));
@@ -445,9 +442,9 @@ fn handle_range(cmd: Range) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     eprintln!("Found {} keys (showing {})", results.len(), count);
-    
+
     Ok(())
 }
 
@@ -471,35 +468,40 @@ struct MetricStats {
     wal_rotations: u64,
 }
 
-fn collect_stats(path: &PathBuf, engine: &Engine) -> Result<DatabaseStats, Box<dyn std::error::Error>> {
+fn collect_stats(
+    path: &PathBuf,
+    engine: &Engine,
+) -> Result<DatabaseStats, Box<dyn std::error::Error>> {
     // Count WAL files
     let wal_count = std::fs::read_dir(path)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.file_name()
+            entry
+                .file_name()
                 .to_str()
                 .map(|name| name.starts_with("wal-") && name.ends_with(".log"))
                 .unwrap_or(false)
         })
         .count();
-    
+
     // Count segment files
     let segment_count = std::fs::read_dir(path)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.file_name()
+            entry
+                .file_name()
                 .to_str()
                 .map(|name| name.starts_with("segment-") && name.ends_with(".dat"))
                 .unwrap_or(false)
         })
         .count();
-    
+
     // Get metrics from engine
     let m = engine.metrics();
-    
+
     // Calculate total size on disk
     let total_size = calculate_dir_size(path)?;
-    
+
     Ok(DatabaseStats {
         path: path.to_string_lossy().to_string(),
         segment_count,
@@ -519,16 +521,16 @@ fn collect_stats(path: &PathBuf, engine: &Engine) -> Result<DatabaseStats, Box<d
 
 fn calculate_dir_size(path: &PathBuf) -> Result<u64, std::io::Error> {
     let mut total_size = 0u64;
-    
+
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
         let metadata = entry.metadata()?;
-        
+
         if metadata.is_file() {
             total_size += metadata.len();
         }
     }
-    
+
     Ok(total_size)
 }
 
@@ -573,7 +575,8 @@ fn handle_compact(cmd: Compact) -> Result<(), Box<dyn std::error::Error>> {
     let initial_segments = count_segment_files(&cmd.path)?;
 
     // Run compaction
-    let stats = engine.compact_once()
+    let stats = engine
+        .compact_once()
         .map_err(|e| format!("Compaction failed: {}", e))?;
 
     // Get final stats
@@ -588,8 +591,14 @@ fn handle_compact(cmd: Compact) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Segments after:          {}", final_segments);
     println!("  Segments removed:        {}", stats.segments_removed);
     println!("  Segments written:        {}", stats.segments_written);
-    println!("  Live records relocated:  {}", stats.live_records_relocated);
-    println!("  Bytes relocated:         {}", format_bytes(stats.bytes_written));
+    println!(
+        "  Live records relocated:  {}",
+        stats.live_records_relocated
+    );
+    println!(
+        "  Bytes relocated:         {}",
+        format_bytes(stats.bytes_written)
+    );
 
     Ok(())
 }
@@ -598,7 +607,8 @@ fn count_segment_files(path: &PathBuf) -> Result<usize, std::io::Error> {
     let count = std::fs::read_dir(path)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.file_name()
+            entry
+                .file_name()
                 .to_str()
                 .map(|name| name.starts_with("segment-") && name.ends_with(".dat"))
                 .unwrap_or(false)
@@ -643,8 +653,7 @@ fn handle_export(cmd: Export) -> Result<(), Box<dyn std::error::Error>> {
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     // Create output file
     let output_file = std::fs::File::create(&cmd.output)
@@ -720,7 +729,11 @@ fn handle_export(cmd: Export) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         writer.flush()?;
-        println!("Exported {} keys to {} (binary format)", count, cmd.output.display());
+        println!(
+            "Exported {} keys to {} (binary format)",
+            count,
+            cmd.output.display()
+        );
     } else {
         return Err(format!("Unknown format: {}. Use 'json' or 'binary'.", cmd.format).into());
     }
@@ -753,8 +766,7 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let mut engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+    let mut engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     let format = cmd.format.to_lowercase();
 
@@ -775,7 +787,8 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
             let value = hex::decode(&record.value)
                 .map_err(|e| format!("Invalid hex value for key '{}': {}", record.key, e))?;
 
-            engine.put(namespace, key, &value)
+            engine
+                .put(namespace, key, &value)
                 .map_err(|e| format!("Failed to store key '{}': {}", record.key, e))?;
 
             count += 1;
@@ -784,11 +797,15 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        println!("Imported {} keys from {} (JSON format)", count, cmd.input.display());
+        println!(
+            "Imported {} keys from {} (JSON format)",
+            count,
+            cmd.input.display()
+        );
     } else if format == "binary" {
         // Binary format: length-prefixed records
-        let input_data = std::fs::read(&cmd.input)
-            .map_err(|e| format!("Failed to read input file: {}", e))?;
+        let input_data =
+            std::fs::read(&cmd.input).map_err(|e| format!("Failed to read input file: {}", e))?;
 
         let mut offset = 0usize;
         let mut count = 0u64;
@@ -842,7 +859,8 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
             offset += value_len;
 
             // Store the record
-            engine.put(namespace, key, value)
+            engine
+                .put(namespace, key, value)
                 .map_err(|e| format!("Failed to store record: {}", e))?;
 
             count += 1;
@@ -851,7 +869,11 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        println!("Imported {} keys from {} (binary format)", count, cmd.input.display());
+        println!(
+            "Imported {} keys from {} (binary format)",
+            count,
+            cmd.input.display()
+        );
     } else {
         return Err(format!("Unknown format: {}. Use 'json' or 'binary'.", cmd.format).into());
     }
@@ -860,7 +882,7 @@ fn handle_import(cmd: Import) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn handle_vector_put(cmd: VectorPut) -> Result<(), Box<dyn std::error::Error>> {
-    use edgestore::{VectorEngine, vector::types::Dtype};
+    use edgestore::{vector::types::Dtype, VectorEngine};
 
     // Verify the path exists
     if !cmd.path.exists() {
@@ -872,35 +894,43 @@ fn handle_vector_put(cmd: VectorPut) -> Result<(), Box<dyn std::error::Error>> {
         "f32" => Dtype::F32,
         "f16" => Dtype::F16,
         "i8" => Dtype::I8,
-        _ => return Err(format!("Unknown dtype: {}. Use 'f32', 'f16', or 'i8'.", cmd.dtype).into()),
+        _ => {
+            return Err(format!("Unknown dtype: {}. Use 'f32', 'f16', or 'i8'.", cmd.dtype).into())
+        }
     };
 
     // Decode hex data
-    let data = hex::decode(&cmd.data)
-        .map_err(|e| format!("Invalid hex data: {}", e))?;
+    let data = hex::decode(&cmd.data).map_err(|e| format!("Invalid hex data: {}", e))?;
 
     // Validate data length
     let expected_len = cmd.dims as usize * dtype.element_size();
     if data.len() != expected_len {
         return Err(format!(
             "Data length mismatch: expected {} bytes for {} dims of {:?}, got {}",
-            expected_len, cmd.dims, dtype, data.len()
-        ).into());
+            expected_len,
+            cmd.dims,
+            dtype,
+            data.len()
+        )
+        .into());
     }
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let mut engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+    let mut engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     // Store the vector
     let namespace = cmd.namespace.as_bytes();
     let key = cmd.key.as_bytes();
 
-    engine.vector_put(namespace, key, cmd.dims, dtype, &data)
+    engine
+        .vector_put(namespace, key, cmd.dims, dtype, &data)
         .map_err(|e| format!("Failed to store vector: {}", e))?;
 
-    println!("Stored vector '{}' ({} dims, {:?})", cmd.key, cmd.dims, dtype);
+    println!(
+        "Stored vector '{}' ({} dims, {:?})",
+        cmd.key, cmd.dims, dtype
+    );
     Ok(())
 }
 
@@ -914,8 +944,7 @@ fn handle_vector_get(cmd: VectorGet) -> Result<(), Box<dyn std::error::Error>> {
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     // Retrieve the vector
     let namespace = cmd.namespace.as_bytes();
@@ -938,7 +967,10 @@ fn handle_vector_get(cmd: VectorGet) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn handle_vector_search(cmd: VectorSearch) -> Result<(), Box<dyn std::error::Error>> {
-    use edgestore::{vector::types::{Dtype, VectorRecord}, vector::distance::Metric};
+    use edgestore::{
+        vector::distance::Metric,
+        vector::types::{Dtype, VectorRecord},
+    };
 
     // Verify the path exists
     if !cmd.path.exists() {
@@ -950,12 +982,18 @@ fn handle_vector_search(cmd: VectorSearch) -> Result<(), Box<dyn std::error::Err
         "cosine" => Metric::Cosine,
         "euclidean" | "l2" => Metric::L2,
         "dot" | "dotproduct" => Metric::DotProduct,
-        _ => return Err(format!("Unknown metric: {}. Use 'cosine', 'euclidean', or 'dot'.", cmd.metric).into()),
+        _ => {
+            return Err(format!(
+                "Unknown metric: {}. Use 'cosine', 'euclidean', or 'dot'.",
+                cmd.metric
+            )
+            .into())
+        }
     };
 
     // Decode query vector
-    let query_data = hex::decode(&cmd.query)
-        .map_err(|e| format!("Invalid hex query data: {}", e))?;
+    let query_data =
+        hex::decode(&cmd.query).map_err(|e| format!("Invalid hex query data: {}", e))?;
 
     // Infer dimensions from data length (assume f32 if not specified)
     // For now, we require data length to be divisible by 4 (f32)
@@ -966,8 +1004,7 @@ fn handle_vector_search(cmd: VectorSearch) -> Result<(), Box<dyn std::error::Err
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let mut engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+    let mut engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     // Build query record
     let query = VectorRecord {
@@ -978,13 +1015,18 @@ fn handle_vector_search(cmd: VectorSearch) -> Result<(), Box<dyn std::error::Err
 
     // Perform search
     let namespace = cmd.namespace.as_bytes();
-    let results = engine.vector_search(namespace, &query, cmd.k, metric)
+    let results = engine
+        .vector_search(namespace, &query, cmd.k, metric)
         .map_err(|e| format!("Search failed: {}", e))?;
 
     if results.is_empty() {
         println!("No matching vectors found.");
     } else {
-        println!("Top {} nearest vectors (using {:?} metric):", results.len(), metric);
+        println!(
+            "Top {} nearest vectors (using {:?} metric):",
+            results.len(),
+            metric
+        );
         for (i, result) in results.iter().enumerate() {
             let key_str = String::from_utf8_lossy(&result.key);
             println!("  {}. {} = {:.6}", i + 1, key_str, result.distance);
@@ -1004,18 +1046,22 @@ fn handle_text_search(cmd: TextSearch) -> Result<(), Box<dyn std::error::Error>>
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let engine = Engine::open(config)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     // Perform search
     let namespace = cmd.namespace.as_bytes();
-    let results = engine.search_text(namespace, &cmd.query, cmd.k)
+    let results = engine
+        .search_text(namespace, &cmd.query, cmd.k)
         .map_err(|e| format!("Search failed: {}", e))?;
 
     if results.is_empty() {
         println!("No matching documents found for query: '{}'", cmd.query);
     } else {
-        println!("Top {} documents for query '{}' (BM25 ranked):", results.len(), cmd.query);
+        println!(
+            "Top {} documents for query '{}' (BM25 ranked):",
+            results.len(),
+            cmd.query
+        );
         for (i, result) in results.iter().enumerate() {
             let key_str = String::from_utf8_lossy(&result.doc_id);
             println!("  {}. {} = {:.4}", i + 1, key_str, result.score);

@@ -64,7 +64,11 @@ impl fmt::Display for EdgestoreError {
         match self {
             EdgestoreError::Io(e) => write!(f, "I/O error: {}", e),
             EdgestoreError::Checksum { expected, got } => {
-                write!(f, "CRC32C mismatch: expected {:#010x}, got {:#010x}", expected, got)
+                write!(
+                    f,
+                    "CRC32C mismatch: expected {:#010x}, got {:#010x}",
+                    expected, got
+                )
             }
             EdgestoreError::CorruptRecord(msg) => write!(f, "corrupt WAL record: {}", msg),
             EdgestoreError::CorruptKey => write!(f, "corrupt key encoding"),
@@ -76,14 +80,22 @@ impl fmt::Display for EdgestoreError {
             }
             EdgestoreError::KeyNotFound => write!(f, "key not found"),
             EdgestoreError::FormatVersion { expected, got } => {
-                write!(f, "WAL format version mismatch: expected {}, got {}", expected, got)
+                write!(
+                    f,
+                    "WAL format version mismatch: expected {}, got {}",
+                    expected, got
+                )
             }
             EdgestoreError::SegmentCorrupt(msg) => write!(f, "segment corrupt: {}", msg),
             EdgestoreError::ManifestCorrupt(msg) => write!(f, "manifest corrupt: {}", msg),
             EdgestoreError::CompactionError(msg) => write!(f, "compaction error: {}", msg),
             EdgestoreError::ReplicationError(msg) => write!(f, "replication error: {}", msg),
             EdgestoreError::DimensionMismatch { expected, actual } => {
-                write!(f, "dimension mismatch: expected {} bytes, got {}", expected, actual)
+                write!(
+                    f,
+                    "dimension mismatch: expected {} bytes, got {}",
+                    expected, actual
+                )
             }
             EdgestoreError::CorruptData(msg) => write!(f, "corrupt data: {}", msg),
             EdgestoreError::ReadOnly => write!(f, "write attempted on a read-only engine"),
@@ -106,21 +118,56 @@ mod tests {
     #[test]
     fn test_display_variants() {
         let cases: &[(&str, EdgestoreError)] = &[
-            ("corrupt WAL record: bad data", EdgestoreError::CorruptRecord("bad data".to_string())),
+            (
+                "corrupt WAL record: bad data",
+                EdgestoreError::CorruptRecord("bad data".to_string()),
+            ),
             ("corrupt key encoding", EdgestoreError::CorruptKey),
             ("WAL rotation threshold reached", EdgestoreError::WalFull),
-            ("another writer holds the database lock", EdgestoreError::WriterBusy),
-            ("invalid operation: not active", EdgestoreError::InvalidOperation("not active".to_string())),
-            ("namespace length 70000 exceeds maximum 65535", EdgestoreError::NamespaceTooLong { len: 70000, max: 65535 }),
+            (
+                "another writer holds the database lock",
+                EdgestoreError::WriterBusy,
+            ),
+            (
+                "invalid operation: not active",
+                EdgestoreError::InvalidOperation("not active".to_string()),
+            ),
+            (
+                "namespace length 70000 exceeds maximum 65535",
+                EdgestoreError::NamespaceTooLong {
+                    len: 70000,
+                    max: 65535,
+                },
+            ),
             ("key not found", EdgestoreError::KeyNotFound),
-            ("WAL format version mismatch: expected 1, got 2", EdgestoreError::FormatVersion { expected: 1, got: 2 }),
-            ("segment corrupt: bad block", EdgestoreError::SegmentCorrupt("bad block".to_string())),
-            ("manifest corrupt: truncated", EdgestoreError::ManifestCorrupt("truncated".to_string())),
-            ("compaction error: oops", EdgestoreError::CompactionError("oops".to_string())),
+            (
+                "WAL format version mismatch: expected 1, got 2",
+                EdgestoreError::FormatVersion {
+                    expected: 1,
+                    got: 2,
+                },
+            ),
+            (
+                "segment corrupt: bad block",
+                EdgestoreError::SegmentCorrupt("bad block".to_string()),
+            ),
+            (
+                "manifest corrupt: truncated",
+                EdgestoreError::ManifestCorrupt("truncated".to_string()),
+            ),
+            (
+                "compaction error: oops",
+                EdgestoreError::CompactionError("oops".to_string()),
+            ),
         ];
 
         for (expected, err) in cases {
-            assert_eq!(format!("{}", err), *expected, "Display mismatch for {:?}", err);
+            assert_eq!(
+                format!("{}", err),
+                *expected,
+                "Display mismatch for {:?}",
+                err
+            );
         }
     }
 

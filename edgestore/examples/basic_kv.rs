@@ -26,19 +26,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get one key
     let alice = engine.get(b"users", b"alice")?;
-    println!("Get users/alice: {:?}\n", alice.as_deref().map(|v| String::from_utf8_lossy(v)));
+    println!(
+        "Get users/alice: {:?}\n",
+        alice.as_deref().map(|v| String::from_utf8_lossy(v))
+    );
 
     // Range scan within a namespace
     println!("Range scan products [sku-42, sku-99]:");
     for (key, val) in engine.range(b"products", b"sku-42", b"sku-99\x00")? {
-        println!("  {} => {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&val));
+        println!(
+            "  {} => {}",
+            String::from_utf8_lossy(&key),
+            String::from_utf8_lossy(&val)
+        );
     }
     println!();
 
     // Prefix scan
     println!("Prefix scan products (sku-):");
     for (key, val) in engine.prefix(b"products", b"sku-")? {
-        println!("  {} => {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&val));
+        println!(
+            "  {} => {}",
+            String::from_utf8_lossy(&key),
+            String::from_utf8_lossy(&val)
+        );
     }
     println!();
 

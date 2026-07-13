@@ -54,7 +54,10 @@ impl MemTable for BTreeMemTable {
     fn range<'a>(&'a self, start: &[u8], end: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)> {
         use std::ops::Bound;
         self.inner
-            .range((Bound::Included(start.to_vec()), Bound::Excluded(end.to_vec())))
+            .range((
+                Bound::Included(start.to_vec()),
+                Bound::Excluded(end.to_vec()),
+            ))
             .map(|(k, v)| (k.as_slice(), v))
             .collect()
     }
@@ -68,10 +71,7 @@ impl MemTable for BTreeMemTable {
     }
 
     fn iter(&self) -> Vec<(&[u8], &MemEntry)> {
-        self.inner
-            .iter()
-            .map(|(k, v)| (k.as_slice(), v))
-            .collect()
+        self.inner.iter().map(|(k, v)| (k.as_slice(), v)).collect()
     }
 
     fn len(&self) -> usize {
@@ -150,7 +150,10 @@ mod tests {
         let ns_a_results = m.prefix(&ns_a_prefix);
         assert_eq!(ns_a_results.len(), 2);
         for (_, entry) in &ns_a_results {
-            assert!(entry.value != Some(b"vb1".to_vec()), "ns_b key leaked into ns_a prefix scan");
+            assert!(
+                entry.value != Some(b"vb1".to_vec()),
+                "ns_b key leaked into ns_a prefix scan"
+            );
         }
 
         let ns_b_prefix = encode_key(b"ns_b", b"");
@@ -171,7 +174,10 @@ mod tests {
         let results = m.range(&start, &end);
         // Should return only ns_a keys
         for (_, entry) in &results {
-            assert!(entry.value != Some(b"vb1".to_vec()), "ns_b key appeared in ns_a range");
+            assert!(
+                entry.value != Some(b"vb1".to_vec()),
+                "ns_b key appeared in ns_a range"
+            );
         }
     }
 }

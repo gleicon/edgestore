@@ -7,7 +7,9 @@ use tempfile::TempDir;
 
 async fn open(local_dir: &std::path::Path, remote_dir: &std::path::Path) -> AsyncTieredEngine {
     let remote = FilesystemRemoteStore::new(remote_dir.to_path_buf()).unwrap();
-    AsyncTieredEngine::open(EdgestoreConfig::new(local_dir), Box::new(remote)).await.unwrap()
+    AsyncTieredEngine::open(EdgestoreConfig::new(local_dir), Box::new(remote))
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -49,7 +51,10 @@ async fn range_returns_correct_results_whether_or_not_archived_overlap_exists() 
 
     let meta = {
         let engine = open(local_dir.path(), remote_dir.path()).await;
-        engine.put(b"logs", b"archived-key", b"archived-val").await.unwrap();
+        engine
+            .put(b"logs", b"archived-key", b"archived-val")
+            .await
+            .unwrap();
         let meta = engine.flush_to_segments().await.unwrap();
         engine.archive_segments(vec![meta.clone()]).await.unwrap();
         meta
@@ -65,18 +70,33 @@ async fn range_returns_correct_results_whether_or_not_archived_overlap_exists() 
         }])
         .await;
     // Local data outside the archived segment's key range entirely.
-    fresh.put(b"logs", b"zzz-local-only", b"local-val").await.unwrap();
+    fresh
+        .put(b"logs", b"zzz-local-only", b"local-val")
+        .await
+        .unwrap();
 
     // A range overlapping the archived segment must take the slow path and
     // still return the archived record merged with local.
-    let overlapping = fresh.range(b"logs", b"archived-key", b"archived-kez").await.unwrap();
-    assert_eq!(overlapping, vec![(b"archived-key".to_vec(), b"archived-val".to_vec())]);
+    let overlapping = fresh
+        .range(b"logs", b"archived-key", b"archived-kez")
+        .await
+        .unwrap();
+    assert_eq!(
+        overlapping,
+        vec![(b"archived-key".to_vec(), b"archived-val".to_vec())]
+    );
 
     // A range that cannot possibly overlap the archived segment (entirely
     // above its max_key) must take the fast path and still return the correct
     // local-only result.
-    let local_only = fresh.range(b"logs", b"zzz-local-only", b"zzz-local-onlz").await.unwrap();
-    assert_eq!(local_only, vec![(b"zzz-local-only".to_vec(), b"local-val".to_vec())]);
+    let local_only = fresh
+        .range(b"logs", b"zzz-local-only", b"zzz-local-onlz")
+        .await
+        .unwrap();
+    assert_eq!(
+        local_only,
+        vec![(b"zzz-local-only".to_vec(), b"local-val".to_vec())]
+    );
 }
 
 #[tokio::test]
@@ -118,7 +138,15 @@ async fn index_and_search_text_pass_through_to_local_engine() {
     let remote_dir = TempDir::new().unwrap();
     let engine = open(local_dir.path(), remote_dir.path()).await;
 
-    engine.index_text(b"ns", b"doc1", "hello tiered world", std::collections::HashMap::new()).await.unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello tiered world",
+            std::collections::HashMap::new(),
+        )
+        .await
+        .unwrap();
     let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].doc_id, b"doc1");
@@ -151,7 +179,11 @@ async fn get_reads_through_an_archived_segment_on_a_fresh_engine() {
         .await;
 
     let got = fresh.get(b"logs", b"key1").await.unwrap();
-    assert_eq!(got, Some(b"val1".to_vec()), "read-through must fetch the archived segment on local miss");
+    assert_eq!(
+        got,
+        Some(b"val1".to_vec()),
+        "read-through must fetch the archived segment on local miss"
+    );
 }
 
 #[tokio::test]
@@ -167,7 +199,10 @@ async fn get_fast_path_returns_none_for_absent_key_not_in_any_archived_segment()
 
     // "absent" was never written and no archived segment covers it.
     let got = engine.get(b"ns", b"absent").await.unwrap();
-    assert_eq!(got, None, "fast path must return None for a key absent from all stores");
+    assert_eq!(
+        got, None,
+        "fast path must return None for a key absent from all stores"
+    );
 
     // "present" still readable.
     let got2 = engine.get(b"ns", b"present").await.unwrap();
@@ -184,7 +219,10 @@ async fn get_returns_correct_results_whether_or_not_archived_overlap_exists() {
 
     let meta = {
         let engine = open(local_dir.path(), remote_dir.path()).await;
-        engine.put(b"logs", b"archived-key", b"archived-val").await.unwrap();
+        engine
+            .put(b"logs", b"archived-key", b"archived-val")
+            .await
+            .unwrap();
         let meta = engine.flush_to_segments().await.unwrap();
         engine.archive_segments(vec![meta.clone()]).await.unwrap();
         meta
@@ -200,20 +238,34 @@ async fn get_returns_correct_results_whether_or_not_archived_overlap_exists() {
         }])
         .await;
     // Local key entirely outside the archived segment's key range.
-    fresh.put(b"logs", b"zzz-local-only", b"local-val").await.unwrap();
+    fresh
+        .put(b"logs", b"zzz-local-only", b"local-val")
+        .await
+        .unwrap();
 
     // Slow path: "archived-key" is within the archived segment → must fetch.
     let from_archive = fresh.get(b"logs", b"archived-key").await.unwrap();
-    assert_eq!(from_archive, Some(b"archived-val".to_vec()), "slow path must read through to archived segment");
+    assert_eq!(
+        from_archive,
+        Some(b"archived-val".to_vec()),
+        "slow path must read through to archived segment"
+    );
 
     // Fast path: "zzz-local-only" is above the archived segment's max_key →
     // get_needs_archived_fetch returns false, result comes from local only.
     let local_val = fresh.get(b"logs", b"zzz-local-only").await.unwrap();
-    assert_eq!(local_val, Some(b"local-val".to_vec()), "fast path must return local value when key is outside all archived ranges");
+    assert_eq!(
+        local_val,
+        Some(b"local-val".to_vec()),
+        "fast path must return local value when key is outside all archived ranges"
+    );
 
     // Fast path: key absent from both local and any archived range → None.
     let absent = fresh.get(b"logs", b"zzz-not-written").await.unwrap();
-    assert_eq!(absent, None, "fast path must return None for key absent from all stores");
+    assert_eq!(
+        absent, None,
+        "fast path must return None for key absent from all stores"
+    );
 }
 
 #[tokio::test]
@@ -230,7 +282,10 @@ async fn fetch_archived_overlapping_rehydrates_only_segments_in_range() {
         engine.put(b"logs", b"2030", b"new-data").await.unwrap();
         let meta_late = engine.flush_to_segments().await.unwrap();
 
-        engine.archive_segments(vec![meta_early.clone(), meta_late.clone()]).await.unwrap();
+        engine
+            .archive_segments(vec![meta_early.clone(), meta_late.clone()])
+            .await
+            .unwrap();
         (meta_early, meta_late)
     };
 
@@ -253,10 +308,17 @@ async fn fetch_archived_overlapping_rehydrates_only_segments_in_range() {
 
     // Fetch only the range overlapping the *early* key — the late segment must
     // NOT be imported (pulled into local storage).
-    fresh.fetch_archived_overlapping(b"logs", b"2020", b"2021").await.unwrap();
+    fresh
+        .fetch_archived_overlapping(b"logs", b"2020", b"2021")
+        .await
+        .unwrap();
 
     let early = fresh.get(b"logs", b"2020").await.unwrap();
-    assert_eq!(early, Some(b"old-data".to_vec()), "the overlapping segment must be fetched");
+    assert_eq!(
+        early,
+        Some(b"old-data".to_vec()),
+        "the overlapping segment must be fetched"
+    );
 
     // Only the overlapping (early) segment should have been imported locally — one
     // .dat file, not two. `range()` itself now reads through to archived segments

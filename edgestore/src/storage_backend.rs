@@ -104,7 +104,9 @@ impl StorageBackend for DefaultStorageBackend {
         let f = std::fs::OpenOptions::new().write(true).open(path)?;
         let mut f = std::io::BufWriter::new(f);
         f.flush()?;
-        let inner = f.into_inner().map_err(|e| EdgestoreError::Io(e.into_error()))?;
+        let inner = f
+            .into_inner()
+            .map_err(|e| EdgestoreError::Io(e.into_error()))?;
         inner.sync_all()?;
         Ok(())
     }

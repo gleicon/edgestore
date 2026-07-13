@@ -50,8 +50,7 @@ fn bench_tiered_get_readthrough(c: &mut Criterion) {
     }
     seed_engine.flush_to_segments().unwrap();
 
-    let seed_remote_store =
-        FilesystemRemoteStore::new(seed_remote.path().to_path_buf()).unwrap();
+    let seed_remote_store = FilesystemRemoteStore::new(seed_remote.path().to_path_buf()).unwrap();
     let mut seed_tiered = TieredEngine::new(seed_engine, Box::new(seed_remote_store));
     let metas = seed_tiered.local().list_segment_metas();
     seed_tiered.archive_segments(&metas).unwrap();
@@ -65,9 +64,10 @@ fn bench_tiered_get_readthrough(c: &mut Criterion) {
                 // Setup: fresh local engine + fresh tiered wrapper with archived list.
                 // Unique path per iteration to avoid WriterBusy from concurrent setups.
                 let idx = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let fresh_local =
-                    Engine::open(EdgestoreConfig::new(seed_local.path().join(format!("fresh_{idx}"))))
-                        .unwrap();
+                let fresh_local = Engine::open(EdgestoreConfig::new(
+                    seed_local.path().join(format!("fresh_{idx}")),
+                ))
+                .unwrap();
                 let fresh_remote =
                     FilesystemRemoteStore::new(seed_remote.path().to_path_buf()).unwrap();
                 let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
@@ -102,15 +102,14 @@ fn bench_tiered_archive_segments(c: &mut Criterion) {
         b.iter_batched(
             || {
                 // Fresh remote dir per iteration so archive doesn't collide.
-                let fresh_remote =
-                    FilesystemRemoteStore::new(remote_dir.path().join(format!(
+                let fresh_remote = FilesystemRemoteStore::new(remote_dir.path().join(format!(
                         "archive_{}",
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
                             .as_nanos()
                     )))
-                    .unwrap();
+                .unwrap();
                 let mut fresh_local =
                     Engine::open(EdgestoreConfig::new(local_dir.path().join(format!(
                         "local_{}",
@@ -147,8 +146,7 @@ fn bench_tiered_fetch_all_archived(c: &mut Criterion) {
     }
     seed_engine.flush_to_segments().unwrap();
 
-    let seed_remote_store =
-        FilesystemRemoteStore::new(seed_remote.path().to_path_buf()).unwrap();
+    let seed_remote_store = FilesystemRemoteStore::new(seed_remote.path().to_path_buf()).unwrap();
     let mut seed_tiered = TieredEngine::new(seed_engine, Box::new(seed_remote_store));
     let metas = seed_tiered.local().list_segment_metas();
     seed_tiered.archive_segments(&metas).unwrap();
@@ -160,9 +158,10 @@ fn bench_tiered_fetch_all_archived(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let idx = counter2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let fresh_local =
-                    Engine::open(EdgestoreConfig::new(seed_local.path().join(format!("fetch_fresh_{idx}"))))
-                        .unwrap();
+                let fresh_local = Engine::open(EdgestoreConfig::new(
+                    seed_local.path().join(format!("fetch_fresh_{idx}")),
+                ))
+                .unwrap();
                 let fresh_remote =
                     FilesystemRemoteStore::new(seed_remote.path().to_path_buf()).unwrap();
                 let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));

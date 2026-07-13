@@ -8,7 +8,6 @@
 ///   5. Full-text search with BM25 ranking
 ///   6. Replication (manifest export, segment import, Merkle compare)
 ///   7. Multi-record transactions (commit and rollback)
-
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -62,9 +61,15 @@ fn test_integration_v1_all_features() {
         engine.put(b"products", b"p2", b"Product 2").unwrap();
 
         // Verify individual gets
-        assert_eq!(engine.get(b"users", b"alice").unwrap().unwrap(), b"Alice Data");
+        assert_eq!(
+            engine.get(b"users", b"alice").unwrap().unwrap(),
+            b"Alice Data"
+        );
         assert_eq!(engine.get(b"users", b"bob").unwrap().unwrap(), b"Bob Data");
-        assert_eq!(engine.get(b"products", b"p1").unwrap().unwrap(), b"Product 1");
+        assert_eq!(
+            engine.get(b"products", b"p1").unwrap().unwrap(),
+            b"Product 1"
+        );
 
         // Range scan within namespace
         let range_results = engine.range(b"users", b"a", b"c").unwrap();
@@ -94,7 +99,12 @@ fn test_integration_v1_all_features() {
         // Write 10 keys with 1-second TTL
         for i in 0u32..10 {
             engine
-                .put_with_ttl(b"ttl_ns", format!("ttl-key-{:02}", i).as_bytes(), b"ttl-value", 1)
+                .put_with_ttl(
+                    b"ttl_ns",
+                    format!("ttl-key-{:02}", i).as_bytes(),
+                    b"ttl-value",
+                    1,
+                )
                 .unwrap();
         }
 
@@ -184,9 +194,15 @@ fn test_integration_v1_all_features() {
         let data2: Vec<u8> = v2.iter().flat_map(|f| f.to_le_bytes().to_vec()).collect();
         let data3: Vec<u8> = v3.iter().flat_map(|f| f.to_le_bytes().to_vec()).collect();
 
-        engine.vector_put(b"vec_ns", b"vec1", dims, dtype, &data1).unwrap();
-        engine.vector_put(b"vec_ns", b"vec2", dims, dtype, &data2).unwrap();
-        engine.vector_put(b"vec_ns", b"vec3", dims, dtype, &data3).unwrap();
+        engine
+            .vector_put(b"vec_ns", b"vec1", dims, dtype, &data1)
+            .unwrap();
+        engine
+            .vector_put(b"vec_ns", b"vec2", dims, dtype, &data2)
+            .unwrap();
+        engine
+            .vector_put(b"vec_ns", b"vec3", dims, dtype, &data3)
+            .unwrap();
 
         // Verify round-trip
         let rec1 = engine.vector_get(b"vec_ns", b"vec1").unwrap().unwrap();
@@ -203,15 +219,17 @@ fn test_integration_v1_all_features() {
         };
 
         // L2 (Euclidean) search
-        let euclidean_results: Vec<VectorSearchResult> =
-            engine.vector_search(b"vec_ns", &query, 3, Metric::L2).unwrap();
+        let euclidean_results: Vec<VectorSearchResult> = engine
+            .vector_search(b"vec_ns", &query, 3, Metric::L2)
+            .unwrap();
         assert_eq!(euclidean_results.len(), 3);
         // v1 should be closest (distance ≈ 0), then v3, then v2
         assert_eq!(euclidean_results[0].key, b"vec1");
 
         // Cosine search
-        let cosine_results: Vec<VectorSearchResult> =
-            engine.vector_search(b"vec_ns", &query, 3, Metric::Cosine).unwrap();
+        let cosine_results: Vec<VectorSearchResult> = engine
+            .vector_search(b"vec_ns", &query, 3, Metric::Cosine)
+            .unwrap();
         assert_eq!(cosine_results.len(), 3);
         assert_eq!(cosine_results[0].key, b"vec1");
 
@@ -268,10 +286,19 @@ fn test_integration_v1_all_features() {
 
         // Verify BM25 ranking: doc1 has more words but same term frequency,
         // doc2 is shorter so its term density is higher — doc2 should rank higher
-        let doc2_score = results.iter().find(|r| r.doc_id == b"doc2").map(|r| r.score);
-        let doc1_score = results.iter().find(|r| r.doc_id == b"doc1").map(|r| r.score);
+        let doc2_score = results
+            .iter()
+            .find(|r| r.doc_id == b"doc2")
+            .map(|r| r.score);
+        let doc1_score = results
+            .iter()
+            .find(|r| r.doc_id == b"doc1")
+            .map(|r| r.score);
         if let (Some(s2), Some(s1)) = (doc2_score, doc1_score) {
-            assert!(s2 >= s1, "shorter doc with same terms should rank >= longer doc");
+            assert!(
+                s2 >= s1,
+                "shorter doc with same terms should rank >= longer doc"
+            );
         }
 
         // Search for non-existent term
@@ -298,7 +325,11 @@ fn test_integration_v1_all_features() {
         let mut primary = open_engine_small_segments(&dir_primary);
         for i in 0u32..10 {
             primary
-                .put(b"repl_ns", format!("repl-key-{:02}", i).as_bytes(), b"primary-value")
+                .put(
+                    b"repl_ns",
+                    format!("repl-key-{:02}", i).as_bytes(),
+                    b"primary-value",
+                )
                 .unwrap();
         }
         let _ = primary.flush_to_segments();
@@ -324,7 +355,9 @@ fn test_integration_v1_all_features() {
                 .db_path()
                 .join(format!("segment-{:08}.dat", seg_ref.segment_id));
             let data = std::fs::read(&seg_path).unwrap();
-            let result = replica.import_segment(&data, &seg_ref.segment_hash).unwrap();
+            let result = replica
+                .import_segment(&data, &seg_ref.segment_hash)
+                .unwrap();
             match result {
                 ImportResult::Applied { .. } => {}
                 ImportResult::Skipped => panic!("segment should not be skipped on first import"),
@@ -353,7 +386,9 @@ fn test_integration_v1_all_features() {
             .db_path()
             .join(format!("segment-{:08}.dat", first_ref.segment_id));
         let data = std::fs::read(&seg_path).unwrap();
-        let reimport = replica.import_segment(&data, &first_ref.segment_hash).unwrap();
+        let reimport = replica
+            .import_segment(&data, &first_ref.segment_hash)
+            .unwrap();
         assert!(
             matches!(reimport, ImportResult::Skipped),
             "re-import should be skipped"

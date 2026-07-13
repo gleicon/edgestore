@@ -5,7 +5,6 @@
 /// SC3: SIMD-scalar parity at scale
 /// SC4: Performance benchmark (100K vectors)
 /// SC5: KV layer independence
-
 use edgestore::{
     distance, distance_scalar, Dtype, EdgestoreConfig, Engine, Metric, VectorEngine, VectorRecord,
 };
@@ -42,7 +41,9 @@ fn test_sc1_roundtrip_and_validation() {
 
     // f32 round-trip
     let data_f32 = vec![0xAB; 128 * 4];
-    engine.vector_put(b"ns", b"key1", 128, Dtype::F32, &data_f32).unwrap();
+    engine
+        .vector_put(b"ns", b"key1", 128, Dtype::F32, &data_f32)
+        .unwrap();
     let rec = engine.vector_get(b"ns", b"key1").unwrap().unwrap();
     assert_eq!(rec.dims, 128);
     assert_eq!(rec.dtype, Dtype::F32);
@@ -50,7 +51,9 @@ fn test_sc1_roundtrip_and_validation() {
 
     // f16 round-trip
     let data_f16 = vec![0xCD; 64 * 2];
-    engine.vector_put(b"ns", b"key2", 64, Dtype::F16, &data_f16).unwrap();
+    engine
+        .vector_put(b"ns", b"key2", 64, Dtype::F16, &data_f16)
+        .unwrap();
     let rec = engine.vector_get(b"ns", b"key2").unwrap().unwrap();
     assert_eq!(rec.dims, 64);
     assert_eq!(rec.dtype, Dtype::F16);
@@ -58,7 +61,9 @@ fn test_sc1_roundtrip_and_validation() {
 
     // i8 round-trip
     let data_i8 = vec![0xEF; 256];
-    engine.vector_put(b"ns", b"key3", 256, Dtype::I8, &data_i8).unwrap();
+    engine
+        .vector_put(b"ns", b"key3", 256, Dtype::I8, &data_i8)
+        .unwrap();
     let rec = engine.vector_get(b"ns", b"key3").unwrap().unwrap();
     assert_eq!(rec.dims, 256);
     assert_eq!(rec.dtype, Dtype::I8);
@@ -105,7 +110,9 @@ fn test_sc2_search_correctness_cosine() {
     };
 
     // Run vector_search with k=10
-    let results = engine.vector_search(b"ns", &query, 10, Metric::Cosine).unwrap();
+    let results = engine
+        .vector_search(b"ns", &query, 10, Metric::Cosine)
+        .unwrap();
     assert_eq!(results.len(), 10);
 
     // Build reference map: key → scalar distance
@@ -120,12 +127,18 @@ fn test_sc2_search_correctness_cosine() {
     // Verify each result's distance matches the scalar reference for that key
     for (i, result) in results.iter().enumerate() {
         let result_key = String::from_utf8_lossy(&result.key);
-        let ref_dist = reference_map.get(result_key.as_ref()).expect("key in reference");
+        let ref_dist = reference_map
+            .get(result_key.as_ref())
+            .expect("key in reference");
         let diff = (result.distance - *ref_dist).abs();
         assert!(
             diff < 1e-4,
             "SC2 Cosine: distance mismatch for {} at rank {}: got {}, expected {}, diff={}",
-            result_key, i, result.distance, ref_dist, diff
+            result_key,
+            i,
+            result.distance,
+            ref_dist,
+            diff
         );
     }
 
@@ -133,24 +146,21 @@ fn test_sc2_search_correctness_cosine() {
     for i in 1..results.len() {
         assert!(
             results[i - 1].distance <= results[i].distance,
-            "SC2 Cosine: results not sorted at rank {}-{}", i - 1, i
+            "SC2 Cosine: results not sorted at rank {}-{}",
+            i - 1,
+            i
         );
     }
 
     // Verify top-10 set matches reference top-10 set (tolerance for SIMD ordering near ties)
     let mut reference_vec: Vec<(String, f32)> = reference_map.into_iter().collect();
-    reference_vec.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    reference_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
     let search_set: std::collections::HashSet<String> = results
         .iter()
         .map(|r| String::from_utf8_lossy(&r.key).to_string())
         .collect();
-    let ref_set: std::collections::HashSet<String> = reference_vec[..10]
-        .iter()
-        .map(|(k, _)| k.clone())
-        .collect();
+    let ref_set: std::collections::HashSet<String> =
+        reference_vec[..10].iter().map(|(k, _)| k.clone()).collect();
     assert_eq!(
         search_set, ref_set,
         "SC2 Cosine: top-10 set mismatch between search and reference"
@@ -195,35 +205,38 @@ fn test_sc2_search_correctness_l2() {
 
     for (i, result) in results.iter().enumerate() {
         let result_key = String::from_utf8_lossy(&result.key);
-        let ref_dist = reference_map.get(result_key.as_ref()).expect("key in reference");
+        let ref_dist = reference_map
+            .get(result_key.as_ref())
+            .expect("key in reference");
         let diff = (result.distance - *ref_dist).abs();
         assert!(
             diff < 1e-4,
             "SC2 L2: distance mismatch for {} at rank {}: got {}, expected {}, diff={}",
-            result_key, i, result.distance, ref_dist, diff
+            result_key,
+            i,
+            result.distance,
+            ref_dist,
+            diff
         );
     }
 
     for i in 1..results.len() {
         assert!(
             results[i - 1].distance <= results[i].distance,
-            "SC2 L2: results not sorted at rank {}-{}", i - 1, i
+            "SC2 L2: results not sorted at rank {}-{}",
+            i - 1,
+            i
         );
     }
 
     let mut reference_vec: Vec<(String, f32)> = reference_map.into_iter().collect();
-    reference_vec.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    reference_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
     let search_set: std::collections::HashSet<String> = results
         .iter()
         .map(|r| String::from_utf8_lossy(&r.key).to_string())
         .collect();
-    let ref_set: std::collections::HashSet<String> = reference_vec[..10]
-        .iter()
-        .map(|(k, _)| k.clone())
-        .collect();
+    let ref_set: std::collections::HashSet<String> =
+        reference_vec[..10].iter().map(|(k, _)| k.clone()).collect();
     assert_eq!(
         search_set, ref_set,
         "SC2 L2: top-10 set mismatch between search and reference"
@@ -255,7 +268,9 @@ fn test_sc2_search_correctness_dotproduct() {
         data: query_data,
     };
 
-    let results = engine.vector_search(b"ns", &query, 10, Metric::DotProduct).unwrap();
+    let results = engine
+        .vector_search(b"ns", &query, 10, Metric::DotProduct)
+        .unwrap();
     assert_eq!(results.len(), 10);
 
     let mut reference_map: std::collections::HashMap<String, f32> =
@@ -268,35 +283,38 @@ fn test_sc2_search_correctness_dotproduct() {
 
     for (i, result) in results.iter().enumerate() {
         let result_key = String::from_utf8_lossy(&result.key);
-        let ref_dist = reference_map.get(result_key.as_ref()).expect("key in reference");
+        let ref_dist = reference_map
+            .get(result_key.as_ref())
+            .expect("key in reference");
         let diff = (result.distance - *ref_dist).abs();
         assert!(
             diff < 1e-4,
             "SC2 DotProduct: distance mismatch for {} at rank {}: got {}, expected {}, diff={}",
-            result_key, i, result.distance, ref_dist, diff
+            result_key,
+            i,
+            result.distance,
+            ref_dist,
+            diff
         );
     }
 
     for i in 1..results.len() {
         assert!(
             results[i - 1].distance <= results[i].distance,
-            "SC2 DotProduct: results not sorted at rank {}-{}", i - 1, i
+            "SC2 DotProduct: results not sorted at rank {}-{}",
+            i - 1,
+            i
         );
     }
 
     let mut reference_vec: Vec<(String, f32)> = reference_map.into_iter().collect();
-    reference_vec.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    reference_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
     let search_set: std::collections::HashSet<String> = results
         .iter()
         .map(|r| String::from_utf8_lossy(&r.key).to_string())
         .collect();
-    let ref_set: std::collections::HashSet<String> = reference_vec[..10]
-        .iter()
-        .map(|(k, _)| k.clone())
-        .collect();
+    let ref_set: std::collections::HashSet<String> =
+        reference_vec[..10].iter().map(|(k, _)| k.clone()).collect();
     assert_eq!(
         search_set, ref_set,
         "SC2 DotProduct: top-10 set mismatch between search and reference"
@@ -325,7 +343,11 @@ fn test_sc3_simd_scalar_parity() {
             assert!(
                 diff < 1e-4,
                 "SC3 parity failed for {:?} candidate {}: simd={}, scalar={}, diff={}",
-                metric, i, simd_dist, scalar_dist, diff
+                metric,
+                i,
+                simd_dist,
+                scalar_dist,
+                diff
             );
         }
     }
@@ -342,5 +364,8 @@ fn test_sc3_simd_scalar_parity() {
 fn test_sc5_kv_layer_independence() {
     // The vector API is additive only. All pre-existing KV tests continue
     // to pass without modification. This is verified by CI / workspace test run.
-    assert!(true, "SC5: vector layer is additive — KV tests pass independently");
+    assert!(
+        true,
+        "SC5: vector layer is additive — KV tests pass independently"
+    );
 }

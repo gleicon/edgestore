@@ -1,19 +1,21 @@
+use fs2::FileExt;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use fs2::FileExt;
 
 use crate::config::EdgestoreConfig;
 use crate::error::EdgestoreError;
 use crate::memtable::MemTable;
 use crate::metrics::{EngineMetrics, MetricsSnapshot};
 use crate::replication::SegmentRef;
-use crate::types::{decode_key, encode_key, prefix_upper_bound, Lsn, MemEntry, Operation, WalRecord};
+use crate::types::{
+    decode_key, encode_key, prefix_upper_bound, Lsn, MemEntry, Operation, WalRecord,
+};
 use crate::vector::api::{vector_namespace, VectorEngine};
 use crate::vector::distance::Metric;
 use crate::vector::hnsw::HnswIndex;
 use crate::vector::search::VectorSearchResult;
-use crate::vector::types::{encode_vector_record, decode_vector_record, Dtype, VectorRecord};
+use crate::vector::types::{decode_vector_record, encode_vector_record, Dtype, VectorRecord};
 use crate::wal::WalWriter;
 
 fn next_wal_path(db_path: &Path, lsn: Lsn) -> PathBuf {
@@ -22,7 +24,6 @@ fn next_wal_path(db_path: &Path, lsn: Lsn) -> PathBuf {
 
 /// Alias to reduce type-complexity warnings on public KV scan APIs.
 type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
-
 
 const AVG_ENTRY_SIZE_ESTIMATE: u64 = 256;
 
@@ -176,7 +177,9 @@ impl Engine {
     /// Call `preload_vector_index(ns)` first if you need a guaranteed count.
     /// This method never triggers a disk scan.
     pub fn vector_count(&self, ns: &[u8]) -> Option<u64> {
-        self.vector_indices.get(ns).map(|idx| idx.nodes.len() as u64)
+        self.vector_indices
+            .get(ns)
+            .map(|idx| idx.nodes.len() as u64)
     }
 
     /// Scan all text namespaces and rebuild merged indices from raw records
@@ -267,10 +270,12 @@ impl Engine {
     /// Sanitize a namespace for use in filesystem paths.
     fn ns_to_slug(ns: &[u8]) -> String {
         ns.iter()
-            .map(|&b| if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
-                b as char
-            } else {
-                '_'
+            .map(|&b| {
+                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
+                    b as char
+                } else {
+                    '_'
+                }
             })
             .collect()
     }
@@ -281,8 +286,13 @@ impl Engine {
     pub fn put(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.put_inner(ns, key, val);
-        self.metrics.puts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.put_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .puts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.put_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
@@ -298,8 +308,13 @@ impl Engine {
     ) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.put_with_ttl_inner(ns, key, val, ttl_secs);
-        self.metrics.puts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.put_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .puts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.put_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
@@ -307,8 +322,13 @@ impl Engine {
     pub fn get(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.get_inner(ns, key);
-        self.metrics.gets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.get_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .gets
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.get_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
@@ -317,7 +337,12 @@ impl Engine {
     /// Returns `true` if the key was found and `buf` was filled. Returns `false`
     /// (and leaves `buf` unchanged) on a miss. Useful for high-throughput callers
     /// that reuse a buffer across many lookups.
-    pub fn get_into(&self, ns: &[u8], key: &[u8], buf: &mut Vec<u8>) -> Result<bool, EdgestoreError> {
+    pub fn get_into(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+        buf: &mut Vec<u8>,
+    ) -> Result<bool, EdgestoreError> {
         match self.get_inner(ns, key)? {
             Some(val) => {
                 buf.clear();
@@ -332,35 +357,41 @@ impl Engine {
     pub fn delete(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.delete_inner(ns, key);
-        self.metrics.deletes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.delete_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .deletes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.delete_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
     /// Lazy expiry: TTL-expired records appear in range results until compaction removes their cohort.
-    pub fn range(
-        &self,
-        ns: &[u8],
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    pub fn range(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.range_inner(ns, start, end);
-        self.metrics.ranges.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.range_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .ranges
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.range_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
     /// Lazy expiry: TTL-expired records appear in prefix results until compaction removes their cohort.
-    pub fn prefix(
-        &self,
-        ns: &[u8],
-        prefix: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    pub fn prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.prefix_inner(ns, prefix);
-        self.metrics.prefixes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.prefix_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .prefixes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.prefix_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
@@ -368,8 +399,13 @@ impl Engine {
     pub fn flush_to_segments(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.flush_to_segments_inner();
-        self.metrics.segment_flushes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.segment_flush_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .segment_flushes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.segment_flush_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
@@ -390,18 +426,28 @@ impl Engine {
     }
 
     /// Commit a transaction, writing all pending records to the WAL.
-    pub fn commit_transaction(&mut self, tx: crate::transaction::Transaction) -> Result<Lsn, EdgestoreError> {
+    pub fn commit_transaction(
+        &mut self,
+        tx: crate::transaction::Transaction,
+    ) -> Result<Lsn, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.commit_transaction_inner(tx);
-        self.metrics.transactions_committed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.transaction_commit_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .transactions_committed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.transaction_commit_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
     /// Roll back a transaction, discarding all pending records.
     pub fn rollback_transaction(&mut self, mut tx: crate::transaction::Transaction) {
         tx.rollback_self();
-        self.metrics.transactions_rolled_back.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .transactions_rolled_back
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Run one bounded compaction cycle.
@@ -415,8 +461,13 @@ impl Engine {
     pub fn compact_once(&mut self) -> Result<crate::compactor::CompactionStats, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.compact_once_inner();
-        self.metrics.compactions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.compaction_nanos.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .compactions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.compaction_nanos.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         r
     }
 
@@ -471,17 +522,24 @@ impl Engine {
     /// # Errors
     ///
     /// Returns an error if `segment_id` is not found, or if the rewrite fails.
-    pub fn strip_text_index(&mut self, segment_id: u64) -> Result<crate::types::SegmentMeta, EdgestoreError> {
+    pub fn strip_text_index(
+        &mut self,
+        segment_id: u64,
+    ) -> Result<crate::types::SegmentMeta, EdgestoreError> {
         use crate::types::decode_key;
 
         // Locate the segment.
-        let old_meta = self.segment_store
+        let old_meta = self
+            .segment_store
             .list_segment_metas()
             .iter()
             .find(|m| m.segment_id == segment_id)
-            .ok_or_else(|| EdgestoreError::InvalidOperation(
-                format!("strip_text_index: segment {} not found", segment_id)
-            ))?
+            .ok_or_else(|| {
+                EdgestoreError::InvalidOperation(format!(
+                    "strip_text_index: segment {} not found",
+                    segment_id
+                ))
+            })?
             .clone();
 
         if old_meta.text_index_stripped {
@@ -490,11 +548,12 @@ impl Engine {
 
         // Read all entries from the segment.
         let entries = {
-            let reader = self.segment_store
-                .reader_for(segment_id)
-                .ok_or_else(|| EdgestoreError::InvalidOperation(
-                    format!("strip_text_index: no reader for segment {}", segment_id)
-                ))?;
+            let reader = self.segment_store.reader_for(segment_id).ok_or_else(|| {
+                EdgestoreError::InvalidOperation(format!(
+                    "strip_text_index: no reader for segment {}",
+                    segment_id
+                ))
+            })?;
             reader.range_scan(&[], &vec![0xFF; 1024])?
         };
 
@@ -535,7 +594,8 @@ impl Engine {
             new_id,
         )?;
 
-        self.segment_store.replace_segment(segment_id, new_meta.clone(), new_reader)?;
+        self.segment_store
+            .replace_segment(segment_id, new_meta.clone(), new_reader)?;
 
         Ok(new_meta)
     }
@@ -547,7 +607,10 @@ impl Engine {
     /// after a configurable grace period past a successful archive).
     ///
     /// A no-op (returns `Ok`) if `segment_id` doesn't exist locally.
-    pub fn prune_local_segment(&mut self, segment_id: crate::types::SegmentId) -> Result<(), EdgestoreError> {
+    pub fn prune_local_segment(
+        &mut self,
+        segment_id: crate::types::SegmentId,
+    ) -> Result<(), EdgestoreError> {
         self.segment_store.remove_segment(segment_id)
     }
 
@@ -594,7 +657,8 @@ impl Engine {
         };
         self.memtable.insert(encoded_key, entry);
 
-        if (self.memtable.len() as u64) * AVG_ENTRY_SIZE_ESTIMATE >= self.config.memtable_max_bytes {
+        if (self.memtable.len() as u64) * AVG_ENTRY_SIZE_ESTIMATE >= self.config.memtable_max_bytes
+        {
             let _ = self.flush_to_segments_inner();
         }
 
@@ -704,12 +768,7 @@ impl Engine {
         Ok(lsn)
     }
 
-    fn range_inner(
-        &self,
-        ns: &[u8],
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    fn range_inner(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
 
@@ -720,7 +779,8 @@ impl Engine {
         let seg_results = self.segment_store.range_scan(&enc_start, &enc_end)?;
         let mem_results = self.memtable.range(&enc_start, &enc_end);
 
-        let mut merged: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(seg_results.len() + mem_results.len());
+        let mut merged: Vec<(Vec<u8>, MemEntry)> =
+            Vec::with_capacity(seg_results.len() + mem_results.len());
         let mut si = 0usize;
         let mut mi = 0usize;
         while si < seg_results.len() || mi < mem_results.len() {
@@ -750,7 +810,9 @@ impl Engine {
                 }
                 i += 1;
             }
-            if best_entry.op == Operation::Delete { continue; }
+            if best_entry.op == Operation::Delete {
+                continue;
+            }
             if let Some(val) = &best_entry.value {
                 let (_, raw_key) = decode_key(k)?;
                 out.push((raw_key, val.clone()));
@@ -759,11 +821,7 @@ impl Engine {
         Ok(out)
     }
 
-    fn prefix_inner(
-        &self,
-        ns: &[u8],
-        prefix: &[u8],
-    ) -> Result<KvPairs, EdgestoreError> {
+    fn prefix_inner(&self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
 
         // PERFORMANCE: use range scan with prefix upper bound, then merge + dedup with memtable.
@@ -771,7 +829,8 @@ impl Engine {
         // DO NOT use HashMap here (regression: it was O(n log n) + 4 allocations).
         // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
         let seg_results = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
-            self.segment_store.range_scan(&enc_prefix, &enc_end)?
+            self.segment_store
+                .range_scan(&enc_prefix, &enc_end)?
                 .into_iter()
                 .filter(|(k, _)| k.starts_with(&enc_prefix))
                 .collect::<Vec<_>>()
@@ -780,7 +839,8 @@ impl Engine {
         };
         let mem_results = self.memtable.prefix(&enc_prefix);
 
-        let mut merged: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(seg_results.len() + mem_results.len());
+        let mut merged: Vec<(Vec<u8>, MemEntry)> =
+            Vec::with_capacity(seg_results.len() + mem_results.len());
         let mut si = 0usize;
         let mut mi = 0usize;
         while si < seg_results.len() || mi < mem_results.len() {
@@ -810,7 +870,9 @@ impl Engine {
                 }
                 i += 1;
             }
-            if best_entry.op == Operation::Delete { continue; }
+            if best_entry.op == Operation::Delete {
+                continue;
+            }
             if let Some(val) = &best_entry.value {
                 let (_, raw_key) = decode_key(k)?;
                 out.push((raw_key, val.clone()));
@@ -821,7 +883,9 @@ impl Engine {
 
     fn flush_to_segments_inner(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
         if self.memtable.is_empty() {
-            return Err(EdgestoreError::SegmentCorrupt("memtable is empty".to_string()));
+            return Err(EdgestoreError::SegmentCorrupt(
+                "memtable is empty".to_string(),
+            ));
         }
         let meta = self.segment_store.flush_memtable(self.memtable.as_ref())?;
         self.memtable.clear();
@@ -831,7 +895,10 @@ impl Engine {
         Ok(meta)
     }
 
-    fn commit_transaction_inner(&mut self, tx: crate::transaction::Transaction) -> Result<Lsn, EdgestoreError> {
+    fn commit_transaction_inner(
+        &mut self,
+        tx: crate::transaction::Transaction,
+    ) -> Result<Lsn, EdgestoreError> {
         let mut tx = tx;
         let records = tx.take_pending()?;
         let mut last_lsn = self.lsn_counter;
@@ -877,8 +944,10 @@ impl Engine {
         );
         let mut manifest = crate::manifest::Manifest::open(&self.config.path.join("manifest.mf"))?;
         let stats = compactor.compact_cycle(&mut manifest, now_nanos, &pinned)?;
-        self.segment_store =
-            crate::segment::SegmentStore::open(self.config.path.clone(), self.config.cohort_window_secs)?;
+        self.segment_store = crate::segment::SegmentStore::open(
+            self.config.path.clone(),
+            self.config.cohort_window_secs,
+        )?;
         Ok(stats)
     }
 
@@ -981,15 +1050,12 @@ impl Engine {
             if offset + 8 > data.len() {
                 break;
             }
-            let magic = u32::from_le_bytes(
-                data[offset..offset + 4].try_into().unwrap(),
-            );
+            let magic = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             if magic != crate::segment::SEGMENT_BLOCK_MAGIC {
                 break; // hit padding or end
             }
-            let compressed_len = u32::from_le_bytes(
-                data[offset + 4..offset + 8].try_into().unwrap(),
-            ) as usize;
+            let compressed_len =
+                u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
 
             let payload_size = 8 + compressed_len;
             let aligned_size = if payload_size.is_multiple_of(crate::segment::SEGMENT_BLOCK_SIZE) {
@@ -1032,9 +1098,11 @@ impl Engine {
                         }
 
                         // Look up local entry by encoded key.
-                        let local_entry = self.memtable.get(&encoded_key).cloned().or_else(|| {
-                            self.segment_store.get(&encoded_key).ok().flatten()
-                        });
+                        let local_entry = self
+                            .memtable
+                            .get(&encoded_key)
+                            .cloned()
+                            .or_else(|| self.segment_store.get(&encoded_key).ok().flatten());
 
                         let apply = match local_entry {
                             None => true,
@@ -1055,9 +1123,7 @@ impl Engine {
 
                         if apply {
                             // Decode ns and key from encoded_key for put_with_timestamp.
-                            if let Ok((ns, key)) =
-                                crate::types::decode_key(&encoded_key)
-                            {
+                            if let Ok((ns, key)) = crate::types::decode_key(&encoded_key) {
                                 if incoming.op == crate::types::Operation::Put {
                                     if let Some(ref val) = incoming.value {
                                         self.put_with_timestamp(
@@ -1143,11 +1209,13 @@ impl Engine {
         meta_file.sync_all()?;
 
         // Open reader and register with the segment store.
-        let reader =
-            crate::segment::SegmentReader::open(base.clone(), new_segment_id)?;
+        let reader = crate::segment::SegmentReader::open(base.clone(), new_segment_id)?;
         self.segment_store.add_imported_segment(meta, reader)?;
 
-        Ok(ImportResult::Applied { keys_written, keys_skipped })
+        Ok(ImportResult::Applied {
+            keys_written,
+            keys_skipped,
+        })
     }
 
     /// Apply a key-value record with an explicit timestamp (used during LWW replication).
@@ -1297,7 +1365,9 @@ impl Engine {
         self.wal.fsync()?;
         let new_path = next_wal_path(&self.config.path, self.lsn_counter);
         self.wal = WalWriter::create(&new_path, &self.config)?;
-        self.metrics.wal_rotations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .wal_rotations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1307,10 +1377,7 @@ impl Engine {
     ///
     /// Scans all vector records in `__vec__{ns}`, builds the graph,
     /// serializes it to a sidecar file, and caches it in memory.
-    pub fn build_vector_index(
-        &mut self,
-        ns: &[u8],
-    ) -> Result<(), EdgestoreError> {
+    pub fn build_vector_index(&mut self, ns: &[u8]) -> Result<(), EdgestoreError> {
         let t0 = Instant::now();
         let vec_ns = vector_namespace(ns);
 
@@ -1327,8 +1394,7 @@ impl Engine {
         let dtype = first_rec.dtype;
         let metric = Metric::L2; // default; could be parameterized
 
-        let mut index = HnswIndex::new(dims, dtype, metric)
-            .with_params(16, 100);
+        let mut index = HnswIndex::new(dims, dtype, metric).with_params(16, 100);
 
         for (key, val) in &all {
             // `prefix` already returns decoded raw keys (without namespace prefix)
@@ -1387,7 +1453,9 @@ impl Engine {
             let stale = self.is_index_stale(ns)?;
             if stale {
                 self.vector_indices.remove(ns);
-                self.metrics.vector_index_stales.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.metrics
+                    .vector_index_stales
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Ok(None);
             }
             return Ok(self.vector_indices.get(ns));
@@ -1395,13 +1463,19 @@ impl Engine {
 
         let t0 = Instant::now();
         let ns_slug = Self::ns_to_slug(ns);
-        let sidecar_path = self.config.path.join("vector").join(format!("{}.hnsw", ns_slug));
+        let sidecar_path = self
+            .config
+            .path
+            .join("vector")
+            .join(format!("{}.hnsw", ns_slug));
 
         if !sidecar_path.exists() {
             return Ok(None);
         }
 
-        let file_bytes = std::fs::metadata(&sidecar_path).map(|m| m.len()).unwrap_or(0);
+        let file_bytes = std::fs::metadata(&sidecar_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         if file_bytes > self.config.hnsw_max_ram_bytes {
             eprintln!(
                 "[edgestore] HNSW sidecar for namespace {:?} is {} MB, exceeds hnsw_max_ram_bytes ({} MB); falling back to flat scan",
@@ -1418,12 +1492,16 @@ impl Engine {
         // Validate staleness
         let stale = self.is_index_stale(ns)?;
         if stale {
-            self.metrics.vector_index_stales.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.metrics
+                .vector_index_stales
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(None);
         }
 
         self.vector_indices.insert(ns.to_vec(), index);
-        self.metrics.vector_index_loads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .vector_index_loads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.metrics.vector_index_load_nanos.fetch_add(
             t0.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -1434,7 +1512,11 @@ impl Engine {
 
     /// Check if the cached HNSW index is stale by comparing segment hashes.
     fn is_index_stale(&self, ns: &[u8]) -> Result<bool, EdgestoreError> {
-        let sidecar_path = self.config.path.join("vector").join(format!("{}.hnsw", Self::ns_to_slug(ns)));
+        let sidecar_path = self
+            .config
+            .path
+            .join("vector")
+            .join(format!("{}.hnsw", Self::ns_to_slug(ns)));
         if !sidecar_path.exists() {
             return Ok(true);
         }
@@ -1498,11 +1580,7 @@ impl VectorEngine for Engine {
         self.put(&vector_namespace(ns), key, &encoded)
     }
 
-    fn vector_get(
-        &self,
-        ns: &[u8],
-        key: &[u8],
-    ) -> Result<Option<VectorRecord>, EdgestoreError> {
+    fn vector_get(&self, ns: &[u8], key: &[u8]) -> Result<Option<VectorRecord>, EdgestoreError> {
         match self.get(&vector_namespace(ns), key)? {
             Some(bytes) => {
                 let record = decode_vector_record(&bytes)
@@ -1513,18 +1591,14 @@ impl VectorEngine for Engine {
         }
     }
 
-    fn vector_delete(
-        &mut self,
-        ns: &[u8],
-        key: &[u8],
-    ) -> Result<Lsn, EdgestoreError> {
+    fn vector_delete(&mut self, ns: &[u8], key: &[u8]) -> Result<Lsn, EdgestoreError> {
         self.delete(&vector_namespace(ns), key)
     }
 }
 
-use crate::text::engine::{TextEngine, TextSearchResult, text_namespace};
+use crate::text::engine::{text_namespace, TextEngine, TextSearchResult};
+use crate::text::index::{InvertedIndex, BM25_B, BM25_K1};
 use crate::text::tokenizer::tokenize;
-use crate::text::index::{InvertedIndex, BM25_K1, BM25_B};
 use crate::text::types::{encode_text_record, FacetValue};
 
 const TEXT_INDEX_KEY: &[u8] = b"__index__";
@@ -1610,11 +1684,16 @@ impl TextEngine for Engine {
         let text_ns = text_namespace(ns);
 
         let loaded_index = match self.get(&text_ns, TEXT_INDEX_KEY) {
-            Ok(Some(bytes)) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
+            Ok(Some(bytes)) => {
+                InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new())
+            }
             _ => InvertedIndex::new(),
         };
 
-        let index = self.text_indices.entry(text_ns.clone()).or_insert(loaded_index);
+        let index = self
+            .text_indices
+            .entry(text_ns.clone())
+            .or_insert(loaded_index);
         // Skip the O(total index size) removal scan when this doc_id is definitely
         // new (the common case for an append-only workload — see `text::bloom`).
         // Zero false negatives means this is always correct to skip on `false`.
@@ -1642,7 +1721,10 @@ impl TextEngine for Engine {
         self.search_text_with_options(
             ns,
             query,
-            &crate::text::engine::SearchOptions { k, ..Default::default() },
+            &crate::text::engine::SearchOptions {
+                k,
+                ..Default::default()
+            },
         )
     }
 
@@ -1665,18 +1747,16 @@ impl TextEngine for Engine {
 
         let index = match self.text_indices.get(&text_ns) {
             Some(idx) => idx,
-            None => {
-                match self.get(&text_ns, TEXT_INDEX_KEY)? {
-                    Some(bytes) => {
-                        let idx = InvertedIndex::deserialize(&bytes)?;
-                        if idx.total_docs == 0 {
-                            return Ok(vec![]);
-                        }
-                        return Self::search_in_index(&idx, &query_tokens, options);
+            None => match self.get(&text_ns, TEXT_INDEX_KEY)? {
+                Some(bytes) => {
+                    let idx = InvertedIndex::deserialize(&bytes)?;
+                    if idx.total_docs == 0 {
+                        return Ok(vec![]);
                     }
-                    None => return Ok(vec![]),
+                    return Self::search_in_index(&idx, &query_tokens, options);
                 }
-            }
+                None => return Ok(vec![]),
+            },
         };
 
         if index.total_docs == 0 {
@@ -1692,7 +1772,9 @@ impl TextEngine for Engine {
         let mut index = match self.text_indices.remove(&text_ns) {
             Some(idx) => idx,
             None => match self.get(&text_ns, TEXT_INDEX_KEY)? {
-                Some(bytes) => InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new()),
+                Some(bytes) => {
+                    InvertedIndex::deserialize(&bytes).unwrap_or_else(|_| InvertedIndex::new())
+                }
                 None => InvertedIndex::new(),
             },
         };
@@ -1931,7 +2013,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut engine = open_engine(&dir);
         let result = engine.flush_to_segments();
-        assert!(result.is_err(), "flush_to_segments on empty memtable must error");
+        assert!(
+            result.is_err(),
+            "flush_to_segments on empty memtable must error"
+        );
     }
 
     #[test]
@@ -2080,7 +2165,10 @@ mod tests {
         engine.flush_to_segments().unwrap();
         engine.delete(b"ns", b"key").unwrap();
         let results = engine.range(b"ns", b"", b"\xff").unwrap();
-        assert!(results.is_empty(), "delete tombstone should shadow segment value");
+        assert!(
+            results.is_empty(),
+            "delete tombstone should shadow segment value"
+        );
     }
 
     /// Regression: Engine::range_inner must return sorted results even with multiple segments.
@@ -2091,7 +2179,10 @@ mod tests {
         engine.put(b"ns", b"k", b"val").unwrap();
 
         let mut buf = Vec::new();
-        assert!(engine.get_into(b"ns", b"k", &mut buf).unwrap(), "existing key must return true");
+        assert!(
+            engine.get_into(b"ns", b"k", &mut buf).unwrap(),
+            "existing key must return true"
+        );
         assert_eq!(buf, b"val");
 
         let found = engine.get_into(b"ns", b"missing", &mut buf).unwrap();
@@ -2125,7 +2216,10 @@ mod tests {
         engine.put(b"ns", b"b", b"2").unwrap();
 
         // At least one segment must have been created by the auto-flush.
-        assert!(!engine.list_segment_metas().is_empty(), "auto-flush must create a segment");
+        assert!(
+            !engine.list_segment_metas().is_empty(),
+            "auto-flush must create a segment"
+        );
     }
 
     /// This test creates 3 segments and verifies the merge produces sorted output.
@@ -2145,7 +2239,11 @@ mod tests {
         engine.flush_to_segments().unwrap();
         let results = engine.range(b"ns", b"", b"\xff").unwrap();
         let keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
-        assert_eq!(keys, vec![b"a", b"b", b"c", b"d"], "must be sorted across all segments");
+        assert_eq!(
+            keys,
+            vec![b"a", b"b", b"c", b"d"],
+            "must be sorted across all segments"
+        );
     }
 
     #[test]
@@ -2158,11 +2256,20 @@ mod tests {
         }
         // Reopen read-only.
         let mut r = Engine::open_readonly(EdgestoreConfig::new(dir.path())).unwrap();
-        assert!(r.get(b"ns", b"k").unwrap().is_some(), "reads must work on readonly engine");
+        assert!(
+            r.get(b"ns", b"k").unwrap().is_some(),
+            "reads must work on readonly engine"
+        );
         let err = r.put(b"ns", b"k2", b"v2").unwrap_err();
-        assert!(matches!(err, EdgestoreError::ReadOnly), "put must return ReadOnly");
+        assert!(
+            matches!(err, EdgestoreError::ReadOnly),
+            "put must return ReadOnly"
+        );
         let err = r.delete(b"ns", b"k").unwrap_err();
-        assert!(matches!(err, EdgestoreError::ReadOnly), "delete must return ReadOnly");
+        assert!(
+            matches!(err, EdgestoreError::ReadOnly),
+            "delete must return ReadOnly"
+        );
     }
 
     #[test]
@@ -2181,7 +2288,11 @@ mod tests {
         engine.put(b"ns", b"b", b"2").unwrap();
         engine.flush_to_segments().unwrap();
         let ids = fired.lock().unwrap().clone();
-        assert_eq!(ids.len(), 2, "callback must fire once per flush_to_segments");
+        assert_eq!(
+            ids.len(),
+            2,
+            "callback must fire once per flush_to_segments"
+        );
     }
 
     #[test]
@@ -2200,31 +2311,50 @@ mod tests {
             });
         engine.put(b"ns", b"a", b"1").unwrap();
         engine.put(b"ns", b"b", b"2").unwrap();
-        assert!(*count.lock().unwrap() > 0, "callback must fire on auto-flush triggered by put");
+        assert!(
+            *count.lock().unwrap() > 0,
+            "callback must fire on auto-flush triggered by put"
+        );
     }
 
     #[test]
     fn test_vector_count_none_when_not_loaded() {
         let dir = TempDir::new().unwrap();
         let engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
-        assert_eq!(engine.vector_count(b"products"), None, "no index loaded yet");
+        assert_eq!(
+            engine.vector_count(b"products"),
+            None,
+            "no index loaded yet"
+        );
     }
 
     #[test]
     fn test_vector_count_some_when_index_in_memory() {
+        use crate::vector::distance::Metric;
         use crate::vector::types::Dtype;
         use crate::VectorEngine;
-        use crate::vector::distance::Metric;
         let dir = TempDir::new().unwrap();
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
         let v: Vec<u8> = vec![0u8; 16]; // 4-dim f32
-        engine.vector_put(b"products", b"p1", 4, Dtype::F32, &v).unwrap();
-        engine.vector_put(b"products", b"p2", 4, Dtype::F32, &v).unwrap();
-        engine.vector_put(b"products", b"p3", 4, Dtype::F32, &v).unwrap();
+        engine
+            .vector_put(b"products", b"p1", 4, Dtype::F32, &v)
+            .unwrap();
+        engine
+            .vector_put(b"products", b"p2", 4, Dtype::F32, &v)
+            .unwrap();
+        engine
+            .vector_put(b"products", b"p3", 4, Dtype::F32, &v)
+            .unwrap();
         // vector_search triggers flat scan + inserts results into vector_indices.
         // After a flat scan the index is populated in-memory.
-        let query = crate::vector::types::VectorRecord { dims: 4, dtype: Dtype::F32, data: v };
-        engine.vector_search(b"products", &query, 1, Metric::Cosine).unwrap();
+        let query = crate::vector::types::VectorRecord {
+            dims: 4,
+            dtype: Dtype::F32,
+            data: v,
+        };
+        engine
+            .vector_search(b"products", &query, 1, Metric::Cosine)
+            .unwrap();
         // vector_count reflects in-memory state regardless of sidecar.
         match engine.vector_count(b"products") {
             Some(n) => assert!(n > 0, "expected at least 1 vector"),
@@ -2234,6 +2364,10 @@ mod tests {
         // The key invariant is: returns None when nothing is in memory.
         let dir2 = TempDir::new().unwrap();
         let engine2 = Engine::open(EdgestoreConfig::new(dir2.path())).unwrap();
-        assert_eq!(engine2.vector_count(b"products"), None, "fresh engine has no index");
+        assert_eq!(
+            engine2.vector_count(b"products"),
+            None,
+            "fresh engine has no index"
+        );
     }
 }

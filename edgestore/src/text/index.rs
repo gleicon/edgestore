@@ -56,7 +56,8 @@ impl InvertedIndex {
     /// once per load/grow rather than once per document indexed — the same
     /// amortized-cost shape as `Vec`'s reallocation on push.
     fn rebuild_bloom_at_capacity(&mut self, capacity: usize) {
-        self.doc_bloom = BloomFilter::with_capacity(capacity.max(crate::text::bloom::INITIAL_CAPACITY));
+        self.doc_bloom =
+            BloomFilter::with_capacity(capacity.max(crate::text::bloom::INITIAL_CAPACITY));
         for postings in self.postings.values() {
             for posting in postings {
                 self.doc_bloom.insert(&posting.doc_id);
@@ -195,14 +196,18 @@ impl InvertedIndex {
     /// Deserialize from bytes.
     pub fn deserialize(bytes: &[u8]) -> Result<Self, EdgestoreError> {
         if bytes.len() < 6 {
-            return Err(EdgestoreError::CorruptData("inverted index: truncated header".to_string()));
+            return Err(EdgestoreError::CorruptData(
+                "inverted index: truncated header".to_string(),
+            ));
         }
         let mut pos = 0usize;
 
         macro_rules! read {
             ($n:expr) => {{
                 if bytes.len() < pos + $n {
-                    return Err(EdgestoreError::CorruptData("inverted index: truncated".to_string()));
+                    return Err(EdgestoreError::CorruptData(
+                        "inverted index: truncated".to_string(),
+                    ));
                 }
                 let slice = &bytes[pos..pos + $n];
                 pos += $n;
@@ -212,13 +217,20 @@ impl InvertedIndex {
 
         let magic = read!(4);
         if magic != b"INVX" {
-            return Err(EdgestoreError::CorruptData("inverted index: invalid magic".to_string()));
+            return Err(EdgestoreError::CorruptData(
+                "inverted index: invalid magic".to_string(),
+            ));
         }
         let version = u16::from_le_bytes(read!(2).try_into().unwrap());
         let sidecar_lsn = match version {
             1 => 0, // v1 had no sidecar_lsn field
             2 => u64::from_le_bytes(read!(8).try_into().unwrap()),
-            _ => return Err(EdgestoreError::CorruptData(format!("inverted index: unsupported version {}", version))),
+            _ => {
+                return Err(EdgestoreError::CorruptData(format!(
+                    "inverted index: unsupported version {}",
+                    version
+                )))
+            }
         };
         let total_docs = u64::from_le_bytes(read!(8).try_into().unwrap());
         let total_doc_len = u64::from_le_bytes(read!(8).try_into().unwrap());
@@ -227,8 +239,9 @@ impl InvertedIndex {
         let mut postings = HashMap::with_capacity(term_count);
         for _ in 0..term_count {
             let term_len = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
-            let term = String::from_utf8(read!(term_len).to_vec())
-                .map_err(|_| EdgestoreError::CorruptData("inverted index: invalid utf8 term".to_string()))?;
+            let term = String::from_utf8(read!(term_len).to_vec()).map_err(|_| {
+                EdgestoreError::CorruptData("inverted index: invalid utf8 term".to_string())
+            })?;
             let posting_count = u32::from_le_bytes(read!(4).try_into().unwrap()) as usize;
             let mut posting_vec = Vec::with_capacity(posting_count);
             for _ in 0..posting_count {
@@ -240,14 +253,18 @@ impl InvertedIndex {
                 let mut facets = HashMap::with_capacity(facet_count);
                 for _ in 0..facet_count {
                     let k_len = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
-                    let k = String::from_utf8(read!(k_len).to_vec())
-                        .map_err(|_| EdgestoreError::CorruptData("inverted index: invalid facet key".to_string()))?;
+                    let k = String::from_utf8(read!(k_len).to_vec()).map_err(|_| {
+                        EdgestoreError::CorruptData("inverted index: invalid facet key".to_string())
+                    })?;
                     let tag = read!(1)[0];
                     let v = match tag {
                         0 => {
                             let s_len = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
-                            let s = String::from_utf8(read!(s_len).to_vec())
-                                .map_err(|_| EdgestoreError::CorruptData("inverted index: invalid facet string".to_string()))?;
+                            let s = String::from_utf8(read!(s_len).to_vec()).map_err(|_| {
+                                EdgestoreError::CorruptData(
+                                    "inverted index: invalid facet string".to_string(),
+                                )
+                            })?;
                             FacetValue::String(s)
                         }
                         1 => {
@@ -258,16 +275,31 @@ impl InvertedIndex {
                             let b = read!(1)[0] != 0;
                             FacetValue::Bool(b)
                         }
-                        _ => return Err(EdgestoreError::CorruptData("inverted index: unknown facet tag".to_string())),
+                        _ => {
+                            return Err(EdgestoreError::CorruptData(
+                                "inverted index: unknown facet tag".to_string(),
+                            ))
+                        }
                     };
                     facets.insert(k, v);
                 }
-                posting_vec.push(Posting { doc_id, term_freq, doc_len, facets });
+                posting_vec.push(Posting {
+                    doc_id,
+                    term_freq,
+                    doc_len,
+                    facets,
+                });
             }
             postings.insert(term, posting_vec);
         }
 
-        let mut index = InvertedIndex { postings, total_docs, total_doc_len, sidecar_lsn, doc_bloom: BloomFilter::new() };
+        let mut index = InvertedIndex {
+            postings,
+            total_docs,
+            total_doc_len,
+            sidecar_lsn,
+            doc_bloom: BloomFilter::new(),
+        };
         let capacity = total_docs as usize;
         index.rebuild_bloom_at_capacity(capacity);
         Ok(index)
@@ -340,9 +372,18 @@ mod tests {
     fn test_index_add_document() {
         let mut index = InvertedIndex::new();
         let tokens = vec![
-            Token { term: "hello".to_string(), position: 0 },
-            Token { term: "world".to_string(), position: 1 },
-            Token { term: "hello".to_string(), position: 2 },
+            Token {
+                term: "hello".to_string(),
+                position: 0,
+            },
+            Token {
+                term: "world".to_string(),
+                position: 1,
+            },
+            Token {
+                term: "hello".to_string(),
+                position: 2,
+            },
         ];
         index.add_document(vec![1], &tokens, 3, HashMap::new());
 
@@ -364,8 +405,14 @@ mod tests {
     fn test_serialize_roundtrip() {
         let mut index = InvertedIndex::new();
         let tokens = vec![
-            Token { term: "hello".to_string(), position: 0 },
-            Token { term: "world".to_string(), position: 1 },
+            Token {
+                term: "hello".to_string(),
+                position: 0,
+            },
+            Token {
+                term: "world".to_string(),
+                position: 1,
+            },
         ];
         index.add_document(vec![1], &tokens, 2, HashMap::new());
 
@@ -388,20 +435,28 @@ mod tests {
     fn test_score_document() {
         let mut index = InvertedIndex::new();
         let tokens = vec![
-            Token { term: "hello".to_string(), position: 0 },
-            Token { term: "world".to_string(), position: 1 },
+            Token {
+                term: "hello".to_string(),
+                position: 0,
+            },
+            Token {
+                term: "world".to_string(),
+                position: 1,
+            },
         ];
         index.add_document(vec![1], &tokens, 2, HashMap::new());
 
-        let query = vec![
-            Token { term: "hello".to_string(), position: 0 },
-        ];
+        let query = vec![Token {
+            term: "hello".to_string(),
+            position: 0,
+        }];
         let score = score_document(&index, &[1], &query);
         assert!(score > 0.0);
 
-        let query2 = vec![
-            Token { term: "nonexistent".to_string(), position: 0 },
-        ];
+        let query2 = vec![Token {
+            term: "nonexistent".to_string(),
+            position: 0,
+        }];
         let score2 = score_document(&index, &[1], &query2);
         assert_eq!(score2, 0.0);
     }
@@ -410,12 +465,24 @@ mod tests {
     fn test_remove_document() {
         let mut index = InvertedIndex::new();
         let tokens1 = vec![
-            Token { term: "hello".to_string(), position: 0 },
-            Token { term: "world".to_string(), position: 1 },
+            Token {
+                term: "hello".to_string(),
+                position: 0,
+            },
+            Token {
+                term: "world".to_string(),
+                position: 1,
+            },
         ];
         let tokens2 = vec![
-            Token { term: "hello".to_string(), position: 0 },
-            Token { term: "foo".to_string(), position: 1 },
+            Token {
+                term: "hello".to_string(),
+                position: 0,
+            },
+            Token {
+                term: "foo".to_string(),
+                position: 1,
+            },
         ];
         index.add_document(vec![1], &tokens1, 2, HashMap::new());
         index.add_document(vec![2], &tokens2, 2, HashMap::new());
@@ -446,8 +513,24 @@ mod tests {
     #[test]
     fn test_remove_document_updates_avg_len() {
         let mut index = InvertedIndex::new();
-        index.add_document(vec![1], &[Token { term: "a".to_string(), position: 0 }], 10, HashMap::new());
-        index.add_document(vec![2], &[Token { term: "a".to_string(), position: 0 }], 20, HashMap::new());
+        index.add_document(
+            vec![1],
+            &[Token {
+                term: "a".to_string(),
+                position: 0,
+            }],
+            10,
+            HashMap::new(),
+        );
+        index.add_document(
+            vec![2],
+            &[Token {
+                term: "a".to_string(),
+                position: 0,
+            }],
+            20,
+            HashMap::new(),
+        );
         assert_eq!(index.avg_doc_len(), 15.0);
 
         index.remove_document(&[1]);

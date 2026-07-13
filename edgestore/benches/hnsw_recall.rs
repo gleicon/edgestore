@@ -1,7 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use edgestore::{
-    distance, Dtype, Engine, Metric, VectorEngine, VectorRecord,
-};
+use edgestore::{distance, Dtype, Engine, Metric, VectorEngine, VectorRecord};
 use tempfile::TempDir;
 
 fn lcg_sequence(seed: u64, n: usize) -> Vec<f32> {
@@ -42,54 +40,57 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                 }
                 let bytes = f32s_to_bytes(&v);
                 all_data.push(bytes.clone());
-                engine.vector_put(b"ns", &[(cluster * per_cluster + i) as u8], dims as u16, Dtype::F32, &bytes).unwrap();
+                engine
+                    .vector_put(
+                        b"ns",
+                        &[(cluster * per_cluster + i) as u8],
+                        dims as u16,
+                        Dtype::F32,
+                        &bytes,
+                    )
+                    .unwrap();
             }
         }
 
         engine.build_vector_index(b"ns").unwrap();
 
         // Measure recall across multiple queries
-        group.bench_with_input(
-            BenchmarkId::new("recall_at_10", n),
-            &n,
-            |b, _| {
-                b.iter(|| {
-                    let mut total_recall = 0.0f32;
-                    let num_queries = 10usize;
+        group.bench_with_input(BenchmarkId::new("recall_at_10", n), &n, |b, _| {
+            b.iter(|| {
+                let mut total_recall = 0.0f32;
+                let num_queries = 10usize;
 
-                    for q in 0..num_queries {
-                        let query_vals = lcg_sequence(100000 + q as u64, dims);
-                        let query_data = f32s_to_bytes(&query_vals);
-                        let query = VectorRecord {
-                            dims: dims as u16,
-                            dtype: Dtype::F32,
-                            data: query_data.clone(),
-                        };
+                for q in 0..num_queries {
+                    let query_vals = lcg_sequence(100000 + q as u64, dims);
+                    let query_data = f32s_to_bytes(&query_vals);
+                    let query = VectorRecord {
+                        dims: dims as u16,
+                        dtype: Dtype::F32,
+                        data: query_data.clone(),
+                    };
 
-                        // HNSW results
-                        let hnsw_results = engine.vector_search(b"ns", &query, 10, Metric::L2).unwrap();
-                        let hnsw_keys: std::collections::HashSet<Vec<u8>> = hnsw_results
-                            .iter()
-                            .map(|r| r.key.clone())
-                            .collect();
+                    // HNSW results
+                    let hnsw_results = engine.vector_search(b"ns", &query, 10, Metric::L2).unwrap();
+                    let hnsw_keys: std::collections::HashSet<Vec<u8>> =
+                        hnsw_results.iter().map(|r| r.key.clone()).collect();
 
-                        // Brute-force reference
-                        let mut brute: Vec<(Vec<u8>, f32)> = Vec::with_capacity(n);
-                        for (i, rec) in all_data.iter().enumerate() {
-                            let d = distance(&query_data, rec, Dtype::F32, Metric::L2).unwrap();
-                            brute.push((vec![i as u8], d));
-                        }
-                        brute.sort_by(|a, b| edgestore::total_cmp_f32(a.1, b.1));
-                        let brute_keys: std::collections::HashSet<Vec<u8>> = brute.iter().take(10).map(|(k, _)| k.clone()).collect();
-
-                        let intersection: Vec<_> = hnsw_keys.intersection(&brute_keys).collect();
-                        total_recall += intersection.len() as f32 / 10.0;
+                    // Brute-force reference
+                    let mut brute: Vec<(Vec<u8>, f32)> = Vec::with_capacity(n);
+                    for (i, rec) in all_data.iter().enumerate() {
+                        let d = distance(&query_data, rec, Dtype::F32, Metric::L2).unwrap();
+                        brute.push((vec![i as u8], d));
                     }
+                    brute.sort_by(|a, b| edgestore::total_cmp_f32(a.1, b.1));
+                    let brute_keys: std::collections::HashSet<Vec<u8>> =
+                        brute.iter().take(10).map(|(k, _)| k.clone()).collect();
 
-                    black_box(total_recall / num_queries as f32);
-                });
-            },
-        );
+                    let intersection: Vec<_> = hnsw_keys.intersection(&brute_keys).collect();
+                    total_recall += intersection.len() as f32 / 10.0;
+                }
+
+                black_box(total_recall / num_queries as f32);
+            });
+        });
     }
 
     group.finish();

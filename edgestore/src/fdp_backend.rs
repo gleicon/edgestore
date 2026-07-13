@@ -46,7 +46,11 @@ impl StorageBackend for FdpStorageBackend {
                 let _fd = std::os::fd::AsRawFd::as_raw_fd(&file);
                 // FDP hint would be emitted here via fcntl(fd, F_SET_FILE_DATA_PLACEMENT_HINT, ...)
                 // For now, just log the hint.
-                log::info!("FDP hint: cohort_bucket={} for {:?}", hint.cohort_bucket, path);
+                log::info!(
+                    "FDP hint: cohort_bucket={} for {:?}",
+                    hint.cohort_bucket,
+                    path
+                );
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -94,7 +98,10 @@ impl StorageBackend for MockFdpBackend {
         data: &[u8],
         hint: PlacementHint,
     ) -> Result<(), EdgestoreError> {
-        self.recorded_hints.lock().unwrap().push((path.to_path_buf(), offset, hint));
+        self.recorded_hints
+            .lock()
+            .unwrap()
+            .push((path.to_path_buf(), offset, hint));
         self.inner.write_with_hint(path, offset, data, hint)
     }
 

@@ -7,7 +7,6 @@
 ///
 /// SC2 and SC3 (cursor + LWW) live in edgestore/tests/integration_replication.rs
 /// because they do not require the HTTP stack.
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -101,11 +100,7 @@ fn test_sc1_two_engine_sync_via_http() {
 
     // ── Assert B is now in sync with A ────────────────────────────────────────
     let a_root = engine_a.lock().unwrap().range_merkle_root().unwrap();
-    let b_in_sync = engine_b
-        .lock()
-        .unwrap()
-        .compare_merkle(&a_root)
-        .unwrap();
+    let b_in_sync = engine_b.lock().unwrap().compare_merkle(&a_root).unwrap();
     assert!(
         b_in_sync,
         "SC1: B's Merkle root must match A's after anti-entropy sync"
@@ -218,10 +213,7 @@ fn test_sc5_debug_json_endpoint() {
     );
 
     // Content-Type must include application/json.
-    let content_type = resp
-        .header("Content-Type")
-        .unwrap_or("")
-        .to_string();
+    let content_type = resp.header("Content-Type").unwrap_or("").to_string();
     assert!(
         content_type.contains("application/json"),
         "SC5: /merkle?debug=json Content-Type must be application/json; got '{}'",

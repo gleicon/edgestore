@@ -47,12 +47,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Transfer segments: for each segment in manifest, read raw bytes from primary and import into replica
     let mut imported = 0usize;
     for seg_ref in &manifest {
-        let dat_path = primary.db_path().join(format!("segment-{:08}.dat", seg_ref.segment_id));
+        let dat_path = primary
+            .db_path()
+            .join(format!("segment-{:08}.dat", seg_ref.segment_id));
         let data = std::fs::read(&dat_path)?;
         let result = replica.import_segment(&data, &seg_ref.segment_hash)?;
         match result {
-            edgestore::ImportResult::Applied { keys_written, keys_skipped } => {
-                println!("  Imported segment {} (keys_written={}, keys_skipped={})", seg_ref.segment_id, keys_written, keys_skipped);
+            edgestore::ImportResult::Applied {
+                keys_written,
+                keys_skipped,
+            } => {
+                println!(
+                    "  Imported segment {} (keys_written={}, keys_skipped={})",
+                    seg_ref.segment_id, keys_written, keys_skipped
+                );
                 imported += 1;
             }
             edgestore::ImportResult::Skipped => {
@@ -71,7 +79,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 9. Verify a sample key on replica
     let sample = replica.get(b"sync_ns", b"key_042")?;
-    println!("Replica sample get (key_042): {:?}", sample.as_deref().map(|v| String::from_utf8_lossy(v)));
+    println!(
+        "Replica sample get (key_042): {:?}",
+        sample.as_deref().map(|v| String::from_utf8_lossy(v))
+    );
 
     // Cleanup
     drop(primary);

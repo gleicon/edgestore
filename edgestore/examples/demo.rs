@@ -70,7 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prefix scan: all run records
     println!("\n--- run history ---");
     for (k, v) in engine.prefix(b"runs", b"")? {
-        println!("  {} => {}", String::from_utf8_lossy(&k), String::from_utf8_lossy(&v));
+        println!(
+            "  {} => {}",
+            String::from_utf8_lossy(&k),
+            String::from_utf8_lossy(&v)
+        );
     }
 
     // Range scan: events for this run only
@@ -78,7 +82,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let evt_end = format!("evt-{:04}~", run_count);
     println!("\n--- events this run ---");
     for (k, v) in engine.range(b"events", evt_start.as_bytes(), evt_end.as_bytes())? {
-        println!("  {} => {}", String::from_utf8_lossy(&k), String::from_utf8_lossy(&v));
+        println!(
+            "  {} => {}",
+            String::from_utf8_lossy(&k),
+            String::from_utf8_lossy(&v)
+        );
     }
 
     // Flush WAL to immutable segments; compact when enough runs accumulate
@@ -88,7 +96,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let stats = engine.compact_once()?;
         println!(
             "done ({} cohorts, -{} segments, +{} segments, {} bytes written)",
-            stats.cohorts_collected, stats.segments_removed, stats.segments_written, stats.bytes_written
+            stats.cohorts_collected,
+            stats.segments_removed,
+            stats.segments_written,
+            stats.bytes_written
         );
     } else if run_count % 3 == 0 {
         print!("\nflushing memtable to segments... ");

@@ -1,6 +1,6 @@
 use edgestore::{
-    EdgestoreConfig, Engine, TextEngine, VectorEngine,
     text::types::{FacetValue, TextRecord},
+    EdgestoreConfig, Engine, TextEngine, VectorEngine,
 };
 use tempfile::TempDir;
 
@@ -13,15 +13,42 @@ fn test_index_and_search_basic() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns", b"doc1", "The quick brown fox", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns", b"doc2", "The lazy dog sleeps", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns", b"doc3", "Quick brown fox jumps", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "The quick brown fox",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc2",
+            "The lazy dog sleeps",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc3",
+            "Quick brown fox jumps",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
 
     let results = engine.search_text(b"ns", "quick brown", 3).unwrap();
     assert!(!results.is_empty(), "search should return results");
     // Both doc1 and doc3 have "quick" and "brown"; they should be in results
-    assert!(results.iter().any(|r| r.doc_id == b"doc1"), "doc1 should match 'quick brown'");
-    assert!(results.iter().any(|r| r.doc_id == b"doc3"), "doc3 should match 'quick brown'");
+    assert!(
+        results.iter().any(|r| r.doc_id == b"doc1"),
+        "doc1 should match 'quick brown'"
+    );
+    assert!(
+        results.iter().any(|r| r.doc_id == b"doc3"),
+        "doc3 should match 'quick brown'"
+    );
 }
 
 #[test]
@@ -30,12 +57,29 @@ fn test_bm25_ranking() {
     let mut engine = open_engine(&dir);
 
     // Doc with term appearing twice should rank higher
-    engine.index_text(b"ns", b"doc1", "hello hello world", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns", b"doc2", "hello world", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc2",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
 
     let results = engine.search_text(b"ns", "hello", 2).unwrap();
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].doc_id, b"doc1", "doc with more 'hello' should rank higher");
+    assert_eq!(
+        results[0].doc_id, b"doc1",
+        "doc with more 'hello' should rank higher"
+    );
     assert!(results[0].score > results[1].score);
 }
 
@@ -53,13 +97,23 @@ fn test_search_empty_query() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
 
     let results = engine.search_text(b"ns", "", 5).unwrap();
     assert!(results.is_empty());
 
     let results2 = engine.search_text(b"ns", "the a an", 5).unwrap();
-    assert!(results2.is_empty(), "stopwords-only query should return empty");
+    assert!(
+        results2.is_empty(),
+        "stopwords-only query should return empty"
+    );
 }
 
 #[test]
@@ -67,13 +121,23 @@ fn test_delete_removes_from_search() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
     let results_before = engine.search_text(b"ns", "hello", 5).unwrap();
     assert_eq!(results_before.len(), 1);
 
     engine.delete_text(b"ns", b"doc1").unwrap();
     let results_after = engine.search_text(b"ns", "hello", 5).unwrap();
-    assert!(results_after.is_empty(), "deleted doc should not appear in search");
+    assert!(
+        results_after.is_empty(),
+        "deleted doc should not appear in search"
+    );
 }
 
 #[test]
@@ -82,12 +146,22 @@ fn test_facet_filter() {
     let mut engine = open_engine(&dir);
 
     let mut facets1 = std::collections::HashMap::new();
-    facets1.insert("category".to_string(), FacetValue::String("news".to_string()));
-    engine.index_text(b"ns", b"doc1", "breaking news today", facets1).unwrap();
+    facets1.insert(
+        "category".to_string(),
+        FacetValue::String("news".to_string()),
+    );
+    engine
+        .index_text(b"ns", b"doc1", "breaking news today", facets1)
+        .unwrap();
 
     let mut facets2 = std::collections::HashMap::new();
-    facets2.insert("category".to_string(), FacetValue::String("sports".to_string()));
-    engine.index_text(b"ns", b"doc2", "sports update", facets2).unwrap();
+    facets2.insert(
+        "category".to_string(),
+        FacetValue::String("sports".to_string()),
+    );
+    engine
+        .index_text(b"ns", b"doc2", "sports update", facets2)
+        .unwrap();
 
     // Search without facet filter should find both
     let results = engine.search_text(b"ns", "news", 5).unwrap();
@@ -100,8 +174,22 @@ fn test_search_ranking_stability() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns", b"doc1", "alpha beta gamma", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns", b"doc2", "beta gamma delta", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "alpha beta gamma",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc2",
+            "beta gamma delta",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
 
     let results1 = engine.search_text(b"ns", "beta gamma", 5).unwrap();
     let results2 = engine.search_text(b"ns", "beta gamma", 5).unwrap();
@@ -119,20 +207,31 @@ fn test_index_text_record_retrieval() {
     let mut engine = open_engine(&dir);
 
     let mut facets = std::collections::HashMap::new();
-    facets.insert("author".to_string(), FacetValue::String("Alice".to_string()));
+    facets.insert(
+        "author".to_string(),
+        FacetValue::String("Alice".to_string()),
+    );
     facets.insert("views".to_string(), FacetValue::Number(42));
     facets.insert("published".to_string(), FacetValue::Bool(true));
 
-    engine.index_text(b"ns", b"doc1", "hello world", facets.clone()).unwrap();
+    engine
+        .index_text(b"ns", b"doc1", "hello world", facets.clone())
+        .unwrap();
 
     // Retrieve the raw text record via plain KV get
     let text_ns = edgestore::text_namespace(b"ns");
     let raw = engine.get(&text_ns, b"doc1").unwrap().unwrap();
     let record = edgestore::decode_text_record(&raw).unwrap();
     assert_eq!(record.text, "hello world");
-    assert_eq!(record.facets.get("author"), Some(&FacetValue::String("Alice".to_string())));
+    assert_eq!(
+        record.facets.get("author"),
+        Some(&FacetValue::String("Alice".to_string()))
+    );
     assert_eq!(record.facets.get("views"), Some(&FacetValue::Number(42)));
-    assert_eq!(record.facets.get("published"), Some(&FacetValue::Bool(true)));
+    assert_eq!(
+        record.facets.get("published"),
+        Some(&FacetValue::Bool(true))
+    );
 }
 
 #[test]
@@ -141,15 +240,27 @@ fn test_reindex_updates_merged_index() {
     let mut engine = open_engine(&dir);
 
     // Index doc1 with "hello world"
-    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
     let results = engine.search_text(b"ns", "hello", 5).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].doc_id, b"doc1");
 
     // Re-index doc1 with "foo bar" — old terms should be gone
-    engine.index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new())
+        .unwrap();
     let results_hello = engine.search_text(b"ns", "hello", 5).unwrap();
-    assert!(results_hello.is_empty(), "old term 'hello' should not find re-indexed doc");
+    assert!(
+        results_hello.is_empty(),
+        "old term 'hello' should not find re-indexed doc"
+    );
 
     let results_foo = engine.search_text(b"ns", "foo", 5).unwrap();
     assert_eq!(results_foo.len(), 1);
@@ -165,12 +276,23 @@ fn test_incremental_index_many_docs() {
     for i in 0..100 {
         let text = format!("document number {} contains quick brown fox", i);
         let key = format!("doc{:04}", i);
-        engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                key.as_bytes(),
+                &text,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
     }
 
     // Search should find all docs with "quick brown"
     let results = engine.search_text(b"ns", "quick brown", 200).unwrap();
-    assert_eq!(results.len(), 100, "all 100 docs should match 'quick brown'");
+    assert_eq!(
+        results.len(),
+        100,
+        "all 100 docs should match 'quick brown'"
+    );
 
     // Delete every other doc
     for i in (0..100).step_by(2) {
@@ -180,7 +302,11 @@ fn test_incremental_index_many_docs() {
 
     // Search should find only remaining 50 docs
     let results_after = engine.search_text(b"ns", "quick brown", 200).unwrap();
-    assert_eq!(results_after.len(), 50, "50 docs should remain after deletion");
+    assert_eq!(
+        results_after.len(),
+        50,
+        "50 docs should remain after deletion"
+    );
 }
 
 #[test]
@@ -188,8 +314,17 @@ fn test_namespace_isolation() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns1", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns2", b"doc1", "foo bar", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns1",
+            b"doc1",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(b"ns2", b"doc1", "foo bar", std::collections::HashMap::new())
+        .unwrap();
 
     let results1 = engine.search_text(b"ns1", "hello", 5).unwrap();
     assert_eq!(results1.len(), 1);
@@ -206,8 +341,22 @@ fn test_delete_all_docs_removes_index() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns", b"doc2", "hello world", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc2",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
 
     engine.delete_text(b"ns", b"doc1").unwrap();
     engine.delete_text(b"ns", b"doc2").unwrap();
@@ -215,7 +364,10 @@ fn test_delete_all_docs_removes_index() {
     // Merged index should be deleted when empty
     let text_ns = edgestore::text_namespace(b"ns");
     let index_bytes = engine.get(&text_ns, b"__index__").unwrap();
-    assert!(index_bytes.is_none(), "merged index should be deleted when all docs removed");
+    assert!(
+        index_bytes.is_none(),
+        "merged index should be deleted when all docs removed"
+    );
 }
 
 #[test]
@@ -228,9 +380,19 @@ fn test_search_performance_at_scale() {
     // Index 10,000 documents
     let n = 10_000;
     for i in 0..n {
-        let text = format!("document number {} contains quick brown fox jumps over lazy dog", i);
+        let text = format!(
+            "document number {} contains quick brown fox jumps over lazy dog",
+            i
+        );
         let key = format!("doc{:08}", i);
-        engine.index_text(b"ns", key.as_bytes(), &text, std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                key.as_bytes(),
+                &text,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
     }
 
     // Benchmark 100 searches
@@ -245,11 +407,17 @@ fn test_search_performance_at_scale() {
     // Threshold depends on build profile:
     //   release: ~3-5 ms (BENCHMARKS.md claim: ~3.2 ms at 10K docs)
     //   debug:   ~15-25 ms (debug overhead; still 6-10x faster than old ~165 ms)
-    let threshold_us = if cfg!(debug_assertions) { 50_000.0 } else { 5_000.0 };
+    let threshold_us = if cfg!(debug_assertions) {
+        50_000.0
+    } else {
+        5_000.0
+    };
     assert!(
         avg_us < threshold_us,
         "search too slow: {:.1} µs at {} docs (threshold: {:.0} µs)",
-        avg_us, n, threshold_us
+        avg_us,
+        n,
+        threshold_us
     );
 }
 
@@ -260,8 +428,22 @@ fn test_cold_cache_search() {
     // Phase 1: index docs with one engine instance
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
-        engine.index_text(b"ns", b"doc2", "hello foo", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc2",
+                "hello foo",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         engine.flush().unwrap();
     }
 
@@ -270,7 +452,11 @@ fn test_cold_cache_search() {
     {
         let engine = open_engine(&dir);
         let results = engine.search_text(b"ns", "hello", 5).unwrap();
-        assert_eq!(results.len(), 2, "cold-cache search should find both docs via disk fallback");
+        assert_eq!(
+            results.len(),
+            2,
+            "cold-cache search should find both docs via disk fallback"
+        );
     }
 }
 
@@ -279,15 +465,35 @@ fn test_typo_tolerance() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
-    engine.index_text(b"ns", b"doc2", "helo there", std::collections::HashMap::new()).unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc1",
+            "hello world",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+    engine
+        .index_text(
+            b"ns",
+            b"doc2",
+            "helo there",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
 
     // Exact search finds both ("hello" exact, "helo" is one edit away)
-    let exact = engine.search_text_with_options(
-        b"ns",
-        "hello",
-        &edgestore::SearchOptions { k: 5, typo_tolerance: true, ..Default::default() },
-    ).unwrap();
+    let exact = engine
+        .search_text_with_options(
+            b"ns",
+            "hello",
+            &edgestore::SearchOptions {
+                k: 5,
+                typo_tolerance: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert!(
         exact.iter().any(|r| r.doc_id == b"doc1"),
         "exact match doc1 should be found"
@@ -305,7 +511,14 @@ fn test_delete_fallback_cache_miss() {
     // Index with engine 1
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         engine.flush().unwrap();
     }
 
@@ -318,7 +531,10 @@ fn test_delete_fallback_cache_miss() {
         engine.delete_text(b"ns", b"doc1").unwrap();
 
         let results_after = engine.search_text(b"ns", "hello", 5).unwrap();
-        assert!(results_after.is_empty(), "delete from cold cache should remove doc");
+        assert!(
+            results_after.is_empty(),
+            "delete from cold cache should remove doc"
+        );
     }
 }
 
@@ -328,17 +544,30 @@ fn test_reindex_with_facets() {
     let mut engine = open_engine(&dir);
 
     let mut facets1 = std::collections::HashMap::new();
-    facets1.insert("category".to_string(), FacetValue::String("news".to_string()));
-    engine.index_text(b"ns", b"doc1", "breaking news today", facets1).unwrap();
+    facets1.insert(
+        "category".to_string(),
+        FacetValue::String("news".to_string()),
+    );
+    engine
+        .index_text(b"ns", b"doc1", "breaking news today", facets1)
+        .unwrap();
 
     // Re-index with different facets
     let mut facets2 = std::collections::HashMap::new();
-    facets2.insert("category".to_string(), FacetValue::String("sports".to_string()));
-    engine.index_text(b"ns", b"doc1", "sports update today", facets2).unwrap();
+    facets2.insert(
+        "category".to_string(),
+        FacetValue::String("sports".to_string()),
+    );
+    engine
+        .index_text(b"ns", b"doc1", "sports update today", facets2)
+        .unwrap();
 
     // Old text should not match "breaking"
     let results = engine.search_text(b"ns", "breaking", 5).unwrap();
-    assert!(results.is_empty(), "old text 'breaking' should not match after re-index");
+    assert!(
+        results.is_empty(),
+        "old text 'breaking' should not match after re-index"
+    );
 
     // New text should match "sports"
     let results2 = engine.search_text(b"ns", "sports", 5).unwrap();
@@ -362,14 +591,28 @@ fn test_crash_recovery_rebuilds_stale_sidecar() {
     // Phase 1: index doc1, flush() → sidecar gets LSN X
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         engine.flush().unwrap();
     }
 
     // Phase 2: reopen, index doc2 (no flush), drop (simulates crash)
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc2", "hello foo", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc2",
+                "hello foo",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         // NO flush — sidecar still has LSN X, but doc2 has LSN > X
     }
 
@@ -379,7 +622,11 @@ fn test_crash_recovery_rebuilds_stale_sidecar() {
     {
         let engine = open_engine(&dir);
         let results = engine.search_text(b"ns", "hello", 5).unwrap();
-        assert_eq!(results.len(), 2, "crash recovery must rebuild stale sidecar so both docs are searchable");
+        assert_eq!(
+            results.len(),
+            2,
+            "crash recovery must rebuild stale sidecar so both docs are searchable"
+        );
         assert!(results.iter().any(|r| r.doc_id == b"doc1"));
         assert!(results.iter().any(|r| r.doc_id == b"doc2"));
     }
@@ -392,9 +639,23 @@ fn test_no_rebuild_when_sidecar_fresh() {
     // Phase 1: index doc1, flush(), index doc2, flush()
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         engine.flush().unwrap();
-        engine.index_text(b"ns", b"doc2", "hello foo", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc2",
+                "hello foo",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         engine.flush().unwrap();
     }
 
@@ -403,7 +664,11 @@ fn test_no_rebuild_when_sidecar_fresh() {
     {
         let engine = open_engine(&dir);
         let results = engine.search_text(b"ns", "hello", 5).unwrap();
-        assert_eq!(results.len(), 2, "fresh sidecar should contain both docs without rebuild");
+        assert_eq!(
+            results.len(),
+            2,
+            "fresh sidecar should contain both docs without rebuild"
+        );
     }
 }
 
@@ -421,17 +686,29 @@ fn test_reindex_after_reload_removes_old_terms() {
     // Phase 1: index doc1, flush, drop.
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc1", "hello world", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(
+                b"ns",
+                b"doc1",
+                "hello world",
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
         engine.flush().unwrap();
     }
 
     // Phase 2: reopen, re-index the *same* doc1 with different text.
     {
         let mut engine = open_engine(&dir);
-        engine.index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new()).unwrap();
+        engine
+            .index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new())
+            .unwrap();
 
         let results_hello = engine.search_text(b"ns", "hello", 5).unwrap();
-        assert!(results_hello.is_empty(), "old term 'hello' must not match after re-indexing post-reload");
+        assert!(
+            results_hello.is_empty(),
+            "old term 'hello' must not match after re-indexing post-reload"
+        );
 
         let results_foo = engine.search_text(b"ns", "foo", 5).unwrap();
         assert_eq!(results_foo.len(), 1);

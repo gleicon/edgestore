@@ -1,5 +1,5 @@
-use std::collections::{BinaryHeap, HashSet};
 use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
 
 use crate::error::EdgestoreError;
 use crate::vector::distance::{distance, Metric};
@@ -95,7 +95,10 @@ impl HnswIndex {
     }
 
     fn next_rng(&mut self) -> f64 {
-        self.rng_seed = self.rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.rng_seed = self
+            .rng_seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.rng_seed as f64) / (u64::MAX as f64)
     }
 
@@ -132,8 +135,14 @@ impl HnswIndex {
         for &ep in entry_points {
             let dist = self.distance_to_node(query, ep)?;
             visited.insert(ep);
-            candidates.push(Reverse(Candidate { node_idx: ep, distance: dist }));
-            results.push(Candidate { node_idx: ep, distance: dist });
+            candidates.push(Reverse(Candidate {
+                node_idx: ep,
+                distance: dist,
+            }));
+            results.push(Candidate {
+                node_idx: ep,
+                distance: dist,
+            });
         }
 
         while let Some(Reverse(cand)) = candidates.pop() {
@@ -257,7 +266,12 @@ impl HnswIndex {
         let ef_construction = self.ef_construction;
 
         for l in (0..=layer.min(self.max_layer)).rev() {
-            let knn = self.search_layer(&self.nodes[node_idx].vector_data, &[curr], ef_construction, l)?;
+            let knn = self.search_layer(
+                &self.nodes[node_idx].vector_data,
+                &[curr],
+                ef_construction,
+                l,
+            )?;
             let selected = self.select_neighbors(node_idx, &knn, m, l);
 
             // Bidirectional connection
@@ -300,15 +314,21 @@ impl HnswIndex {
                 if n == node_idx {
                     None
                 } else {
-                    distance(&node_data, &self.nodes[n].vector_data, self.dtype, self.metric)
-                        .ok()
-                        .map(|d| (n, d))
+                    distance(
+                        &node_data,
+                        &self.nodes[n].vector_data,
+                        self.dtype,
+                        self.metric,
+                    )
+                    .ok()
+                    .map(|d| (n, d))
                 }
             })
             .collect();
         neighbor_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         neighbor_dists.truncate(m);
-        self.nodes[node_idx].neighbors[layer] = neighbor_dists.into_iter().map(|(n, _)| n).collect();
+        self.nodes[node_idx].neighbors[layer] =
+            neighbor_dists.into_iter().map(|(n, _)| n).collect();
     }
 
     /// HNSW diversity heuristic for neighbor selection (Algorithm 2 from paper).
@@ -420,14 +440,19 @@ impl HnswIndex {
     /// Deserialize an index from bytes.
     pub fn deserialize(bytes: &[u8]) -> Result<Self, EdgestoreError> {
         if bytes.len() < 22 {
-            return Err(EdgestoreError::CorruptData("hnsw: truncated header".to_string()));
+            return Err(EdgestoreError::CorruptData(
+                "hnsw: truncated header".to_string(),
+            ));
         }
         let mut pos = 0usize;
 
         macro_rules! read_bytes {
             ($n:expr, $field:literal) => {{
                 if bytes.len() < pos + $n {
-                    return Err(EdgestoreError::CorruptData(format!("hnsw: truncated {}", $field)));
+                    return Err(EdgestoreError::CorruptData(format!(
+                        "hnsw: truncated {}",
+                        $field
+                    )));
                 }
                 let slice = &bytes[pos..pos + $n];
                 pos += $n;
@@ -437,59 +462,92 @@ impl HnswIndex {
 
         let magic = read_bytes!(4, "magic");
         if magic != HNSW_MAGIC {
-            return Err(EdgestoreError::CorruptData("hnsw: invalid magic".to_string()));
+            return Err(EdgestoreError::CorruptData(
+                "hnsw: invalid magic".to_string(),
+            ));
         }
         let version = u16::from_le_bytes(read_bytes!(2, "version").try_into().unwrap());
         if version != HNSW_VERSION {
-            return Err(EdgestoreError::CorruptData(format!("hnsw: unsupported version {}", version)));
+            return Err(EdgestoreError::CorruptData(format!(
+                "hnsw: unsupported version {}",
+                version
+            )));
         }
-        let max_layer = u16::from_le_bytes(read_bytes!(2, "max_layer").try_into().unwrap()) as usize;
-        let entry_point = u32::from_le_bytes(read_bytes!(4, "entry_point").try_into().unwrap()) as usize;
-        let node_count = u32::from_le_bytes(read_bytes!(4, "node_count").try_into().unwrap()) as usize;
+        let max_layer =
+            u16::from_le_bytes(read_bytes!(2, "max_layer").try_into().unwrap()) as usize;
+        let entry_point =
+            u32::from_le_bytes(read_bytes!(4, "entry_point").try_into().unwrap()) as usize;
+        let node_count =
+            u32::from_le_bytes(read_bytes!(4, "node_count").try_into().unwrap()) as usize;
         let dims = u16::from_le_bytes(read_bytes!(2, "dims").try_into().unwrap());
         let dtype_byte = read_bytes!(1, "dtype")[0];
         let metric_byte = read_bytes!(1, "metric")[0];
         let m = u16::from_le_bytes(read_bytes!(2, "m").try_into().unwrap()) as usize;
-        let ef_construction = u16::from_le_bytes(read_bytes!(2, "ef_construction").try_into().unwrap()) as usize;
+        let ef_construction =
+            u16::from_le_bytes(read_bytes!(2, "ef_construction").try_into().unwrap()) as usize;
 
         let dtype = match dtype_byte {
             0 => Dtype::F32,
             1 => Dtype::F16,
             2 => Dtype::I8,
-            b => return Err(EdgestoreError::CorruptData(format!("hnsw: unknown dtype {}", b))),
+            b => {
+                return Err(EdgestoreError::CorruptData(format!(
+                    "hnsw: unknown dtype {}",
+                    b
+                )))
+            }
         };
         let metric = match metric_byte {
             0 => Metric::Cosine,
             1 => Metric::L2,
             2 => Metric::DotProduct,
-            b => return Err(EdgestoreError::CorruptData(format!("hnsw: unknown metric {}", b))),
+            b => {
+                return Err(EdgestoreError::CorruptData(format!(
+                    "hnsw: unknown metric {}",
+                    b
+                )))
+            }
         };
 
         if node_count > 10_000_000 {
-            return Err(EdgestoreError::CorruptData("hnsw: node_count too large".to_string()));
+            return Err(EdgestoreError::CorruptData(
+                "hnsw: node_count too large".to_string(),
+            ));
         }
 
         let mut nodes = Vec::with_capacity(node_count);
         for _ in 0..node_count {
             let id_len = u32::from_le_bytes(read_bytes!(4, "id_len").try_into().unwrap()) as usize;
             let vector_id = read_bytes!(id_len, "vector_id").to_vec();
-            let data_len = u32::from_le_bytes(read_bytes!(4, "data_len").try_into().unwrap()) as usize;
+            let data_len =
+                u32::from_le_bytes(read_bytes!(4, "data_len").try_into().unwrap()) as usize;
             let vector_data = read_bytes!(data_len, "vector_data").to_vec();
-            let layer_count = u16::from_le_bytes(read_bytes!(2, "layer_count").try_into().unwrap()) as usize;
+            let layer_count =
+                u16::from_le_bytes(read_bytes!(2, "layer_count").try_into().unwrap()) as usize;
             let mut neighbors = Vec::with_capacity(layer_count);
             for _ in 0..layer_count {
-                let neighbor_count = u16::from_le_bytes(read_bytes!(2, "neighbor_count").try_into().unwrap()) as usize;
+                let neighbor_count =
+                    u16::from_le_bytes(read_bytes!(2, "neighbor_count").try_into().unwrap())
+                        as usize;
                 if neighbor_count > 1_000_000 {
-                    return Err(EdgestoreError::CorruptData("hnsw: neighbor_count too large".to_string()));
+                    return Err(EdgestoreError::CorruptData(
+                        "hnsw: neighbor_count too large".to_string(),
+                    ));
                 }
                 let mut layer_neighbors = Vec::with_capacity(neighbor_count);
                 for _ in 0..neighbor_count {
-                    let nidx = u32::from_le_bytes(read_bytes!(4, "neighbor_idx").try_into().unwrap()) as usize;
+                    let nidx =
+                        u32::from_le_bytes(read_bytes!(4, "neighbor_idx").try_into().unwrap())
+                            as usize;
                     layer_neighbors.push(nidx);
                 }
                 neighbors.push(layer_neighbors);
             }
-            nodes.push(HnswNode { vector_id, vector_data, neighbors });
+            nodes.push(HnswNode {
+                vector_id,
+                vector_data,
+                neighbors,
+            });
         }
 
         Ok(HnswIndex {
@@ -566,10 +624,12 @@ mod tests {
         let per_cluster = n / num_clusters;
         for cluster in 0..num_clusters {
             // Cluster center
-            let center: Vec<f32> = (0..dims).map(|_| {
-                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                ((seed % 100) as f32) / 100.0
-            }).collect();
+            let center: Vec<f32> = (0..dims)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    ((seed % 100) as f32) / 100.0
+                })
+                .collect();
             for i in 0..per_cluster {
                 let mut v = Vec::with_capacity(dims);
                 for d in 0..dims {
@@ -579,7 +639,9 @@ mod tests {
                 }
                 let bytes = encode_f32_vec(&v);
                 all_data.push(bytes.clone());
-                index.insert(vec![(cluster * per_cluster + i) as u8], bytes).unwrap();
+                index
+                    .insert(vec![(cluster * per_cluster + i) as u8], bytes)
+                    .unwrap();
             }
         }
 
@@ -597,15 +659,14 @@ mod tests {
             brute.push((i, d));
         }
         brute.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let brute_top: std::collections::HashSet<usize> = brute.iter().take(k).map(|(i, _)| *i).collect();
+        let brute_top: std::collections::HashSet<usize> =
+            brute.iter().take(k).map(|(i, _)| *i).collect();
 
         // HNSW search
         let hnsw_results = index.search(&query_bytes, k, 100).unwrap();
         let hnsw_top: std::collections::HashSet<usize> = hnsw_results
             .iter()
-            .map(|(id_bytes, _)| {
-                id_bytes[0] as usize
-            })
+            .map(|(id_bytes, _)| id_bytes[0] as usize)
             .collect();
 
         let intersection: Vec<_> = hnsw_top.intersection(&brute_top).collect();
@@ -636,7 +697,11 @@ mod tests {
         let target_bytes = encode_f32_vec(&target_v);
         let results = index.search(&target_bytes, 1, 10).unwrap();
         assert!(!results.is_empty());
-        assert!(results[0].1 < 1e-5, "self-search distance should be ~0, got {}", results[0].1);
+        assert!(
+            results[0].1 < 1e-5,
+            "self-search distance should be ~0, got {}",
+            results[0].1
+        );
     }
 
     #[test]
@@ -699,7 +764,11 @@ mod tests {
         let results = index.search(&query, 2, 10).unwrap();
         assert_eq!(results.len(), 2);
         let ids: Vec<u8> = results.iter().map(|(id, _)| id[0]).collect();
-        assert!(ids.contains(&4) || ids.contains(&5), "Expected 4 or 5, got {:?}", ids);
+        assert!(
+            ids.contains(&4) || ids.contains(&5),
+            "Expected 4 or 5, got {:?}",
+            ids
+        );
 
         // Search for [0.1] — nearest should be [0]
         let query2 = 0.1f32.to_le_bytes().to_vec();
@@ -707,5 +776,3 @@ mod tests {
         assert_eq!(results2[0].0, vec![0]);
     }
 }
-
-

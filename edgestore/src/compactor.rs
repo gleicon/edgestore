@@ -59,11 +59,7 @@ impl Compactor {
     /// `base_path`         — database directory.
     /// `write_budget_bytes`— write-amplification cap per compaction pass.
     /// `cohort_window_secs`— must match the value used when segments were written.
-    pub fn new(
-        base_path: PathBuf,
-        write_budget_bytes: u64,
-        cohort_window_secs: u64,
-    ) -> Self {
+    pub fn new(base_path: PathBuf, write_budget_bytes: u64, cohort_window_secs: u64) -> Self {
         Compactor {
             base_path,
             write_budget_bytes,
@@ -101,12 +97,10 @@ impl Compactor {
             .collect();
 
         // Sort: fully-expired first (lowest max_death_time first), then partially-expired
-        cohorts.sort_by(|a, b| {
-            match (a.is_fully_expired, b.is_fully_expired) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.max_death_time_nanos.cmp(&b.max_death_time_nanos),
-            }
+        cohorts.sort_by(|a, b| match (a.is_fully_expired, b.is_fully_expired) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.max_death_time_nanos.cmp(&b.max_death_time_nanos),
         });
 
         cohorts
@@ -212,10 +206,7 @@ impl Compactor {
                         if e.kind() != std::io::ErrorKind::NotFound {
                             return Err(EdgestoreError::Io(e));
                         }
-                        eprintln!(
-                            "compactor: segment file not found: {}",
-                            path.display()
-                        );
+                        eprintln!("compactor: segment file not found: {}", path.display());
                     }
                 }
             }
@@ -228,8 +219,11 @@ impl Compactor {
         let survivor_count = sorted_survivors.len() as u64;
 
         // Write survivors to a new output segment
-        let mut writer =
-            SegmentWriter::new(self.base_path.clone(), next_segment_id, self.cohort_window_secs);
+        let mut writer = SegmentWriter::new(
+            self.base_path.clone(),
+            next_segment_id,
+            self.cohort_window_secs,
+        );
         let new_meta = writer.flush(&sorted_survivors)?;
         let bytes_written = new_meta.compressed_bytes;
 
@@ -248,10 +242,7 @@ impl Compactor {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         return Err(EdgestoreError::Io(e));
                     }
-                    eprintln!(
-                        "compactor: segment file not found: {}",
-                        path.display()
-                    );
+                    eprintln!("compactor: segment file not found: {}", path.display());
                 }
             }
         }
@@ -343,7 +334,12 @@ mod tests {
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
-    fn make_segment_meta(segment_id: u64, cohort_bucket: i64, death_time: i64, record_count: u64) -> SegmentMeta {
+    fn make_segment_meta(
+        segment_id: u64,
+        cohort_bucket: i64,
+        death_time: i64,
+        record_count: u64,
+    ) -> SegmentMeta {
         SegmentMeta {
             segment_id,
             segment_hash: vec![0u8; 32],
@@ -386,7 +382,9 @@ mod tests {
         let mut writer =
             SegmentWriter::new(dir.path().to_path_buf(), segment_id, cohort_window_secs);
         let meta = writer.flush(entries).expect("flush failed");
-        manifest.add_segment(meta.clone()).expect("add_segment failed");
+        manifest
+            .add_segment(meta.clone())
+            .expect("add_segment failed");
         meta
     }
 
@@ -397,8 +395,8 @@ mod tests {
         // Three segments: 2 in bucket 1 (expired), 1 in bucket 2 (not expired)
         let now_nanos = 10_000_000_000i64; // 10 seconds
         let segs = vec![
-            make_segment_meta(0, 1, 3_000_000_000, 5),  // death = 3s, bucket 1, expired
-            make_segment_meta(1, 1, 5_000_000_000, 5),  // death = 5s, bucket 1, expired
+            make_segment_meta(0, 1, 3_000_000_000, 5), // death = 3s, bucket 1, expired
+            make_segment_meta(1, 1, 5_000_000_000, 5), // death = 5s, bucket 1, expired
             make_segment_meta(2, 2, 20_000_000_000, 10), // death = 20s, bucket 2, not expired
         ];
 
@@ -446,7 +444,9 @@ mod tests {
         // Verify files exist
         for ext in ["dat", "idx", "xf", "meta"] {
             assert!(
-                dir.path().join(format!("segment-{:08}.{}", seg_id, ext)).exists(),
+                dir.path()
+                    .join(format!("segment-{:08}.{}", seg_id, ext))
+                    .exists(),
                 "expected {} to exist before collect",
                 ext
             );
@@ -470,7 +470,9 @@ mod tests {
         // All 4 segment files should be gone
         for ext in ["dat", "idx", "xf", "meta"] {
             assert!(
-                !dir.path().join(format!("segment-{:08}.{}", seg_id, ext)).exists(),
+                !dir.path()
+                    .join(format!("segment-{:08}.{}", seg_id, ext))
+                    .exists(),
                 "expected {} to be deleted after collect",
                 ext
             );
@@ -485,7 +487,10 @@ mod tests {
         // Stats check
         assert_eq!(stats.segments_removed, 1);
         assert_eq!(stats.cohorts_collected, 1);
-        assert_eq!(stats.live_records_relocated, 0, "zero live relocation invariant violated");
+        assert_eq!(
+            stats.live_records_relocated, 0,
+            "zero live relocation invariant violated"
+        );
     }
 
     #[test]
@@ -595,7 +600,9 @@ mod tests {
         for seg_id in [0u64, 1u64] {
             for ext in ["dat", "idx", "xf", "meta"] {
                 assert!(
-                    !dir.path().join(format!("segment-{:08}.{}", seg_id, ext)).exists(),
+                    !dir.path()
+                        .join(format!("segment-{:08}.{}", seg_id, ext))
+                        .exists(),
                     "old segment-{} .{} should be removed",
                     seg_id,
                     ext
@@ -668,7 +675,9 @@ mod tests {
         let compactor = Compactor::new(dir.path().to_path_buf(), 0, cohort_window_secs);
         let pinned: HashSet<SegmentId> = HashSet::new();
 
-        let stats = compactor.compact_cycle(&mut manifest, now_nanos, &pinned).unwrap();
+        let stats = compactor
+            .compact_cycle(&mut manifest, now_nanos, &pinned)
+            .unwrap();
 
         // With budget = 0, only the first cohort (fully expired → bytes_written stays 0 → another
         // cohort eligible per loop check). Actually, budget check is BEFORE processing, so the
@@ -775,9 +784,14 @@ mod tests {
 
         let compactor = Compactor::new(dir.path().to_path_buf(), u64::MAX, cohort_window_secs);
         let pinned: HashSet<SegmentId> = HashSet::new();
-        let stats = compactor.compact_cycle(&mut manifest, now_nanos, &pinned).unwrap();
+        let stats = compactor
+            .compact_cycle(&mut manifest, now_nanos, &pinned)
+            .unwrap();
 
-        assert!(manifest.list_segments().is_empty(), "all segments should be removed");
+        assert!(
+            manifest.list_segments().is_empty(),
+            "all segments should be removed"
+        );
         assert_eq!(stats.segments_removed, 2);
         assert_eq!(stats.cohorts_collected, 1);
         assert_eq!(stats.live_records_relocated, 0);
@@ -813,13 +827,21 @@ mod tests {
             is_fully_expired: true,
         };
         let mut stats = CompactionStats::default();
-        compactor.collect_expired_cohort(&mut manifest, &cohort, &mut stats).unwrap();
+        compactor
+            .collect_expired_cohort(&mut manifest, &cohort, &mut stats)
+            .unwrap();
 
         // Manifest must not list the segment regardless of file state.
-        assert!(manifest.list_segments().is_empty(), "manifest must not list removed segment");
+        assert!(
+            manifest.list_segments().is_empty(),
+            "manifest must not list removed segment"
+        );
         // Reload manifest from disk to confirm durability.
         let manifest2 = Manifest::open(&manifest_path).unwrap();
-        assert!(manifest2.list_segments().is_empty(), "reloaded manifest must also be empty");
+        assert!(
+            manifest2.list_segments().is_empty(),
+            "reloaded manifest must also be empty"
+        );
     }
 
     // Regression: compact_partial_cohort (all-dead path) previously deleted files
@@ -851,10 +873,18 @@ mod tests {
         };
         let now_nanos: i64 = 7_200_000_000_000; // 2h — all records dead
         let mut stats = CompactionStats::default();
-        compactor.compact_partial_cohort(&mut manifest, &cohort, now_nanos, 1, &mut stats).unwrap();
+        compactor
+            .compact_partial_cohort(&mut manifest, &cohort, now_nanos, 1, &mut stats)
+            .unwrap();
 
-        assert!(manifest.list_segments().is_empty(), "manifest must not list removed segment");
+        assert!(
+            manifest.list_segments().is_empty(),
+            "manifest must not list removed segment"
+        );
         let manifest2 = Manifest::open(&manifest_path).unwrap();
-        assert!(manifest2.list_segments().is_empty(), "reloaded manifest must also be empty");
+        assert!(
+            manifest2.list_segments().is_empty(),
+            "reloaded manifest must also be empty"
+        );
     }
 }

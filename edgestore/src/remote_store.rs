@@ -47,12 +47,7 @@ pub trait RemoteStore: Send + Sync {
     /// Idempotent: re-uploading the same bytes is fine.
     ///
     /// Default: returns `Err(InvalidOperation)` — override to enable sidecar support.
-    fn upload_aux(
-        &self,
-        hash: &[u8; 32],
-        ext: &str,
-        data: &[u8],
-    ) -> Result<(), EdgestoreError> {
+    fn upload_aux(&self, hash: &[u8; 32], ext: &str, data: &[u8]) -> Result<(), EdgestoreError> {
         let _ = (hash, ext, data);
         Err(EdgestoreError::InvalidOperation(
             "upload_aux not implemented for this RemoteStore".to_string(),

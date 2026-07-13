@@ -62,7 +62,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:<12} {:>12}", "Key", "Distance");
     println!("{}", "-".repeat(26));
     for r in &results {
-        println!("{:<12} {:>12.6}", String::from_utf8_lossy(&r.key), r.distance);
+        println!(
+            "{:<12} {:>12.6}",
+            String::from_utf8_lossy(&r.key),
+            r.distance
+        );
     }
 
     println!("\nTotal vectors scanned: {} (HNSW index used)", n_vectors);

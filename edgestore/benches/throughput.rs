@@ -1,7 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use edgestore::{
-    Dtype, EdgestoreConfig, Engine, Metric, VectorEngine, VectorRecord,
-};
+use edgestore::{Dtype, EdgestoreConfig, Engine, Metric, VectorEngine, VectorRecord};
 use tempfile::TempDir;
 
 fn bench_throughput(c: &mut Criterion) {
@@ -55,7 +53,9 @@ fn bench_throughput(c: &mut Criterion) {
             },
             |mut engine| {
                 for i in 0..100 {
-                    engine.vector_put(b"ns", &[i as u8], dims as u16, Dtype::F32, &data).unwrap();
+                    engine
+                        .vector_put(b"ns", &[i as u8], dims as u16, Dtype::F32, &data)
+                        .unwrap();
                 }
                 black_box(engine);
             },
@@ -70,7 +70,9 @@ fn bench_throughput(c: &mut Criterion) {
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
         for i in 0..1000 {
             let v: Vec<u8> = (0..dims * 4).map(|j| ((i * 4 + j) % 256) as u8).collect();
-            engine.vector_put(b"ns", &[i as u8], dims as u16, Dtype::F32, &v).unwrap();
+            engine
+                .vector_put(b"ns", &[i as u8], dims as u16, Dtype::F32, &v)
+                .unwrap();
         }
 
         let query = VectorRecord {
@@ -92,7 +94,9 @@ fn bench_throughput(c: &mut Criterion) {
         let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
         for i in 0..1000 {
             let v: Vec<u8> = (0..dims * 4).map(|j| ((i * 4 + j) % 256) as u8).collect();
-            engine.vector_put(b"ns", &[i as u8], dims as u16, Dtype::F32, &v).unwrap();
+            engine
+                .vector_put(b"ns", &[i as u8], dims as u16, Dtype::F32, &v)
+                .unwrap();
         }
         engine.build_vector_index(b"ns").unwrap();
 

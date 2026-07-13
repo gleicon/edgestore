@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
 use crate::error::EdgestoreError;
 use crate::memtable::MemTable;
 use crate::types::{encode_key, Lsn, MemEntry, Operation};
 use crate::wal::WalReader;
+use std::path::{Path, PathBuf};
 
 pub(crate) struct RecoveryResult {
     #[allow(dead_code)]
@@ -27,10 +27,7 @@ pub(crate) fn list_wal_files(db_path: &Path) -> Result<Vec<PathBuf>, EdgestoreEr
         let name_str = name.to_string_lossy();
 
         // Pattern: "wal-" + 16 hex chars + ".log" = 24 chars total
-        if name_str.len() == 24
-            && name_str.starts_with("wal-")
-            && name_str.ends_with(".log")
-        {
+        if name_str.len() == 24 && name_str.starts_with("wal-") && name_str.ends_with(".log") {
             let hex_part = &name_str[4..20]; // chars 4..20 = 16 chars
             if hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
                 files.push(entry.path());
@@ -200,18 +197,20 @@ mod tests {
 
         // Write key, then delete it
         writer.append(&make_record(1, 0)).unwrap();
-        writer.append(&WalRecord {
-            txid: 0,
-            lsn: 2,
-            timestamp: 1,
-            ttl: 0,
-            ns_len: 2,
-            ns_bytes: b"ns".to_vec(),
-            key_bytes: b"key1".to_vec(),
-            op: Operation::Delete,
-            value_hash: blake3::hash(b"").into(),
-            value_bytes: vec![],
-        }).unwrap();
+        writer
+            .append(&WalRecord {
+                txid: 0,
+                lsn: 2,
+                timestamp: 1,
+                ttl: 0,
+                ns_len: 2,
+                ns_bytes: b"ns".to_vec(),
+                key_bytes: b"key1".to_vec(),
+                op: Operation::Delete,
+                value_hash: blake3::hash(b"").into(),
+                value_bytes: vec![],
+            })
+            .unwrap();
         writer.fsync().unwrap();
         drop(writer);
 
@@ -222,8 +221,14 @@ mod tests {
 
         // The final state for key1 must be a Delete tombstone
         let encoded = encode_key(b"ns", b"key1");
-        let entry = memtable.get(&encoded).expect("key1 should be in memtable after replay");
-        assert_eq!(entry.op, Operation::Delete, "tombstone must survive WAL replay");
+        let entry = memtable
+            .get(&encoded)
+            .expect("key1 should be in memtable after replay");
+        assert_eq!(
+            entry.op,
+            Operation::Delete,
+            "tombstone must survive WAL replay"
+        );
         assert!(entry.value.is_none(), "delete entry must have no value");
     }
 
@@ -247,7 +252,8 @@ mod tests {
             op: Operation::Put,
             value_hash: blake3::hash(b"old_val").into(),
             value_bytes: b"old_val".to_vec(),
-        }).unwrap();
+        })
+        .unwrap();
         w1.fsync().unwrap();
         drop(w1);
 
@@ -264,7 +270,8 @@ mod tests {
             op: Operation::Put,
             value_hash: blake3::hash(b"new_val").into(),
             value_bytes: b"new_val".to_vec(),
-        }).unwrap();
+        })
+        .unwrap();
         w2.fsync().unwrap();
         drop(w2);
 
@@ -272,8 +279,14 @@ mod tests {
         recover_from_wal(dir.path(), &mut memtable).unwrap();
 
         let encoded = encode_key(b"ns", b"shared");
-        let entry = memtable.get(&encoded).expect("shared key must be in memtable");
-        assert_eq!(entry.value, Some(b"new_val".to_vec()), "WAL file 2 must win (LWW by file order)");
+        let entry = memtable
+            .get(&encoded)
+            .expect("shared key must be in memtable");
+        assert_eq!(
+            entry.value,
+            Some(b"new_val".to_vec()),
+            "WAL file 2 must win (LWW by file order)"
+        );
         assert_eq!(entry.lsn, 2);
     }
 
@@ -284,24 +297,29 @@ mod tests {
         let wal_path = dir.path().join("wal-0000000000000001.log");
         let mut writer = WalWriter::create(&wal_path, &config).unwrap();
         for (lsn, txid) in [(1u64, 10u64), (2, 20), (3, 5)] {
-            writer.append(&WalRecord {
-                txid,
-                lsn,
-                timestamp: 0,
-                ttl: 0,
-                ns_len: 2,
-                ns_bytes: b"ns".to_vec(),
-                key_bytes: format!("k{}", lsn).into_bytes(),
-                op: Operation::Put,
-                value_hash: blake3::hash(b"v").into(),
-                value_bytes: b"v".to_vec(),
-            }).unwrap();
+            writer
+                .append(&WalRecord {
+                    txid,
+                    lsn,
+                    timestamp: 0,
+                    ttl: 0,
+                    ns_len: 2,
+                    ns_bytes: b"ns".to_vec(),
+                    key_bytes: format!("k{}", lsn).into_bytes(),
+                    op: Operation::Put,
+                    value_hash: blake3::hash(b"v").into(),
+                    value_bytes: b"v".to_vec(),
+                })
+                .unwrap();
         }
         writer.fsync().unwrap();
         drop(writer);
 
         let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
         let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
-        assert_eq!(result.max_txid, 20, "max_txid must be the highest txid seen");
+        assert_eq!(
+            result.max_txid, 20,
+            "max_txid must be the highest txid seen"
+        );
     }
 }

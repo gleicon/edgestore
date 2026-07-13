@@ -1,7 +1,7 @@
 use edgestore::{
-    EdgestoreConfig, Engine, VectorEngine, VectorRecord,
     vector::distance::Metric,
-    vector::types::{Dtype, encode_vector_record},
+    vector::types::{encode_vector_record, Dtype},
+    EdgestoreConfig, Engine, VectorEngine, VectorRecord,
 };
 use tempfile::TempDir;
 
@@ -18,7 +18,11 @@ fn encode_f32_vec(v: &[f32]) -> Vec<u8> {
 }
 
 fn make_rec(dims: u16, data: Vec<u8>) -> VectorRecord {
-    VectorRecord { dims, dtype: Dtype::F32, data }
+    VectorRecord {
+        dims,
+        dtype: Dtype::F32,
+        data,
+    }
 }
 
 #[test]
@@ -32,12 +36,16 @@ fn test_hnsw_build_and_search() {
     // Insert vectors
     let mut seed = 12345u64;
     for i in 0..n {
-        let v: Vec<f32> = (0..dims).map(|_| {
-            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-            ((seed % 100) as f32) / 100.0
-        }).collect();
+        let v: Vec<f32> = (0..dims)
+            .map(|_| {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                ((seed % 100) as f32) / 100.0
+            })
+            .collect();
         let bytes = encode_f32_vec(&v);
-        engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).unwrap();
+        engine
+            .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+            .unwrap();
     }
 
     // Build index
@@ -48,10 +56,12 @@ fn test_hnsw_build_and_search() {
     assert!(loaded, "Index should be cached after build");
 
     // Search using HNSW
-    let query_v: Vec<f32> = (0..dims).map(|_| {
-        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        ((seed % 100) as f32) / 100.0
-    }).collect();
+    let query_v: Vec<f32> = (0..dims)
+        .map(|_| {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            ((seed % 100) as f32) / 100.0
+        })
+        .collect();
     let query = make_rec(dims, encode_f32_vec(&query_v));
     let results = engine.vector_search(b"ns", &query, 5, Metric::L2).unwrap();
     assert!(!results.is_empty(), "HNSW search should return results");
@@ -65,9 +75,16 @@ fn test_hnsw_survives_restart() {
         let mut engine = open_engine(&dir);
         let dims = 4u16;
         for i in 0..20 {
-            let v = vec![i as f32 * 0.1, i as f32 * 0.2, i as f32 * 0.3, i as f32 * 0.4];
+            let v = vec![
+                i as f32 * 0.1,
+                i as f32 * 0.2,
+                i as f32 * 0.3,
+                i as f32 * 0.4,
+            ];
             let bytes = encode_f32_vec(&v);
-            engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).unwrap();
+            engine
+                .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+                .unwrap();
         }
         engine.build_vector_index(b"ns").unwrap();
     }
@@ -76,7 +93,10 @@ fn test_hnsw_survives_restart() {
     let mut engine = open_engine(&dir);
     let query = make_rec(4, encode_f32_vec(&[0.5, 1.0, 1.5, 2.0]));
     let results = engine.vector_search(b"ns", &query, 3, Metric::L2).unwrap();
-    assert!(!results.is_empty(), "Search after restart should return results");
+    assert!(
+        !results.is_empty(),
+        "Search after restart should return results"
+    );
 }
 
 #[test]
@@ -86,9 +106,16 @@ fn test_hnsw_falls_back_to_flat_scan() {
 
     let dims = 4u16;
     for i in 0..10 {
-        let v = vec![i as f32 * 0.1, i as f32 * 0.2, i as f32 * 0.3, i as f32 * 0.4];
+        let v = vec![
+            i as f32 * 0.1,
+            i as f32 * 0.2,
+            i as f32 * 0.3,
+            i as f32 * 0.4,
+        ];
         let bytes = encode_f32_vec(&v);
-        engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).unwrap();
+        engine
+            .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+            .unwrap();
     }
 
     // No index built — should fall back to flat scan
@@ -106,7 +133,9 @@ fn test_hnsw_metrics_tracked() {
     for i in 0..20 {
         let v = vec![i as f32 * 0.1; 4];
         let bytes = encode_f32_vec(&v);
-        engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).unwrap();
+        engine
+            .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+            .unwrap();
     }
 
     engine.build_vector_index(b"ns").unwrap();
@@ -120,7 +149,10 @@ fn test_hnsw_metrics_tracked() {
     let _results = engine.vector_search(b"ns", &query, 3, Metric::L2).unwrap();
 
     let metrics = engine.metrics();
-    assert!(metrics.vector_index_loads >= 1, "Index loads should be tracked after reload");
+    assert!(
+        metrics.vector_index_loads >= 1,
+        "Index loads should be tracked after reload"
+    );
 }
 
 #[test]
@@ -154,7 +186,7 @@ fn test_fdp_disabled_by_default() {
 
 #[test]
 fn test_fdp_mock_records_hint() {
-    use edgestore::{MockFdpBackend, PlacementHint, MemoryStorageBackend, StorageBackend};
+    use edgestore::{MemoryStorageBackend, MockFdpBackend, PlacementHint, StorageBackend};
 
     let inner = Box::new(MemoryStorageBackend::new());
     let backend = MockFdpBackend::new(inner);
@@ -177,7 +209,9 @@ fn test_hnsw_preload_vector_index() {
     for i in 0..20 {
         let v = vec![i as f32 * 0.1; 4];
         let bytes = encode_f32_vec(&v);
-        engine.vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes).unwrap();
+        engine
+            .vector_put(b"ns", &[i as u8], dims, Dtype::F32, &bytes)
+            .unwrap();
     }
 
     engine.build_vector_index(b"ns").unwrap();

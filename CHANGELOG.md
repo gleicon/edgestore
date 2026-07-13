@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`AsyncTieredEngine::flush_notify()`** — exposes a `tokio::sync::Notify` handle (via `notify_one`) wired to the local engine's `with_on_segment_flushed` at construction. Lets async callers (e.g. a caller-driven tiering worker) race a polling interval against this handle to react to a flush immediately instead of waiting up to the full interval — the same latency win `with_on_segment_flushed` gives replication anti-entropy, extended to any `AsyncTieredEngine` user. Always wired, no new constructor parameters. (`edgestore-tokio/src/tiered.rs`)
 
-## [1.3.0] - 2026-07-06
+- **`TieredEngine::local_only_get`/`local_only_range`/`local_only_prefix` + `get_needs_archived_fetch`/`range_needs_archived_fetch`/`prefix_needs_archived_fetch`** — `&self`-only fast-path helpers. `get`/`range`/`prefix` all previously required `&mut self` (and so `AsyncTieredEngine` always took a write lock for them) because their *slow* path can mutate (import-on-miss, or the ephemeral segment byte cache) — but the common case (local hit, or no archived segment overlaps the query at all) needs no mutation. `AsyncTieredEngine::get`/`range`/`prefix` now try this fast path under a read lock first, only escalating to the write lock and the full method when the slow path would actually do something. `get_needs_archived_fetch` uses point-containment semantics (`min_key ≤ key ≤ max_key`, inclusive both ends) rather than half-open range overlap, so a `get` miss on a key absent from all archived segments exits in a single `spawn_blocking` call instead of two. (`edgestore-tier/src/lib.rs`, `edgestore-tokio/src/tiered.rs`)
+
+## [1.4.0] - 2026-07-12
 
 ### Added
 

@@ -158,10 +158,12 @@ pub trait Tokenizer: Send + Sync {
 
 ### VEC-04: Document I8/SQ8 quantization for vector storage
 
-**Status:** Deferred — 2026-07-06
+**Status:** Complete — v1.2.1 (2026-07-05)
 **Rationale:** `Dtype::I8` already exists in `VectorRecord` and enables scalar quantization. This is undocumented. PQ (Product Quantization) requires a training phase and is deferred indefinitely.
 
 **Design:** Add a "Vector quantization" section to crate docs: show caller-side quantization from `f32` to `i8`, call `vector_put` with `Dtype::I8`. Document the storage/accuracy trade-off. No code change needed.
+
+**Resolution:** Full SQ8 documentation added to `Dtype` enum in `edgestore/src/vector/types.rs` — quantization recipe, trade-offs, explicit note that PQ is not supported.
 
 ---
 
@@ -178,28 +180,54 @@ pub trait Tokenizer: Send + Sync {
 
 ### API-02: Parquet export example
 
-**Status:** Deferred — 2026-07-06
+**Status:** Complete — v1.2.1 (2026-07-05)
 **Rationale:** No concrete user yet. Shows how to use `ImmutableEngine` as a bridge from EdgeStore segments to analytics tools (DuckDB, DataFusion). `parquet` crate as dev-dependency only — no production dep.
 
 **Design:** `examples/parquet_export.rs` — caller defines a schema struct, example iterates `ImmutableEngine::range()` over a segment and emits Parquet row groups. Document that EdgeStore does not own the schema; caller provides it.
+
+**Resolution:** `edgestore/examples/parquet_export.rs` added with Arrow/Parquet dev-deps (parquet 53, arrow-array 53, arrow-schema 53, anyhow 1).
 
 ---
 
 ### API-03: Async runtime cookbook
 
-**Status:** Deferred — 2026-07-06
+**Status:** Complete — v1.2.1 (2026-07-05)
 **Rationale:** `edgestore-tokio` already implements `spawn_blocking` patterns for axum/actix-web. Undocumented for first-time users.
 
 **Design:** Add "Using EdgeStore with async runtimes" section to `edgestore-tokio` crate docs: `spawn_blocking` for writes, `blocking_read` for reads, `AsyncTieredEngine` usage pattern. Include axum state example.
+
+**Resolution:** Axum, actix-web, and `spawn_blocking` cookbook added to `AsyncEngine` struct doc in `edgestore-tokio/src/lib.rs`.
 
 ---
 
 ### API-04: Tiering cookbook — monitor-and-archive pattern
 
-**Status:** Deferred — 2026-07-06
+**Status:** Complete — v1.2.1 (2026-07-05)
 **Rationale:** `TieredEngine` is caller-driven. Users need a reference implementation showing how to monitor local segment count/bytes, decide when to archive, and optionally strip text index.
 
 **Design:** Add "Tiering cookbook" to `edgestore-tier` crate docs (or `docs/tiering.md`): check `local().list_segment_metas().len()` vs threshold, call `archive_segments`, call `strip_text_index` if enabled. Show the monitor loop pattern for long-running services.
+
+**Resolution:** Monitor-and-archive pattern + time-windowed vector search with O-notation added to crate-level docs in `edgestore-tier/src/lib.rs`.
+
+---
+
+## Replication + Tiering Composition
+
+### REPL-01: `ReplicatedEngine` and `TieredEngine` don't compose
+
+**Status:** Deferred — 2026-07-07 (refined same day after further discussion — 2 of 3 original gaps have a clean resolution; one mechanical blocker remains)
+**Rationale:** Discovered while designing read-replica support for Pierre (a downstream caller). `ReplicatedEngine` (edgestore-repl, 1.3.0) wraps `Arc<Mutex<Engine>>` — a plain `Engine`, not `TieredEngine`. `AsyncTieredEngine` (edgestore-tokio) wraps `Arc<RwLock<TieredEngine>>`, whose `local: Engine` field isn't independently `Arc`'d.
+
+**Resolved without new edgestore types (design, not yet implemented):**
+1. ~~No composed type~~ — doesn't need one. Pattern: primary runs `TieredEngine` (hot local + S3 archive) + `HttpReplicationServer` (hot segments only); replica *also* runs its own `TieredEngine`, hot segments synced from primary via `AntiEntropyLoop`, cold/archived reads served independently through its own read-through to the *same* S3 bucket. Two nodes, two independent `TieredEngine`s, one shared S3 backend for cold data — no unification needed. **Caveat: S3-only.** Pierre's default backup (`BackupConfig::None`/`Filesystem`) is local-disk-only (`std::fs`, not network-reachable) — a replica on a separate host can't independently read a filesystem-backed archive at all. The "shared cold storage" pattern only holds for a network-accessible `RemoteStore` (S3). Filesystem-backed deployments need gap 2's fix extended to archived reads too, not just hot-segment serving.
+2. ~~Replication-vs-pruning conflict~~ — resolved without code changes (D33). The proxy design (`HttpReplicationServer::with_remote_store`) was considered but superseded: callers using shared S3 (Pierre's confirmed pattern) have both nodes operate their own `TieredEngine` with the same bucket, so pruned segments are always reachable from S3 directly. The prune race is not a correctness bug under shared S3. No `with_remote_store` needed. Proxy approach remains an option for non-S3 / filesystem-archive deployments only if that use case emerges.
+
+**Still blocking, the one real remaining gap:**
+3. **No way to expose a `TieredEngine`'s local engine for replication serving.** `HttpReplicationServer::new` needs an `Arc<Mutex<Engine>>` handle. `TieredEngine.local` is a plain field inside `Arc<RwLock<TieredEngine>>` (`AsyncTieredEngine`'s structure) — no way to hand `HttpReplicationServer` a lock onto the *same* live local engine a running `TieredEngine` is already serving ingest/queries from. Running a second, independent `Engine::open` on the same data directory is not a safe workaround (two engine instances, one WAL/segment directory — conflicting writers/readers, not just redundant).
+
+**Design (the actual remaining work):** `TieredEngine.local` needs to become independently shareable — most likely `Arc<Mutex<Engine>>` (or similar) instead of a plain field, so both `TieredEngine`'s own methods and an external `HttpReplicationServer` can operate against the identical live instance. This touches every `TieredEngine` method currently doing `self.local.get(...)` etc. directly (would need `.lock()` first) — a real internal restructuring of `edgestore-tier`, not additive. Once that exists, gaps 1 and 2's designs above are ready to wire up as-is.
+
+A caller (Pierre) needing only a *replica* that serves recent/hot data with no archived read-through at all can use plain `ReplicatedEngine` today, no new edgestore work required — gap 3 only blocks a *primary* that wants to serve replication while also tiering, and a *replica* that wants archived-read-through of its own.
 
 ---
 
@@ -225,6 +253,26 @@ pub trait Tokenizer: Send + Sync {
 
 **Status:** Implemented in config but not benchmarked
 **Note:** `compression_wal: Compression::Lz4` exists in EdgestoreConfig but baseline benchmarks use uncompressed WAL.
+
+---
+
+## Release Readiness
+
+### REL-01: Publish 1.4.0 — `flush_notify` + `get`/`range`/`prefix` lock-split
+
+**Status:** Complete — v1.4.0 (2026-07-12)
+**Rationale:** Two capabilities are fully implemented and already documented under this repo's own `## [Unreleased]` CHANGELOG.md section, but the crates.io publish of `edgestore`/`edgestore-tokio`/`edgestore-repl`/`edgestore-tier` is still pinned at `1.3.0` (2026-07-06), which predates both — `[workspace.package] version` in `Cargo.toml` also still reads `1.3.0` locally despite commits landing since. Pierre hit this trying to move its own `Cargo.toml` off sibling-directory `path = "../edgestore/..."` dependencies onto real crates.io versions (for a "hand off a pre-built binary, buildable from a solo checkout" release story) and found the published `1.3.0` doesn't actually have `flush_notify()`, which Pierre's `backup` worker already depends on.
+
+**What's staged, per this repo's own `[Unreleased]` CHANGELOG.md entry:**
+1. `AsyncTieredEngine::flush_notify()` (`edgestore-tokio/src/tiered.rs`) — committed at `HEAD` (`e19564e`).
+2. `TieredEngine::local_only_get`/`local_only_range`/`local_only_prefix` + `range_needs_archived_fetch`/`prefix_needs_archived_fetch` (`edgestore-tier/src/lib.rs`, `edgestore-tokio/src/tiered.rs`) — **not yet committed**; `git status` shows these as working-tree modifications only.
+
+**Ask — please review on this repo's own terms, not as a rubber stamp for an external caller's convenience:**
+- `edgestore` is a generic embedded-DB library; the lock-split in particular changes locking behavior for *every* `AsyncTieredEngine::get`/`range`/`prefix` caller, not just Pierre's use case. Worth review on general-purpose correctness/design merits (is `&self`-only fast-path-then-escalate the right shape for all callers, not just Pierre's read-heavy dashboard pattern?), independent of whether it happens to unblock a downstream caller.
+- If accepted: commit the currently-uncommitted lock-split work, bump `version` `1.3.0` → `1.4.0` (both additions are additive public API, no breaking changes spotted, so minor per semver), move `[Unreleased]` to a dated `[1.4.0]` entry, `cargo publish` in dependency order (`edgestore` → `edgestore-tier`/`edgestore-repl` → `edgestore-tokio`).
+- If rejected or reworked: Pierre's `backup` worker's `flush_notify` usage would need to fall back to interval-only polling (its pre-existing behavior) rather than immediate flush-triggered archiving — not a hard dependency, a latency nicety.
+
+**Not blocking anything today** — Pierre reverted to path dependencies in the meantime so its own build/demo prep keeps moving; this is purely about the eventual "give the binary" release story, not today's build.
 
 ---
 

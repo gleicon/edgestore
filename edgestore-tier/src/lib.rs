@@ -453,6 +453,88 @@ impl TieredEngine {
         Ok(())
     }
 
+    // ── Read-only fast-path helpers ──────────────────────────────────────────
+    //
+    // `get`/`range`/`prefix` all require `&mut self` because their slow path can
+    // mutate (`fetch_and_import`, or the ephemeral segment byte cache). But the
+    // common case — no archived segment overlaps the query, or the key's already
+    // local — needs no mutation at all. These `&self` methods let a caller (e.g.
+    // `AsyncTieredEngine`) try that common case under a read lock first, only
+    // escalating to a write lock when the slow path would actually do something —
+    // cutting lock contention between concurrent readers and the single writer for
+    // the case that dominates in practice.
+
+    /// Local-only get, no archived read-through. A hit here is always a complete,
+    /// correct answer (unlike range/prefix, a single key either has a definitive
+    /// local value or doesn't — there's no separate archived-merge step for a
+    /// found key). A `None` here does *not* mean the key is absent — the caller
+    /// must fall back to the full `get()` to check archived segments before
+    /// concluding that.
+    pub fn local_only_get(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
+        self.local.get(ns, key)
+    }
+
+    /// True if any archived segment overlapping `[enc_start, enc_end)` hasn't
+    /// been fetched into the ephemeral cache yet — i.e. whether
+    /// `ephemeral_engine_for_range` would need to do any work for this range, or
+    /// could return `None` immediately. The single source of truth for this
+    /// condition, shared by the mutating ephemeral-fetch path and the `&self`
+    /// fast-path checks below — the two must never diverge, since a fast-path
+    /// check that's wrong in the "no overlap" direction would silently drop
+    /// archived data from a query's results.
+    fn has_unfetched_archived_overlap(&self, enc_start: &[u8], enc_end: &[u8]) -> bool {
+        self.archived
+            .iter()
+            .any(|seg| seg.max_key.as_slice() >= enc_start && seg.min_key.as_slice() < enc_end && !self.fetched.contains_key(&seg.hash))
+    }
+
+    /// True if any archived segment whose key range contains `enc_key` (inclusive
+    /// on both ends) hasn't been fetched yet. Point-containment uses `<=` on both
+    /// bounds — distinct from the half-open range check in
+    /// `has_unfetched_archived_overlap`, where `min_key < enc_end` would falsely
+    /// exclude a segment whose min_key equals the queried key.
+    fn has_unfetched_archived_point(&self, enc_key: &[u8]) -> bool {
+        self.archived
+            .iter()
+            .any(|seg| seg.min_key.as_slice() <= enc_key && seg.max_key.as_slice() >= enc_key && !self.fetched.contains_key(&seg.hash))
+    }
+
+    /// True if answering `get(ns, key)` might require fetching an archived segment.
+    /// When `false`, `local_only_get` returning `None` is the definitive answer —
+    /// the caller can skip the write-lock escalation entirely.
+    pub fn get_needs_archived_fetch(&self, ns: &[u8], key: &[u8]) -> bool {
+        let enc_key = encode_key(ns, key);
+        self.has_unfetched_archived_point(&enc_key)
+    }
+
+    /// True if answering `range(ns, start, end)` would need to fetch/cache an
+    /// archived segment. When `false`, `local_only_range` alone is already the
+    /// complete, correct answer.
+    pub fn range_needs_archived_fetch(&self, ns: &[u8], start: &[u8], end: &[u8]) -> bool {
+        let enc_start = encode_key(ns, start);
+        let enc_end = encode_key(ns, end);
+        self.has_unfetched_archived_overlap(&enc_start, &enc_end)
+    }
+
+    /// Local-only range scan, no archived read-through. Only a complete answer
+    /// when `range_needs_archived_fetch` is `false` for the same arguments.
+    pub fn local_only_range(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+        self.local.range(ns, start, end)
+    }
+
+    /// Same condition as `range_needs_archived_fetch`, for `prefix`.
+    pub fn prefix_needs_archived_fetch(&self, ns: &[u8], prefix: &[u8]) -> bool {
+        let enc_prefix = encode_key(ns, prefix);
+        let enc_end = edgestore::types::prefix_upper_bound(&enc_prefix).unwrap_or_else(|| vec![0xFF; enc_prefix.len() + 1]);
+        self.has_unfetched_archived_overlap(&enc_prefix, &enc_end)
+    }
+
+    /// Local-only prefix scan, no archived read-through. Only a complete answer
+    /// when `prefix_needs_archived_fetch` is `false` for the same arguments.
+    pub fn local_only_prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+        self.local.prefix(ns, prefix)
+    }
+
     // ── Ephemeral archived-segment reads ────────────────────────────────────
 
     /// Build an ephemeral `ImmutableEngine` from archived segments that overlap

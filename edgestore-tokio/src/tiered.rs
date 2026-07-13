@@ -67,8 +67,30 @@ impl AsyncTieredEngine {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let inner = self.inner.clone();
+
+        // Fast path: under a read lock, check both the local store and whether any
+        // archived segment could even contain the key. If local hit → done (1 spawn).
+        // If local miss AND no archived segment contains the key → return None (1 spawn).
+        // Only escalate to the write lock when an archived segment might have the key.
+        let (inner2, ns2, key2) = (inner.clone(), ns.clone(), key.clone());
+        let fast = tokio::task::spawn_blocking(move || {
+            let engine = inner2.blocking_read();
+            let needs_archive = engine.get_needs_archived_fetch(&ns2, &key2);
+            let local_val = engine.local_only_get(&ns2, &key2)?;
+            Ok::<_, EdgestoreError>((local_val, needs_archive))
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))??;
+
+        let (local_val, needs_archive) = fast;
+        if local_val.is_some() || !needs_archive {
+            return Ok(local_val);
+        }
+
+        // Slow path: an archived segment may contain the key — escalate to the
+        // write lock and the full `get()`, which handles fetch/import.
         tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write(); // get() may mutate (import on miss)
+            let mut engine = inner.blocking_write();
             engine.get(&ns, &key)
         })
         .await
@@ -118,6 +140,28 @@ impl AsyncTieredEngine {
         let start = start.to_vec();
         let end = end.to_vec();
         let inner = self.inner.clone();
+
+        // Fast path: under a read lock, check whether any archived segment would
+        // actually need fetching for this range; if not, the local-only scan is
+        // already the complete answer — the common case (query within the local
+        // retention window, nothing archived overlaps it yet).
+        let (inner2, ns2, start2, end2) = (inner.clone(), ns.clone(), start.clone(), end.clone());
+        let fast = tokio::task::spawn_blocking(move || {
+            let engine = inner2.blocking_read();
+            if engine.range_needs_archived_fetch(&ns2, &start2, &end2) {
+                None
+            } else {
+                Some(engine.local_only_range(&ns2, &start2, &end2))
+            }
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?;
+        if let Some(result) = fast {
+            return result;
+        }
+
+        // Slow path: an archived segment needs fetching/caching — escalate to
+        // the write lock and the full `range()`.
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.range(&ns, &start, &end)
@@ -130,6 +174,23 @@ impl AsyncTieredEngine {
         let ns = ns.to_vec();
         let prefix = prefix.to_vec();
         let inner = self.inner.clone();
+
+        // Same fast/slow split as range() — see there for the reasoning.
+        let (inner2, ns2, prefix2) = (inner.clone(), ns.clone(), prefix.clone());
+        let fast = tokio::task::spawn_blocking(move || {
+            let engine = inner2.blocking_read();
+            if engine.prefix_needs_archived_fetch(&ns2, &prefix2) {
+                None
+            } else {
+                Some(engine.local_only_prefix(&ns2, &prefix2))
+            }
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))?;
+        if let Some(result) = fast {
+            return result;
+        }
+
         tokio::task::spawn_blocking(move || {
             let mut engine = inner.blocking_write();
             engine.prefix(&ns, &prefix)

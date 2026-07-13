@@ -1,0 +1,49 @@
+[graph]
+targets = []
+
+[advisories]
+version = 2
+# Deny all advisories unless explicitly ignored below.
+# New vulnerabilities in any dependency will fail CI.
+yanked = "deny"
+
+ignore = [
+    # rustls-webpki 0.101.7 pulled transitively by aws-smithy-http-client's
+    # legacy hyper-0.14/rustls-0.21 compatibility layer.  The modern hyper-1.x
+    # / rustls-0.23 / rustls-webpki-0.103 path is used at runtime; the legacy
+    # code is compiled in but never reached.  Tracked upstream:
+    # https://github.com/smithy-lang/smithy-rs/issues
+    "RUSTSEC-2023-0052",  # rustls-webpki: CPU DoS via cert path building
+    "RUSTSEC-2024-0336",  # rustls: large cert chains CPU bottleneck
+]
+
+[licenses]
+version = 2
+# Warn rather than block — license auditing is a separate concern.
+# Flip to "deny" and add entries when you want strict enforcement.
+unlicensed = "warn"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "OpenSSL",
+    "Zlib",
+]
+deny = []
+copyleft = "warn"
+
+[bans]
+multiple-versions = "warn"   # AWS SDK ships dual hyper/rustls stacks; warn, don't block
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

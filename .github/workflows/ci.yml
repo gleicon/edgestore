@@ -52,6 +52,17 @@ jobs:
       - name: cargo test (edgestore-tokio tier feature)
         run: cargo test -p edgestore-tokio --features tier
 
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features
+
   msrv:
     name: MSRV (1.95.0)
     runs-on: ubuntu-latest

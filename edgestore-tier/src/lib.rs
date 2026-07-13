@@ -117,6 +117,8 @@ use edgestore::{Engine, ImmutableEngine, ImportResult, RemoteStore};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 
+type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
+
 #[cfg(test)]
 use edgestore::EdgestoreConfig;
 
@@ -315,7 +317,7 @@ impl TieredEngine {
         ns: &[u8],
         start: &[u8],
         end: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    ) -> Result<KvPairs, EdgestoreError> {
         let local = self.local.range(ns, start, end)?;
         let archived = self.range_archived(ns, start, end)?;
         Ok(merge_local_wins(local, archived))
@@ -330,7 +332,7 @@ impl TieredEngine {
         &mut self,
         ns: &[u8],
         prefix: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    ) -> Result<KvPairs, EdgestoreError> {
         let local = self.local.prefix(ns, prefix)?;
         let archived = self.prefix_archived(ns, prefix)?;
         Ok(merge_local_wins(local, archived))
@@ -529,7 +531,7 @@ impl TieredEngine {
         ns: &[u8],
         start: &[u8],
         end: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    ) -> Result<KvPairs, EdgestoreError> {
         self.local.range(ns, start, end)
     }
 
@@ -547,7 +549,7 @@ impl TieredEngine {
         &self,
         ns: &[u8],
         prefix: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    ) -> Result<KvPairs, EdgestoreError> {
         self.local.prefix(ns, prefix)
     }
 
@@ -613,7 +615,7 @@ impl TieredEngine {
         ns: &[u8],
         start: &[u8],
         end: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    ) -> Result<KvPairs, EdgestoreError> {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
         match self.ephemeral_engine_for_range(&enc_start, &enc_end)? {
@@ -627,7 +629,7 @@ impl TieredEngine {
         &mut self,
         ns: &[u8],
         prefix: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+    ) -> Result<KvPairs, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
         // Compute the same upper bound ImmutableEngine::prefix uses internally.
         let enc_end = edgestore::types::prefix_upper_bound(&enc_prefix)
@@ -838,9 +840,9 @@ fn synthetic_meta(hash: &[u8; 32]) -> edgestore::types::SegmentMeta {
 /// Local data is always the authoritative version — it was either written after the
 /// archived copy, or is the same data. The result is sorted by key.
 fn merge_local_wins(
-    local: Vec<(Vec<u8>, Vec<u8>)>,
-    archived: Vec<(Vec<u8>, Vec<u8>)>,
-) -> Vec<(Vec<u8>, Vec<u8>)> {
+    local: KvPairs,
+    archived: KvPairs,
+) -> KvPairs {
     if archived.is_empty() {
         return local;
     }

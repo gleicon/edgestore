@@ -119,9 +119,12 @@ impl BloomFilter {
     }
 
     fn hash_pair(&self, item: &[u8]) -> (u64, u64) {
-        let mut h1 = self.seed.build_hasher();
-        item.hash(&mut h1);
-        let combined = h1.finish();
+        #[allow(clippy::manual_hash_one)]
+        let combined = {
+            let mut h1 = self.seed.build_hasher();
+            item.hash(&mut h1);
+            h1.finish()
+        };
         // Split into two independent-enough 32-bit halves for double hashing.
         (combined >> 32, combined & 0xFFFF_FFFF)
     }

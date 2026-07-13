@@ -63,6 +63,7 @@ pub struct Engine {
     /// Optional callback fired after every successful segment flush (both explicit
     /// and auto-triggered). Receives the new segment's metadata. Use to wake a
     /// replication loop, update metrics, or trigger downstream processing.
+    #[allow(clippy::type_complexity)]
     on_segment_flushed: Option<Box<dyn Fn(&crate::types::SegmentMeta) + Send + Sync>>,
 }
 

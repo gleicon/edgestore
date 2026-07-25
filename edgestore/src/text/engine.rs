@@ -14,6 +14,33 @@ pub struct TextSearchResult {
     pub score: f32,
 }
 
+/// A matched text fragment extracted from a document.
+///
+/// `text` is a UTF-8 string slice around the match. `byte_start` and `byte_end`
+/// mark the half-open range of the match within `text`. Callers can use these to
+/// apply highlighting (bold, ANSI color, etc.) without re-scanning the document.
+#[derive(Debug, Clone)]
+pub struct Snippet {
+    /// The context window: `context_chars` characters before and after the match.
+    pub text: String,
+    /// Start of the matching term within `text` (byte offset).
+    pub byte_start: usize,
+    /// End of the matching term within `text` (byte offset, exclusive).
+    pub byte_end: usize,
+}
+
+/// A search result that includes extracted snippets alongside the BM25 score.
+#[derive(Debug, Clone)]
+pub struct SnippetResult {
+    /// Document key.
+    pub doc_id: Vec<u8>,
+    /// BM25 relevance score.
+    pub score: f32,
+    /// Extracted text snippets for the query terms found in this document.
+    /// Empty when the stored index was written in v1/v2 format (no position data).
+    pub snippets: Vec<Snippet>,
+}
+
 /// Search options for fine-grained control over text search behavior.
 #[derive(Debug, Clone, Default)]
 pub struct SearchOptions {

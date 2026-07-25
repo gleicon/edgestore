@@ -152,6 +152,9 @@ pub struct TieredEngine {
     /// When true, `archive_segments` calls `Engine::strip_text_index` on successfully
     /// uploaded segments to reclaim local disk space used by the BM25 index records.
     strip_text_after_archive: bool,
+    /// When true, `archive_segments` calls `Engine::strip_vector_index` on successfully
+    /// uploaded segments to reclaim local disk space used by vector index records.
+    strip_vector_after_archive: bool,
     /// LRU cache of raw segment bytes downloaded for ephemeral range/prefix reads.
     segment_cache: LruCache<[u8; 32], Vec<u8>>,
     /// Current total bytes resident in `segment_cache`.
@@ -170,6 +173,7 @@ impl TieredEngine {
             fetched: HashMap::new(),
             upload_sidecars: false,
             strip_text_after_archive: false,
+            strip_vector_after_archive: false,
             // Item cap is high enough that byte-based eviction always fires first;
             // at segment_size_bytes=16MB and a 32MB default byte budget, the byte
             // loop evicts after ~2 entries — never 65536. This prevents a second
@@ -214,6 +218,20 @@ impl TieredEngine {
     /// the merged `__index__` sidecar has been flushed to a later segment.
     pub fn with_text_stripping(mut self, enabled: bool) -> Self {
         self.strip_text_after_archive = enabled;
+        self
+    }
+
+    /// Enable or disable automatic vector-index stripping after archiving.
+    ///
+    /// When `true`, each segment successfully uploaded by `archive_segments` has its
+    /// embedded vector records (`__vec__*` namespace) removed from the local copy via
+    /// `Engine::strip_vector_index`. The remote copy retains the original data.
+    ///
+    /// Use this to reclaim local disk space for the HNSW / flat vector data once a
+    /// segment is cold. Vector queries on stripped segments will fall through to the
+    /// remote archive. Combine with `with_text_stripping` to strip both indexes.
+    pub fn with_vector_stripping(mut self, enabled: bool) -> Self {
+        self.strip_vector_after_archive = enabled;
         self
     }
 
@@ -396,6 +414,16 @@ impl TieredEngine {
                 if let Err(e) = self.local.strip_text_index(meta.segment_id) {
                     eprintln!(
                         "[edgestore-tier] strip_text_index skipped for segment {}: {}",
+                        meta.segment_id, e
+                    );
+                }
+            }
+
+            // Optionally strip vector index records from the local copy to reclaim disk.
+            if self.strip_vector_after_archive {
+                if let Err(e) = self.local.strip_vector_index(meta.segment_id) {
+                    eprintln!(
+                        "[edgestore-tier] strip_vector_index skipped for segment {}: {}",
                         meta.segment_id, e
                     );
                 }
@@ -820,6 +848,7 @@ fn synthetic_meta(hash: &[u8; 32]) -> edgestore::types::SegmentMeta {
         merkle_root: vec![0u8; 32],
         created_at: 0,
         text_index_stripped: false,
+        vector_index_stripped: false,
     }
 }
 

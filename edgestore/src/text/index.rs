@@ -15,6 +15,9 @@ pub struct Posting {
     pub doc_len: u32,
     /// Facet values attached to this document.
     pub facets: HashMap<String, FacetValue>,
+    /// Byte-level positions of this term in the document text (v3 format).
+    /// Empty when deserialized from a v1/v2 index — snippet extraction requires re-indexing.
+    pub positions: Vec<u32>,
 }
 
 /// In-memory inverted index for a namespace.
@@ -116,18 +119,23 @@ impl InvertedIndex {
     ) {
         self.bloom_insert(&doc_id);
 
-        // Count term frequencies
-        let mut term_counts: HashMap<String, u32> = HashMap::new();
+        // Collect per-term positions and counts in one pass.
+        let mut term_data: HashMap<String, Vec<u32>> = HashMap::new();
         for token in tokens {
-            *term_counts.entry(token.term.clone()).or_insert(0) += 1;
+            term_data
+                .entry(token.term.clone())
+                .or_default()
+                .push(token.position as u32);
         }
 
-        for (term, freq) in term_counts {
+        for (term, positions) in term_data {
+            let freq = positions.len() as u32;
             let posting = Posting {
                 doc_id: doc_id.clone(),
                 term_freq: freq,
                 doc_len,
                 facets: facets.clone(),
+                positions,
             };
             self.postings.entry(term).or_default().push(posting);
         }
@@ -145,11 +153,11 @@ impl InvertedIndex {
         }
     }
 
-    /// Serialize to bytes.
+    /// Serialize to bytes (v3 format: includes term positions per posting).
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"INVX");
-        buf.extend_from_slice(&2u16.to_le_bytes()); // version 2: includes sidecar_lsn
+        buf.extend_from_slice(&3u16.to_le_bytes()); // version 3: adds positions
         buf.extend_from_slice(&self.sidecar_lsn.to_le_bytes());
         buf.extend_from_slice(&self.total_docs.to_le_bytes());
         buf.extend_from_slice(&self.total_doc_len.to_le_bytes());
@@ -187,6 +195,11 @@ impl InvertedIndex {
                         }
                     }
                 }
+                // v3: term positions
+                buf.extend_from_slice(&(p.positions.len() as u16).to_le_bytes());
+                for pos in &p.positions {
+                    buf.extend_from_slice(&pos.to_le_bytes());
+                }
             }
         }
 
@@ -223,8 +236,8 @@ impl InvertedIndex {
         }
         let version = u16::from_le_bytes(read!(2).try_into().unwrap());
         let sidecar_lsn = match version {
-            1 => 0, // v1 had no sidecar_lsn field
-            2 => u64::from_le_bytes(read!(8).try_into().unwrap()),
+            1 => 0,
+            2 | 3 => u64::from_le_bytes(read!(8).try_into().unwrap()),
             _ => {
                 return Err(EdgestoreError::CorruptData(format!(
                     "inverted index: unsupported version {}",
@@ -283,11 +296,23 @@ impl InvertedIndex {
                     };
                     facets.insert(k, v);
                 }
+                // v3: positions; v1/v2: empty (snippets unavailable without re-indexing)
+                let positions = if version >= 3 {
+                    let pos_count = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
+                    let mut pos_vec = Vec::with_capacity(pos_count);
+                    for _ in 0..pos_count {
+                        pos_vec.push(u32::from_le_bytes(read!(4).try_into().unwrap()));
+                    }
+                    pos_vec
+                } else {
+                    Vec::new()
+                };
                 posting_vec.push(Posting {
                     doc_id,
                     term_freq,
                     doc_len,
                     facets,
+                    positions,
                 });
             }
             postings.insert(term, posting_vec);

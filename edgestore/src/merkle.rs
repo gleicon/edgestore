@@ -104,6 +104,7 @@ mod tests {
             merkle_root: merkle_root.to_vec(),
             created_at: 0,
             text_index_stripped: false,
+            vector_index_stripped: false,
         }
     }
 

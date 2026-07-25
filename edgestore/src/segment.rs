@@ -346,6 +346,7 @@ impl SegmentWriter {
             merkle_root,
             created_at,
             text_index_stripped: false,
+            vector_index_stripped: false,
         };
 
         let meta_file = std::fs::File::create(self.meta_path())?;

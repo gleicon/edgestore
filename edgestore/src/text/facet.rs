@@ -41,6 +41,7 @@ mod tests {
             term_freq: 1,
             doc_len: 10,
             facets,
+            positions: vec![],
         }
     }
 

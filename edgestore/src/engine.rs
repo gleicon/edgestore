@@ -24,8 +24,49 @@ fn next_wal_path(db_path: &Path, lsn: Lsn) -> PathBuf {
 
 /// Alias to reduce type-complexity warnings on public KV scan APIs.
 type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
+/// Alias for budget-limited KV scan results.
+type BudgetedKvScan = BudgetedScan<(Vec<u8>, Vec<u8>)>;
 
 const AVG_ENTRY_SIZE_ESTIMATE: u64 = 256;
+
+/// Accounting data returned alongside query results.
+///
+/// All byte counts are "bytes materialized" — the sum of raw key+value bytes for each
+/// record examined — not physical bytes read from disk (which include block padding and
+/// index structures). Use these values for relative comparisons and cost budgeting, not
+/// as exact I/O measurements.
+#[derive(Debug, Clone, Default)]
+pub struct QueryStats {
+    /// Number of immutable segment files touched by the query (0 = memtable-only hit).
+    pub segments_scanned: u32,
+    /// Approximate bytes of record data examined (key + value, before filtering).
+    pub bytes_scanned: u64,
+    /// Number of records examined before filtering (includes tombstones and duplicates).
+    pub items_examined: u64,
+}
+
+/// Per-query byte and item scan limits for bounded queries.
+///
+/// Both limits are checked after each output item is added. When a limit is hit the
+/// query stops and returns what it has collected so far (see [`BudgetedScan`]).
+#[derive(Debug, Clone, Default)]
+pub struct ScanBudget {
+    /// Stop after emitting this many output items (post-filter).
+    pub max_items: Option<usize>,
+    /// Stop after examining approximately this many bytes of record data.
+    pub max_bytes: Option<u64>,
+}
+
+/// Result of a budget-limited scan.
+#[derive(Debug, Clone)]
+pub struct BudgetedScan<T> {
+    /// Items collected before the budget was exhausted (or all items if budget was not hit).
+    pub items: Vec<T>,
+    /// True if the query was stopped by the budget before all matching records were visited.
+    pub truncated: bool,
+    /// Query accounting — same semantics as [`QueryStats`].
+    pub stats: QueryStats,
+}
 
 /// Result of importing a remote segment via `Engine::import_segment`.
 pub enum ImportResult {
@@ -333,6 +374,55 @@ impl Engine {
         r
     }
 
+    /// Get with cost accounting. Returns the value (if any) and [`QueryStats`].
+    ///
+    /// `stats.segments_scanned` is 1 if the key was found in a segment, 0 for a
+    /// memtable hit or a miss; `bytes_scanned` is the key+value size of the found entry.
+    pub fn get_with_stats(
+        &self,
+        ns: &[u8],
+        key: &[u8],
+    ) -> Result<(Option<Vec<u8>>, QueryStats), EdgestoreError> {
+        let encoded_key = encode_key(ns, key);
+        if let Some(entry) = self.memtable.get(&encoded_key) {
+            let val = if entry.op == crate::types::Operation::Delete {
+                None
+            } else {
+                entry.value.clone()
+            };
+            let bytes =
+                val.as_ref().map(|v| v.len() as u64).unwrap_or(0) + encoded_key.len() as u64;
+            return Ok((
+                val,
+                QueryStats {
+                    segments_scanned: 0,
+                    bytes_scanned: bytes,
+                    items_examined: 1,
+                },
+            ));
+        }
+        match self.segment_store.get(&encoded_key)? {
+            Some(entry) => {
+                let val = if entry.op == crate::types::Operation::Delete {
+                    None
+                } else {
+                    entry.value.clone()
+                };
+                let bytes =
+                    val.as_ref().map(|v| v.len() as u64).unwrap_or(0) + encoded_key.len() as u64;
+                Ok((
+                    val,
+                    QueryStats {
+                        segments_scanned: 1,
+                        bytes_scanned: bytes,
+                        items_examined: 1,
+                    },
+                ))
+            }
+            None => Ok((None, QueryStats::default())),
+        }
+    }
+
     /// Get a value into an existing buffer, avoiding a fresh `Vec<u8>` allocation.
     ///
     /// Returns `true` if the key was found and `buf` was filled. Returns `false`
@@ -382,6 +472,29 @@ impl Engine {
         r
     }
 
+    /// Range scan with cost accounting. Returns results + [`QueryStats`].
+    pub fn range_with_stats(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<(KvPairs, QueryStats), EdgestoreError> {
+        self.range_core(ns, start, end, None)
+            .map(|b| (b.items, b.stats))
+    }
+
+    /// Range scan that stops when the [`ScanBudget`] is exhausted.
+    /// Returns a [`BudgetedScan`] that indicates whether the result was truncated.
+    pub fn range_budgeted(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        budget: &ScanBudget,
+    ) -> Result<BudgetedKvScan, EdgestoreError> {
+        self.range_core(ns, start, end, Some(budget))
+    }
+
     /// Lazy expiry: TTL-expired records appear in prefix results until compaction removes their cohort.
     pub fn prefix(&self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
         let t0 = Instant::now();
@@ -394,6 +507,26 @@ impl Engine {
             std::sync::atomic::Ordering::Relaxed,
         );
         r
+    }
+
+    /// Prefix scan with cost accounting. Returns results + [`QueryStats`].
+    pub fn prefix_with_stats(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+    ) -> Result<(KvPairs, QueryStats), EdgestoreError> {
+        self.prefix_core(ns, prefix, None)
+            .map(|b| (b.items, b.stats))
+    }
+
+    /// Prefix scan that stops when the [`ScanBudget`] is exhausted.
+    pub fn prefix_budgeted(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+        budget: &ScanBudget,
+    ) -> Result<BudgetedKvScan, EdgestoreError> {
+        self.prefix_core(ns, prefix, Some(budget))
     }
 
     /// Flush the current memtable to a new segment file.
@@ -615,6 +748,82 @@ impl Engine {
         self.segment_store.remove_segment(segment_id)
     }
 
+    /// Strip the embedded vector index from a local segment, rewriting it without
+    /// `__vec__` namespace records. Mirrors [`Engine::strip_text_index`] for the vector
+    /// tier: call this after `archive_segments` to reclaim local disk space while the
+    /// full vector data remains available in the remote archive.
+    ///
+    /// Returns the (possibly rewritten) segment metadata.
+    /// If the segment has no vector records, or if it was already stripped, returns the
+    /// original metadata unchanged. If ALL records are vector records (no KV or text),
+    /// the segment is returned unchanged — the caller should decide whether to prune it.
+    pub fn strip_vector_index(
+        &mut self,
+        segment_id: u64,
+    ) -> Result<crate::types::SegmentMeta, EdgestoreError> {
+        use crate::types::decode_key;
+
+        let old_meta = self
+            .segment_store
+            .list_segment_metas()
+            .iter()
+            .find(|m| m.segment_id == segment_id)
+            .ok_or_else(|| {
+                EdgestoreError::InvalidOperation(format!(
+                    "strip_vector_index: segment {} not found",
+                    segment_id
+                ))
+            })?
+            .clone();
+
+        if old_meta.vector_index_stripped {
+            return Ok(old_meta);
+        }
+
+        let entries = {
+            let reader = self.segment_store.reader_for(segment_id).ok_or_else(|| {
+                EdgestoreError::InvalidOperation(format!(
+                    "strip_vector_index: no reader for segment {}",
+                    segment_id
+                ))
+            })?;
+            reader.range_scan(&[], &vec![0xFF; 1024])?
+        };
+
+        // Filter out __vec__ namespace records.
+        let filtered: Vec<(Vec<u8>, crate::types::MemEntry)> = entries
+            .into_iter()
+            .filter(|(k, _)| match decode_key(k) {
+                Ok((ns, _)) => !ns.starts_with(b"__vec__"),
+                Err(_) => true,
+            })
+            .collect();
+
+        // Nothing to strip, or segment is vector-only — return unchanged.
+        if filtered.len() == old_meta.record_count as usize || filtered.is_empty() {
+            return Ok(old_meta);
+        }
+
+        let new_id = self.segment_store.alloc_segment_id();
+        let mut writer = crate::segment::SegmentWriter::new(
+            self.segment_store.base_path().to_path_buf(),
+            new_id,
+            self.config.cohort_window_secs,
+        );
+        let mut new_meta = writer.flush(&filtered)?;
+        new_meta.vector_index_stripped = true;
+
+        let new_reader = crate::segment::SegmentReader::open(
+            self.segment_store.base_path().to_path_buf(),
+            new_id,
+        )?;
+
+        self.segment_store
+            .replace_segment(segment_id, new_meta.clone(), new_reader)?;
+
+        Ok(new_meta)
+    }
+
     // ── Private implementations ───────────────────────────────────────────────
 
     fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
@@ -770,15 +979,31 @@ impl Engine {
     }
 
     fn range_inner(&self, ns: &[u8], start: &[u8], end: &[u8]) -> Result<KvPairs, EdgestoreError> {
+        self.range_core(ns, start, end, None).map(|b| b.items)
+    }
+
+    fn prefix_inner(&self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
+        self.prefix_core(ns, prefix, None).map(|b| b.items)
+    }
+
+    // Core scan implementation shared by range / range_with_stats / range_budgeted.
+    // PERFORMANCE: merge two sorted lists (segment + memtable), then dedup by key keeping
+    // highest LSN. DO NOT use HashMap — both inputs are already sorted; merge+dedup is O(n)
+    // with 2 allocations vs HashMap's O(n log n) with 4.
+    // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
+    fn range_core(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        budget: Option<&ScanBudget>,
+    ) -> Result<BudgetedKvScan, EdgestoreError> {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
 
-        // PERFORMANCE: merge two sorted lists, then deduplicate by key keeping highest LSN.
-        // DO NOT use HashMap here — both segment and memtable results are already sorted.
-        // HashMap + sort() is O(n log n) with 4 allocations. Merge + dedup is O(n) with 2 allocations.
-        // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
         let seg_results = self.segment_store.range_scan(&enc_start, &enc_end)?;
         let mem_results = self.memtable.range(&enc_start, &enc_end);
+        let has_seg = !seg_results.is_empty();
 
         let mut merged: Vec<(Vec<u8>, MemEntry)> =
             Vec::with_capacity(seg_results.len() + mem_results.len());
@@ -800,12 +1025,29 @@ impl Engine {
         }
 
         let mut out = Vec::new();
+        let mut stats = QueryStats {
+            segments_scanned: if has_seg { 1 } else { 0 },
+            ..Default::default()
+        };
+        let mut truncated = false;
         let mut i = 0usize;
         while i < merged.len() {
             let (k, e) = &merged[i];
             let mut best_entry = e.clone();
+            let entry_key_len = k.len() as u64;
+            let entry_val_len = e.value.as_ref().map(|v| v.len() as u64).unwrap_or(0);
+            stats.bytes_scanned += entry_key_len + entry_val_len;
+            stats.items_examined += 1;
             i += 1;
             while i < merged.len() && &merged[i].0 == k {
+                let v_len = merged[i]
+                    .1
+                    .value
+                    .as_ref()
+                    .map(|v| v.len() as u64)
+                    .unwrap_or(0);
+                stats.bytes_scanned += merged[i].0.len() as u64 + v_len;
+                stats.items_examined += 1;
                 if merged[i].1.lsn > best_entry.lsn {
                     best_entry = merged[i].1.clone();
                 }
@@ -817,17 +1059,32 @@ impl Engine {
             if let Some(val) = &best_entry.value {
                 let (_, raw_key) = decode_key(k)?;
                 out.push((raw_key, val.clone()));
+                if let Some(b) = budget {
+                    let over_items = b.max_items.is_some_and(|m| out.len() >= m);
+                    let over_bytes = b.max_bytes.is_some_and(|m| stats.bytes_scanned >= m);
+                    if over_items || over_bytes {
+                        truncated = i < merged.len();
+                        break;
+                    }
+                }
             }
         }
-        Ok(out)
+        Ok(BudgetedScan {
+            items: out,
+            truncated,
+            stats,
+        })
     }
 
-    fn prefix_inner(&self, ns: &[u8], prefix: &[u8]) -> Result<KvPairs, EdgestoreError> {
+    fn prefix_core(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+        budget: Option<&ScanBudget>,
+    ) -> Result<BudgetedKvScan, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
 
-        // PERFORMANCE: use range scan with prefix upper bound, then merge + dedup with memtable.
-        // Same algorithm as range_inner — both inputs are sorted, so merge is O(n) and dedup is O(n).
-        // DO NOT use HashMap here (regression: it was O(n log n) + 4 allocations).
+        // PERFORMANCE: same merge+dedup algorithm as range_core.
         // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
         let seg_results = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
             self.segment_store
@@ -839,6 +1096,7 @@ impl Engine {
             vec![]
         };
         let mem_results = self.memtable.prefix(&enc_prefix);
+        let has_seg = !seg_results.is_empty();
 
         let mut merged: Vec<(Vec<u8>, MemEntry)> =
             Vec::with_capacity(seg_results.len() + mem_results.len());
@@ -860,12 +1118,29 @@ impl Engine {
         }
 
         let mut out = Vec::new();
+        let mut stats = QueryStats {
+            segments_scanned: if has_seg { 1 } else { 0 },
+            ..Default::default()
+        };
+        let mut truncated = false;
         let mut i = 0usize;
         while i < merged.len() {
             let (k, e) = &merged[i];
             let mut best_entry = e.clone();
+            let entry_key_len = k.len() as u64;
+            let entry_val_len = e.value.as_ref().map(|v| v.len() as u64).unwrap_or(0);
+            stats.bytes_scanned += entry_key_len + entry_val_len;
+            stats.items_examined += 1;
             i += 1;
             while i < merged.len() && &merged[i].0 == k {
+                let v_len = merged[i]
+                    .1
+                    .value
+                    .as_ref()
+                    .map(|v| v.len() as u64)
+                    .unwrap_or(0);
+                stats.bytes_scanned += merged[i].0.len() as u64 + v_len;
+                stats.items_examined += 1;
                 if merged[i].1.lsn > best_entry.lsn {
                     best_entry = merged[i].1.clone();
                 }
@@ -877,9 +1152,21 @@ impl Engine {
             if let Some(val) = &best_entry.value {
                 let (_, raw_key) = decode_key(k)?;
                 out.push((raw_key, val.clone()));
+                if let Some(b) = budget {
+                    let over_items = b.max_items.is_some_and(|m| out.len() >= m);
+                    let over_bytes = b.max_bytes.is_some_and(|m| stats.bytes_scanned >= m);
+                    if over_items || over_bytes {
+                        truncated = i < merged.len();
+                        break;
+                    }
+                }
             }
         }
-        Ok(out)
+        Ok(BudgetedScan {
+            items: out,
+            truncated,
+            stats,
+        })
     }
 
     fn flush_to_segments_inner(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
@@ -1188,6 +1475,7 @@ impl Engine {
             merkle_root: hash.to_vec(),
             created_at: now_nanos,
             text_index_stripped: false,
+            vector_index_stripped: false,
         };
 
         // Write .idx, .xf, .meta files so SegmentReader::open can load it.
@@ -1553,6 +1841,198 @@ impl Engine {
         // Fall back to flat scan
         crate::vector::search::vector_search(self, ns, query, k, metric)
     }
+
+    /// Vector search with cost accounting. Returns results + [`QueryStats`].
+    ///
+    /// `bytes_scanned` reflects the sum of encoded vector record sizes examined during
+    /// a flat scan. For HNSW paths, only the result set bytes are counted (graph
+    /// traversal does not materialize all vectors).
+    pub fn vector_search_with_stats(
+        &mut self,
+        ns: &[u8],
+        query: &VectorRecord,
+        k: usize,
+        metric: Metric,
+    ) -> Result<(Vec<VectorSearchResult>, QueryStats), EdgestoreError> {
+        // HNSW path — stats are approximate (graph traversal not fully instrumented).
+        if let Some(index) = self.get_vector_index(ns)? {
+            if index.dtype == query.dtype && index.dims == query.dims {
+                let hnsw_results = index.search(&query.data, k, 50)?;
+                let results: Vec<VectorSearchResult> = hnsw_results
+                    .into_iter()
+                    .map(|(key, distance)| VectorSearchResult { key, distance })
+                    .collect();
+                let bytes: u64 = results
+                    .iter()
+                    .map(|r| r.key.len() as u64 + query.data.len() as u64)
+                    .sum();
+                let stats = QueryStats {
+                    segments_scanned: 0,
+                    bytes_scanned: bytes,
+                    items_examined: results.len() as u64,
+                };
+                return Ok((results, stats));
+            }
+        }
+
+        // Flat scan — enumerate all vectors and track bytes.
+        let vec_ns = vector_namespace(ns);
+        let all = self.prefix(&vec_ns, b"")?;
+        let items_examined = all.len() as u64;
+        let bytes_scanned: u64 = all
+            .iter()
+            .map(|(k, v)| k.len() as u64 + v.len() as u64)
+            .sum();
+        let results = crate::vector::search::vector_search(self, ns, query, k, metric)?;
+        let stats = QueryStats {
+            segments_scanned: 1,
+            bytes_scanned,
+            items_examined,
+        };
+        Ok((results, stats))
+    }
+
+    /// Text search with cost accounting. Returns results + [`QueryStats`].
+    ///
+    /// `bytes_scanned` reflects the size of the serialized inverted index examined.
+    pub fn search_text_with_stats(
+        &self,
+        ns: &[u8],
+        query: &str,
+        k: usize,
+    ) -> Result<(Vec<crate::text::engine::TextSearchResult>, QueryStats), EdgestoreError> {
+        let text_ns = crate::text::engine::text_namespace(ns);
+        let index_bytes_size = match self.text_indices.get(&text_ns) {
+            Some(idx) => idx.serialize().len() as u64,
+            None => match self.get(&text_ns, TEXT_INDEX_KEY)? {
+                Some(ref b) => b.len() as u64,
+                None => 0,
+            },
+        };
+        let results = self.search_text(ns, query, k)?;
+        let stats = QueryStats {
+            segments_scanned: if index_bytes_size > 0 { 1 } else { 0 },
+            bytes_scanned: index_bytes_size,
+            items_examined: results.len() as u64,
+        };
+        Ok((results, stats))
+    }
+
+    /// Text search that returns [`SnippetResult`]s — short context windows around
+    /// each matched term — instead of just document keys and scores.
+    ///
+    /// Requires that the index was written with v3 format (`index_text` called after
+    /// upgrading to this version). Documents indexed under v1/v2 format return an
+    /// empty `snippets` vec but still appear in results with their BM25 score.
+    ///
+    /// `context_chars` controls how many characters appear before and after each
+    /// match in the snippet. 80 is a reasonable default for agent-facing output.
+    pub fn search_text_with_snippets(
+        &self,
+        ns: &[u8],
+        query: &str,
+        k: usize,
+        context_chars: usize,
+    ) -> Result<Vec<SnippetResult>, EdgestoreError> {
+        use crate::text::types::decode_text_record;
+
+        let text_ns = text_namespace(ns);
+        let query_tokens = tokenize(query);
+        if query_tokens.is_empty() || k == 0 {
+            return Ok(vec![]);
+        }
+        let query_terms: std::collections::HashSet<String> =
+            query_tokens.iter().map(|t| t.term.clone()).collect();
+
+        // Run the standard search to get scored results in rank order.
+        let base_results = self.search_text(ns, query, k)?;
+
+        // Load the index once to access position data.
+        let index_opt: Option<InvertedIndex> = match self.text_indices.get(&text_ns) {
+            Some(idx) => Some(idx.clone()),
+            None => match self.get(&text_ns, TEXT_INDEX_KEY)? {
+                Some(bytes) => InvertedIndex::deserialize(&bytes).ok(),
+                None => None,
+            },
+        };
+
+        let mut out = Vec::with_capacity(base_results.len());
+        for result in base_results {
+            let snippets = if let Some(ref index) = index_opt {
+                // Collect positions for all query terms that matched this doc.
+                let mut byte_positions: Vec<u32> = Vec::new();
+                for (term, postings) in &index.postings {
+                    if !query_terms.contains(term.as_str()) {
+                        continue;
+                    }
+                    if let Some(posting) = postings.iter().find(|p| p.doc_id == result.doc_id) {
+                        byte_positions.extend_from_slice(&posting.positions);
+                    }
+                }
+                // Fetch the raw document text to build context windows.
+                if !byte_positions.is_empty() {
+                    match self.get(&text_ns, &result.doc_id)? {
+                        Some(raw) => {
+                            match decode_text_record(&raw) {
+                                Some(rec) => {
+                                    let text = &rec.text;
+                                    let chars: Vec<char> = text.chars().collect();
+                                    byte_positions.sort_unstable();
+                                    byte_positions.dedup();
+                                    byte_positions
+                                        .iter()
+                                        .filter_map(|&pos| {
+                                            // pos is a token index; find the byte range of
+                                            // the word at that token position.
+                                            let char_start = pos as usize;
+                                            if char_start >= chars.len() {
+                                                return None;
+                                            }
+                                            // Find end of word at char_start.
+                                            let char_end = chars[char_start..]
+                                                .iter()
+                                                .position(|c| c.is_whitespace())
+                                                .map(|i| char_start + i)
+                                                .unwrap_or(chars.len());
+                                            // Build context window.
+                                            let ctx_start =
+                                                char_start.saturating_sub(context_chars);
+                                            let ctx_end =
+                                                (char_end + context_chars).min(chars.len());
+                                            let ctx: String =
+                                                chars[ctx_start..ctx_end].iter().collect();
+                                            // Byte offsets of match within ctx.
+                                            let prefix: String =
+                                                chars[ctx_start..char_start].iter().collect();
+                                            let matched: String =
+                                                chars[char_start..char_end].iter().collect();
+                                            Some(Snippet {
+                                                text: ctx,
+                                                byte_start: prefix.len(),
+                                                byte_end: prefix.len() + matched.len(),
+                                            })
+                                        })
+                                        .collect()
+                                }
+                                None => vec![],
+                            }
+                        }
+                        None => vec![],
+                    }
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+            out.push(SnippetResult {
+                doc_id: result.doc_id,
+                score: result.score,
+                snippets,
+            });
+        }
+        Ok(out)
+    }
 }
 
 impl VectorEngine for Engine {
@@ -1597,7 +2077,7 @@ impl VectorEngine for Engine {
     }
 }
 
-use crate::text::engine::{text_namespace, TextEngine, TextSearchResult};
+use crate::text::engine::{text_namespace, Snippet, SnippetResult, TextEngine, TextSearchResult};
 use crate::text::index::{InvertedIndex, BM25_B, BM25_K1};
 use crate::text::tokenizer::tokenize;
 use crate::text::types::{encode_text_record, FacetValue};

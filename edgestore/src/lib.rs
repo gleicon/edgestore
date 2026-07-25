@@ -69,7 +69,7 @@ pub mod wal;
 
 pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
-pub use engine::{Engine, ImportResult};
+pub use engine::{BudgetedScan, Engine, ImportResult, QueryStats, ScanBudget};
 pub use error::EdgestoreError;
 pub use fdp_backend::{FdpStorageBackend, MockFdpBackend};
 pub use immutable::ImmutableEngine;
@@ -82,7 +82,9 @@ pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use storage_backend::{
     DefaultStorageBackend, MemoryStorageBackend, PlacementHint, StorageBackend,
 };
-pub use text::engine::{text_namespace, SearchOptions, TextEngine, TextSearchResult};
+pub use text::engine::{
+    text_namespace, SearchOptions, Snippet, SnippetResult, TextEngine, TextSearchResult,
+};
 pub use text::facet::{filter_by_facets, FacetFilter};
 pub use text::index::{bm25_score, score_document, InvertedIndex, Posting};
 pub use text::tokenizer::{tokenize, Token};

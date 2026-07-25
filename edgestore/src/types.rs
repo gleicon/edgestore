@@ -104,6 +104,11 @@ pub struct SegmentMeta {
     /// Set by `Engine::strip_text_index` after a segment has been archived to cold storage.
     #[serde(default)]
     pub text_index_stripped: bool,
+    /// When `true`, all `__vec__*` namespace records have been removed from this segment.
+    /// Vector search falls back to the remote archive for this segment.
+    /// Set by `Engine::strip_vector_index` after a segment has been archived to cold storage.
+    #[serde(default)]
+    pub vector_index_stripped: bool,
 }
 
 /// Cohort bucket for a record: which compaction cohort it belongs to.

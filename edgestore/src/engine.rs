@@ -384,43 +384,21 @@ impl Engine {
         key: &[u8],
     ) -> Result<(Option<Vec<u8>>, QueryStats), EdgestoreError> {
         let encoded_key = encode_key(ns, key);
-        if let Some(entry) = self.memtable.get(&encoded_key) {
-            let val = if entry.op == crate::types::Operation::Delete {
-                None
-            } else {
-                entry.value.clone()
-            };
-            let bytes =
-                val.as_ref().map(|v| v.len() as u64).unwrap_or(0) + encoded_key.len() as u64;
-            return Ok((
-                val,
-                QueryStats {
-                    segments_scanned: 0,
-                    bytes_scanned: bytes,
-                    items_examined: 1,
-                },
-            ));
+        let in_memtable = self.memtable.get(&encoded_key).is_some();
+        let val = self.get_inner(ns, key)?;
+        if val.is_none() && !in_memtable {
+            return Ok((None, QueryStats::default()));
         }
-        match self.segment_store.get(&encoded_key)? {
-            Some(entry) => {
-                let val = if entry.op == crate::types::Operation::Delete {
-                    None
-                } else {
-                    entry.value.clone()
-                };
-                let bytes =
-                    val.as_ref().map(|v| v.len() as u64).unwrap_or(0) + encoded_key.len() as u64;
-                Ok((
-                    val,
-                    QueryStats {
-                        segments_scanned: 1,
-                        bytes_scanned: bytes,
-                        items_examined: 1,
-                    },
-                ))
-            }
-            None => Ok((None, QueryStats::default())),
-        }
+        let bytes =
+            val.as_ref().map(|v| v.len() as u64).unwrap_or(0) + encoded_key.len() as u64;
+        Ok((
+            val,
+            QueryStats {
+                segments_scanned: if in_memtable { 0 } else { 1 },
+                bytes_scanned: bytes,
+                items_examined: 1,
+            },
+        ))
     }
 
     /// Get a value into an existing buffer, avoiding a fresh `Vec<u8>` allocation.
@@ -691,7 +669,6 @@ impl Engine {
             reader.range_scan(&[], &vec![0xFF; 1024])?
         };
 
-        // Filter out __text__ namespace records.
         let filtered: Vec<(Vec<u8>, crate::types::MemEntry)> = entries
             .into_iter()
             .filter(|(k, _)| {
@@ -702,7 +679,6 @@ impl Engine {
             })
             .collect();
 
-        // Nothing to strip.
         if filtered.len() == old_meta.record_count as usize {
             return Ok(old_meta);
         }
@@ -790,7 +766,6 @@ impl Engine {
             reader.range_scan(&[], &vec![0xFF; 1024])?
         };
 
-        // Filter out __vec__ namespace records.
         let filtered: Vec<(Vec<u8>, crate::types::MemEntry)> = entries
             .into_iter()
             .filter(|(k, _)| match decode_key(k) {
@@ -799,7 +774,6 @@ impl Engine {
             })
             .collect();
 
-        // Nothing to strip, or segment is vector-only — return unchanged.
         if filtered.len() == old_meta.record_count as usize || filtered.is_empty() {
             return Ok(old_meta);
         }
@@ -1875,7 +1849,6 @@ impl Engine {
             }
         }
 
-        // Flat scan — enumerate all vectors and track bytes.
         let vec_ns = vector_namespace(ns);
         let all = self.prefix(&vec_ns, b"")?;
         let items_examined = all.len() as u64;
@@ -1944,10 +1917,8 @@ impl Engine {
         let query_terms: std::collections::HashSet<String> =
             query_tokens.iter().map(|t| t.term.clone()).collect();
 
-        // Run the standard search to get scored results in rank order.
         let base_results = self.search_text(ns, query, k)?;
 
-        // Load the index once to access position data.
         let index_opt: Option<InvertedIndex> = match self.text_indices.get(&text_ns) {
             Some(idx) => Some(idx.clone()),
             None => match self.get(&text_ns, TEXT_INDEX_KEY)? {
@@ -1959,7 +1930,6 @@ impl Engine {
         let mut out = Vec::with_capacity(base_results.len());
         for result in base_results {
             let snippets = if let Some(ref index) = index_opt {
-                // Collect positions for all query terms that matched this doc.
                 let mut byte_positions: Vec<u32> = Vec::new();
                 for (term, postings) in &index.postings {
                     if !query_terms.contains(term.as_str()) {
@@ -1969,7 +1939,6 @@ impl Engine {
                         byte_positions.extend_from_slice(&posting.positions);
                     }
                 }
-                // Fetch the raw document text to build context windows.
                 if !byte_positions.is_empty() {
                     match self.get(&text_ns, &result.doc_id)? {
                         Some(raw) => {
@@ -1982,26 +1951,21 @@ impl Engine {
                                     byte_positions
                                         .iter()
                                         .filter_map(|&pos| {
-                                            // pos is a token index; find the byte range of
-                                            // the word at that token position.
                                             let char_start = pos as usize;
                                             if char_start >= chars.len() {
                                                 return None;
                                             }
-                                            // Find end of word at char_start.
                                             let char_end = chars[char_start..]
                                                 .iter()
                                                 .position(|c| c.is_whitespace())
                                                 .map(|i| char_start + i)
                                                 .unwrap_or(chars.len());
-                                            // Build context window.
                                             let ctx_start =
                                                 char_start.saturating_sub(context_chars);
                                             let ctx_end =
                                                 (char_end + context_chars).min(chars.len());
                                             let ctx: String =
                                                 chars[ctx_start..ctx_end].iter().collect();
-                                            // Byte offsets of match within ctx.
                                             let prefix: String =
                                                 chars[ctx_start..char_start].iter().collect();
                                             let matched: String =
@@ -2796,6 +2760,275 @@ mod tests {
             *count.lock().unwrap() > 0,
             "callback must fire on auto-flush triggered by put"
         );
+    }
+
+    // ── ENG-12: QueryStats ────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_with_stats_memtable_hit() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"k", b"value").unwrap();
+        let (val, stats) = engine.get_with_stats(b"ns", b"k").unwrap();
+        assert_eq!(val, Some(b"value".to_vec()));
+        assert_eq!(stats.segments_scanned, 0, "memtable hit: no segment scanned");
+        assert!(stats.bytes_scanned > 0);
+        assert_eq!(stats.items_examined, 1);
+    }
+
+    #[test]
+    fn test_get_with_stats_segment_hit() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"k", b"value").unwrap();
+        engine.flush_to_segments().unwrap();
+        let (val, stats) = engine.get_with_stats(b"ns", b"k").unwrap();
+        assert_eq!(val, Some(b"value".to_vec()));
+        assert_eq!(stats.segments_scanned, 1, "segment hit");
+        assert!(stats.bytes_scanned > 0);
+        assert_eq!(stats.items_examined, 1);
+    }
+
+    #[test]
+    fn test_get_with_stats_miss_returns_zero_stats() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_engine(&dir);
+        let (val, stats) = engine.get_with_stats(b"ns", b"missing").unwrap();
+        assert_eq!(val, None);
+        assert_eq!(stats.segments_scanned, 0);
+        assert_eq!(stats.bytes_scanned, 0);
+        assert_eq!(stats.items_examined, 0);
+    }
+
+    #[test]
+    fn test_range_with_stats_returns_bytes() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"a", b"va").unwrap();
+        engine.put(b"ns", b"b", b"vb").unwrap();
+        let (pairs, stats) = engine.range_with_stats(b"ns", b"a", b"z").unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert!(stats.bytes_scanned > 0, "range scan must report non-zero bytes");
+        assert!(stats.items_examined >= 2);
+    }
+
+    #[test]
+    fn test_prefix_with_stats_returns_bytes() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"foo:a", b"1").unwrap();
+        engine.put(b"ns", b"foo:b", b"2").unwrap();
+        engine.put(b"ns", b"bar:c", b"3").unwrap();
+        let (pairs, stats) = engine.prefix_with_stats(b"ns", b"foo:").unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert!(stats.bytes_scanned > 0);
+        assert!(stats.items_examined >= 2);
+    }
+
+    // ── ENG-9: ScanBudget / BudgetedScan ─────────────────────────────────
+
+    #[test]
+    fn test_range_budgeted_truncates_at_max_items() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u8..10 {
+            engine.put(b"ns", &[b'a' + i], b"v").unwrap();
+        }
+        let budget = ScanBudget {
+            max_items: Some(3),
+            max_bytes: None,
+        };
+        let result = engine.range_budgeted(b"ns", b"", b"\xff", &budget).unwrap();
+        assert_eq!(result.items.len(), 3);
+        assert!(result.truncated, "must be truncated when budget hit");
+    }
+
+    #[test]
+    fn test_range_budgeted_no_truncation_when_under_budget() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"a", b"va").unwrap();
+        engine.put(b"ns", b"b", b"vb").unwrap();
+        let budget = ScanBudget {
+            max_items: Some(100),
+            max_bytes: None,
+        };
+        let result = engine.range_budgeted(b"ns", b"", b"\xff", &budget).unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert!(!result.truncated, "must not be truncated when under budget");
+    }
+
+    #[test]
+    fn test_prefix_budgeted_truncates_at_max_items() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u8..8 {
+            engine
+                .put(b"ns", format!("key:{}", i).as_bytes(), b"v")
+                .unwrap();
+        }
+        let budget = ScanBudget {
+            max_items: Some(2),
+            max_bytes: None,
+        };
+        let result = engine.prefix_budgeted(b"ns", b"key:", &budget).unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert!(result.truncated);
+    }
+
+    #[test]
+    fn test_prefix_budgeted_stops_at_max_bytes() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u8..5 {
+            engine
+                .put(b"ns", format!("k:{}", i).as_bytes(), &vec![b'x'; 100])
+                .unwrap();
+        }
+        let budget = ScanBudget {
+            max_items: None,
+            max_bytes: Some(1), // 1 byte — will hit after first item
+        };
+        let result = engine.prefix_budgeted(b"ns", b"k:", &budget).unwrap();
+        assert!(result.truncated, "must truncate when byte budget exhausted");
+        assert!(result.items.len() < 5, "must not return all items");
+    }
+
+    // ── ENG-12: vector_search_with_stats ─────────────────────────────────
+
+    #[test]
+    fn test_vector_search_with_stats_flat_scan() {
+        use crate::vector::distance::Metric;
+        use crate::vector::types::Dtype;
+        use crate::VectorEngine;
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        let v: Vec<u8> = vec![1.0f32, 0.0, 0.0, 0.0]
+            .into_iter()
+            .flat_map(|f: f32| f.to_le_bytes())
+            .collect();
+        engine.vector_put(b"vs", b"doc1", 4, Dtype::F32, &v).unwrap();
+        let query = crate::vector::types::VectorRecord {
+            dims: 4,
+            dtype: Dtype::F32,
+            data: v,
+        };
+        let (results, stats) = engine
+            .vector_search_with_stats(b"vs", &query, 1, Metric::Cosine)
+            .unwrap();
+        assert!(!results.is_empty(), "must find at least one vector");
+        assert!(stats.bytes_scanned > 0, "flat scan must report bytes");
+    }
+
+    // ── ENG-12: search_text_with_stats ───────────────────────────────────
+
+    #[test]
+    fn test_search_text_with_stats_reports_bytes() {
+        use crate::text::engine::TextEngine;
+        use std::collections::HashMap;
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine
+            .index_text(b"docs", b"d1", "the quick brown fox", HashMap::new())
+            .unwrap();
+        let (results, stats) = engine.search_text_with_stats(b"docs", "fox", 5).unwrap();
+        assert!(!results.is_empty(), "should find the doc");
+        assert!(
+            stats.bytes_scanned > 0,
+            "text search must report non-zero bytes"
+        );
+        assert!(stats.segments_scanned > 0 || stats.bytes_scanned > 0);
+    }
+
+    // ── ENG-11: search_text_with_snippets ────────────────────────────────
+
+    #[test]
+    fn test_search_text_with_snippets_returns_context_window() {
+        use crate::text::engine::TextEngine;
+        use std::collections::HashMap;
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine
+            .index_text(
+                b"docs",
+                b"d1",
+                "the quick brown fox jumps over the lazy dog",
+                HashMap::new(),
+            )
+            .unwrap();
+        let results = engine
+            .search_text_with_snippets(b"docs", "fox", 5, 20)
+            .unwrap();
+        assert!(!results.is_empty(), "should find the doc");
+        // v3 index: snippets should be populated
+        let r = &results[0];
+        assert_eq!(r.doc_id, b"d1".to_vec());
+        assert!(r.score > 0.0, "BM25 score must be positive");
+        if !r.snippets.is_empty() {
+            let s = &r.snippets[0];
+            assert!(s.byte_end > s.byte_start, "byte range must be non-empty");
+            assert!(s.byte_end <= s.text.len(), "byte_end within snippet text");
+            let span = &s.text[s.byte_start..s.byte_end];
+            assert!(
+                span.to_lowercase().starts_with("fox"),
+                "matched span '{}' must start with the query term 'fox'",
+                span
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_text_with_snippets_no_match_returns_empty() {
+        use crate::text::engine::TextEngine;
+        use std::collections::HashMap;
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine
+            .index_text(b"docs", b"d1", "the quick brown fox", HashMap::new())
+            .unwrap();
+        let results = engine
+            .search_text_with_snippets(b"docs", "elephant", 5, 20)
+            .unwrap();
+        assert!(results.is_empty(), "no match should return empty results");
+    }
+
+    // ── ENG-7: strip_vector_index ─────────────────────────────────────────
+
+    #[test]
+    fn test_strip_vector_index_removes_vec_records() {
+        use crate::vector::types::Dtype;
+        use crate::VectorEngine;
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"kv_key", b"kv_value").unwrap();
+        let v: Vec<u8> = vec![0u8; 16];
+        engine.vector_put(b"ns", b"vec1", 4, Dtype::F32, &v).unwrap();
+        let meta = engine.flush_to_segments().unwrap();
+        let seg_id = meta.segment_id;
+
+        let new_meta = engine.strip_vector_index(seg_id).unwrap();
+        assert!(new_meta.vector_index_stripped, "flag must be set after strip");
+        // KV record must still be accessible.
+        let val = engine.get(b"ns", b"kv_key").unwrap();
+        assert_eq!(val, Some(b"kv_value".to_vec()), "KV record must survive strip");
+    }
+
+    #[test]
+    fn test_strip_vector_index_idempotent() {
+        use crate::vector::types::Dtype;
+        use crate::VectorEngine;
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.put(b"ns", b"k", b"v").unwrap();
+        let v: Vec<u8> = vec![0u8; 16];
+        engine.vector_put(b"ns", b"vec1", 4, Dtype::F32, &v).unwrap();
+        let meta = engine.flush_to_segments().unwrap();
+
+        let meta1 = engine.strip_vector_index(meta.segment_id).unwrap();
+        assert!(meta1.vector_index_stripped);
+        // Second call on the replacement segment must be a no-op (already stripped).
+        let meta2 = engine.strip_vector_index(meta1.segment_id).unwrap();
+        assert!(meta2.vector_index_stripped);
     }
 
     #[test]

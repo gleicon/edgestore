@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-25
+
+### Added
+
+- **Cost-accounting variants for all major operations (ENG-12):** `get_with_stats`, `range_with_stats`, `prefix_with_stats`, `vector_search_with_stats`, `search_text_with_stats` — each returns the result alongside `QueryStats { segments_scanned, bytes_scanned, items_examined }`. Use for agent cost budgeting, quota enforcement, or observability. (`edgestore/src/engine.rs`)
+
+- **Bounded scan with early stop (ENG-9):** `range_budgeted` and `prefix_budgeted` accept a `ScanBudget { max_items, max_bytes }` and return `BudgetedScan<T> { items, truncated, stats }`. When either budget is hit the scan stops early and `truncated = true`. Use to cap how much data an agent read can consume. (`edgestore/src/engine.rs`)
+
+- **`Engine::strip_vector_index(segment_id)` (ENG-7):** Rewrites a local segment without its `__vec__` namespace records, mirroring the existing `strip_text_index`. Returns the updated `SegmentMeta` with `vector_index_stripped = true`. Idempotent — already-stripped segments are returned unchanged. (`edgestore/src/engine.rs`, `edgestore/src/types.rs`)
+
+- **`TieredEngine::with_vector_stripping(bool)` (ENG-7):** Builder method that wires `strip_vector_index` into `archive_segments`. When enabled, each successfully archived segment has its local vector records stripped automatically. Remote copy retains the full index. (`edgestore-tier/src/lib.rs`)
+
+- **`search_text_with_snippets(ns, query, k, context_chars)` (ENG-11):** Returns `Vec<SnippetResult>` where each result carries the BM25 score and context windows around each matched term. Requires InvertedIndex v3 format (re-index after upgrading). Documents indexed under v1/v2 still appear in results with empty `snippets`. (`edgestore/src/engine.rs`, `edgestore/src/text/engine.rs`)
+
+- **Pierre guides (ENG-8/ENG-10):** `docs/pierre_rrf_guide.md` — caller-side Reciprocal Rank Fusion with edgestore's text and vector APIs, including a `hybrid_search_with_stats` example. `docs/pierre_template_guide.md` — log template extraction using `log:/tpl:/bind:` key namespaces, agent-compact output pattern, and compaction-time variant.
+
+### Changed
+
+- **InvertedIndex serialization bumped to v3.** v3 adds `positions: Vec<u32>` (character offsets of each term occurrence) per posting. v1/v2 indexes deserialize with empty positions — snippets are unavailable without re-indexing. (`edgestore/src/text/index.rs`)
+
+- **Tokenizer `position` field now stores character start offset**, not word rank. This is a library-internal change that affects `InvertedIndex::positions` — positions stored in existing v3 indexes written before this release contain word indices, not char offsets, and will produce incorrect snippet ranges. Re-index affected namespaces to get correct snippets. (`edgestore/src/text/tokenizer.rs`, `edgestore/src/text/index.rs`)
+
+- **`SegmentMeta` gains `vector_index_stripped: bool`** (default `false`, `#[serde(default)]`). Existing serialized manifests deserialize correctly without migration. (`edgestore/src/types.rs`)
+
+### Fixed
+
+- **`get_with_stats` no longer duplicates `get_inner` retrieval logic.** The previous implementation re-implemented the memtable → segment lookup. Now delegates to `get_inner` and determines segment provenance via a single memtable presence check. (`edgestore/src/engine.rs`)
+
 ## [Unreleased]
 
 ### Added

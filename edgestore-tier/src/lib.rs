@@ -2107,6 +2107,71 @@ mod tests {
         assert!(!engine.get_needs_archived_fetch(b"ns", b"zzz-no-segment-covers-this"));
     }
 
+    // ── ENG-7: with_vector_stripping ─────────────────────────────────────
+
+    #[test]
+    fn test_with_vector_stripping_sets_flag_after_archive() {
+        use edgestore::VectorEngine;
+        use edgestore::vector::types::Dtype;
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        let mut tiered = TieredEngine::new(local, Box::new(remote)).with_vector_stripping(true);
+
+        tiered.put(b"ns", b"kv", b"value").unwrap();
+        let v = vec![0u8; 16]; // 4-dim f32
+        tiered
+            .local_mut()
+            .vector_put(b"ns", b"vec1", 4, Dtype::F32, &v)
+            .unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        assert!(!metas.is_empty());
+        tiered.archive_segments(&metas).unwrap();
+
+        let post_metas = tiered.local().list_segment_metas();
+        assert!(
+            post_metas.iter().any(|m| m.vector_index_stripped),
+            "at least one segment must have vector_index_stripped set"
+        );
+        // KV data must still be accessible.
+        let val = tiered.get(b"ns", b"kv").unwrap();
+        assert_eq!(val, Some(b"value".to_vec()), "KV survives vector strip");
+    }
+
+    #[test]
+    fn test_with_vector_stripping_disabled_leaves_flag_false() {
+        use edgestore::VectorEngine;
+        use edgestore::vector::types::Dtype;
+        let local_dir = TempDir::new().unwrap();
+        let remote_dir = TempDir::new().unwrap();
+
+        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
+        let remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
+        // Default: no vector stripping.
+        let mut tiered = TieredEngine::new(local, Box::new(remote));
+
+        tiered.put(b"ns", b"kv", b"value").unwrap();
+        let v = vec![0u8; 16];
+        tiered
+            .local_mut()
+            .vector_put(b"ns", b"vec1", 4, Dtype::F32, &v)
+            .unwrap();
+        tiered.local_mut().flush_to_segments().unwrap();
+
+        let metas = tiered.local().list_segment_metas();
+        tiered.archive_segments(&metas).unwrap();
+
+        let post_metas = tiered.local().list_segment_metas();
+        assert!(
+            post_metas.iter().all(|m| !m.vector_index_stripped),
+            "vector_index_stripped must remain false when stripping is disabled"
+        );
+    }
+
     #[test]
     fn test_get_returns_none_for_absent_key_with_no_archives() {
         let local = TempDir::new().unwrap();

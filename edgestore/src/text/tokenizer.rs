@@ -27,29 +27,39 @@ lazy_static::lazy_static! {
 pub struct Token {
     /// Stemmed, lowercased term.
     pub term: String,
-    /// Zero-based position in the original text.
+    /// Zero-based character index of the token's start in the original (pre-stem) text.
     pub position: usize,
 }
 
 /// Tokenize text into stemmed, lowercase, non-stopword tokens.
 pub fn tokenize(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
-    let mut position = 0usize;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let char_count = chars.len();
+    let mut i = 0;
 
-    for word in text.split(|c: char| !c.is_alphanumeric()) {
-        if word.is_empty() {
-            continue;
+    while i < char_count {
+        if chars[i].1.is_alphanumeric() {
+            let char_start = i;
+            let byte_start = chars[i].0;
+            let mut j = i + 1;
+            while j < char_count && chars[j].1.is_alphanumeric() {
+                j += 1;
+            }
+            let byte_end = if j < char_count { chars[j].0 } else { text.len() };
+            let word = &text[byte_start..byte_end];
+            let lower = word.to_lowercase();
+            if !STOPWORDS.contains(&lower) {
+                let stemmed = stem(&lower);
+                tokens.push(Token {
+                    term: stemmed,
+                    position: char_start,
+                });
+            }
+            i = j;
+        } else {
+            i += 1;
         }
-        let lower = word.to_lowercase();
-        if STOPWORDS.contains(&lower) {
-            continue;
-        }
-        let stemmed = stem(&lower);
-        tokens.push(Token {
-            term: stemmed,
-            position,
-        });
-        position += 1;
     }
 
     tokens
@@ -186,9 +196,10 @@ mod tests {
 
     #[test]
     fn test_tokenize_positions() {
+        // position = char index of token start in original text
         let tokens = tokenize("alpha beta gamma");
-        assert_eq!(tokens[0].position, 0);
-        assert_eq!(tokens[1].position, 1);
-        assert_eq!(tokens[2].position, 2);
+        assert_eq!(tokens[0].position, 0);  // "alpha" starts at char 0
+        assert_eq!(tokens[1].position, 6);  // "beta"  starts at char 6
+        assert_eq!(tokens[2].position, 11); // "gamma" starts at char 11
     }
 }

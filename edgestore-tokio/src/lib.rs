@@ -9,8 +9,9 @@ mod tiered;
 pub use tiered::AsyncTieredEngine;
 
 use edgestore::{
+    total_cmp_f32,
     types::SegmentMeta,
-    vector::distance::Metric,
+    vector::distance::{distance, Metric},
     vector::search::VectorSearchResult,
     vector::types::{Dtype, VectorRecord},
     EdgestoreConfig, EdgestoreError, Engine, FacetValue, ImportResult, MetricsSnapshot,
@@ -252,7 +253,16 @@ impl AsyncEngine {
         })?
     }
 
-    /// Vector search — heavy operation, runs on spawn_blocking.
+    /// Vector search — HNSW fast path or cooperative chunked flat scan.
+    ///
+    /// When an HNSW index is in memory (`vector_count` returns `Some`), a single
+    /// `spawn_blocking` call handles the search; HNSW completes in <5 ms so a
+    /// long blocking period is not a concern.
+    ///
+    /// When no HNSW index is loaded the flat scan is paged through
+    /// `Engine::vector_page` (read lock only, `&self`). The engine lock is
+    /// released between pages and `yield_now()` gives other async tasks
+    /// scheduling opportunities. No extra dependencies required.
     pub async fn vector_search(
         &self,
         ns: &[u8],
@@ -260,20 +270,81 @@ impl AsyncEngine {
         k: usize,
         metric: Metric,
     ) -> Result<Vec<VectorSearchResult>, EdgestoreError> {
-        let ns = ns.to_vec();
-        let query = query.clone();
+        if k == 0 {
+            return Ok(vec![]);
+        }
+
+        let ns_owned = ns.to_vec();
+        let query_owned = query.clone();
         let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.vector_search(&ns, &query, k, metric)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+
+        // Read-lock check: is an HNSW index already in memory?
+        let has_hnsw = {
+            let engine = self.inner.read().await;
+            engine.vector_count(&ns_owned).is_some()
+        };
+
+        if has_hnsw {
+            // HNSW: fast (<5 ms). Uses write lock because get_vector_index may
+            // lazy-load the sidecar file on first call.
+            return tokio::task::spawn_blocking(move || {
+                let mut engine = inner.blocking_write();
+                engine.vector_search(&ns_owned, &query_owned, k, metric)
+            })
+            .await
+            .map_err(|e| EdgestoreError::Io(std::io::Error::other(e.to_string())))?;
+        }
+
+        // Flat scan: paged with cooperative yield between pages.
+        // Each page acquires a read lock (not write), fetches PAGE_SIZE records,
+        // releases the lock, then computes distances on the async thread.
+        const PAGE_SIZE: usize = 512;
+
+        let mut pairs: Vec<(f32, Vec<u8>)> = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+
+        loop {
+            let inner2 = inner.clone();
+            let ns2 = ns_owned.clone();
+            let cur = cursor.clone();
+
+            let page = tokio::task::spawn_blocking(move || {
+                let engine = inner2.blocking_read();
+                engine.vector_page(&ns2, cur.as_deref(), PAGE_SIZE)
+            })
+            .await
+            .map_err(|e| EdgestoreError::Io(std::io::Error::other(e.to_string())))??;
+
+            let has_more = page.next_key.is_some();
+
+            // Distance computation — pure f32 math, no lock held, fast per page
+            for (key, record) in page.records {
+                if record.dims != query_owned.dims || record.dtype != query_owned.dtype {
+                    continue;
+                }
+                let dist = distance(
+                    &query_owned.data,
+                    &record.data,
+                    query_owned.dtype,
+                    metric,
+                )?;
+                pairs.push((dist, key));
+            }
+
+            cursor = page.next_key;
+            if !has_more {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        pairs.sort_unstable_by(|(a, _), (b, _)| total_cmp_f32(*a, *b));
+        pairs.truncate(k);
+
+        Ok(pairs
+            .into_iter()
+            .map(|(d, key)| VectorSearchResult { key, distance: d })
+            .collect())
     }
 
     /// Build vector index — heavy operation, runs on spawn_blocking.
@@ -656,5 +727,52 @@ mod tests {
             .await
             .unwrap();
         assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_async_vector_search_flat_scan_chunked() {
+        // Insert more vectors than PAGE_SIZE (512) to exercise multi-page flat scan.
+        // No HNSW index built — forces the cooperative chunked path.
+        let dir = TempDir::new().unwrap();
+        let engine = open_async_engine(&dir).await;
+
+        let dims = 4u16;
+        let n = 600usize;
+        for i in 0..n {
+            let v = vec![(i as f32) * 0.001; 4];
+            let bytes = v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
+            let key = (i as u32).to_be_bytes();
+            engine
+                .vector_put(b"ns", &key, dims, Dtype::F32, &bytes)
+                .await
+                .unwrap();
+        }
+
+        // Query close to vector 300
+        let target = 300.0f32 * 0.001;
+        let query = VectorRecord {
+            dims,
+            dtype: Dtype::F32,
+            data: vec![target; 4]
+                .iter()
+                .flat_map(|f: &f32| f.to_le_bytes())
+                .collect(),
+        };
+        let results = engine
+            .vector_search(b"ns", &query, 5, Metric::L2)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 5);
+        // Closest vector should be key 300 (distance ~0)
+        assert!(
+            results[0].distance < 1e-4,
+            "nearest vector should be ~0 distance, got {}",
+            results[0].distance
+        );
+        // Results sorted ascending
+        for i in 1..results.len() {
+            assert!(results[i - 1].distance <= results[i].distance);
+        }
     }
 }

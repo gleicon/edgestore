@@ -1865,6 +1865,23 @@ impl Engine {
         Ok((results, stats))
     }
 
+    /// Fetch one page of decoded vector records for cooperative async flat scans.
+    ///
+    /// Designed for async callers (e.g. `edgestore-tokio`) that want to iterate
+    /// through a vector namespace without holding the engine lock for the full
+    /// flat-scan duration. Takes `&self` (read lock only) — no HNSW mutation.
+    ///
+    /// Pass `None` as `cursor` to start from the beginning. On each call the
+    /// returned `next_key` (if `Some`) is the cursor for the next page.
+    pub fn vector_page(
+        &self,
+        ns: &[u8],
+        cursor: Option<&[u8]>,
+        page_size: usize,
+    ) -> Result<crate::vector::search::VectorPage, EdgestoreError> {
+        crate::vector::search::vector_page(self, ns, cursor, page_size)
+    }
+
     /// Text search with cost accounting. Returns results + [`QueryStats`].
     ///
     /// `bytes_scanned` reflects the size of the serialized inverted index examined.

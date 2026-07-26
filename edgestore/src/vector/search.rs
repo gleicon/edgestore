@@ -1,4 +1,4 @@
-use crate::engine::Engine;
+use crate::engine::{Engine, ScanBudget};
 use crate::error::EdgestoreError;
 use crate::vector::api::vector_namespace;
 use crate::vector::distance::{distance, Metric};
@@ -111,6 +111,76 @@ pub fn vector_search(
     results.sort_by(|a, b| crate::vector::distance::total_cmp_f32(a.distance, b.distance));
 
     Ok(results)
+}
+
+/// A page of decoded vector records returned by [`vector_page`].
+///
+/// Allows async callers to iterate through a namespace in bounded chunks so
+/// that the engine lock is not held across distance computations.
+#[derive(Debug)]
+pub struct VectorPage {
+    /// Decoded `(user_key, record)` pairs for this page.
+    pub records: Vec<(Vec<u8>, VectorRecord)>,
+    /// If `Some`, more records remain. Pass this value as `cursor` to the next
+    /// [`vector_page`] call. `None` means the scan is complete.
+    pub next_key: Option<Vec<u8>>,
+}
+
+/// Fetch one page of raw vector records from the KV layer.
+///
+/// `cursor` is the last key returned by the previous page (exclusive lower
+/// bound for this page). Pass `None` to start from the beginning.
+/// Records whose dims or dtype don't match the caller's query are still
+/// returned — filtering happens at the call site so mismatches don't silently
+/// consume budget.
+pub fn vector_page(
+    engine: &Engine,
+    ns: &[u8],
+    cursor: Option<&[u8]>,
+    page_size: usize,
+) -> Result<VectorPage, EdgestoreError> {
+    if page_size == 0 {
+        return Ok(VectorPage {
+            records: vec![],
+            next_key: None,
+        });
+    }
+
+    let vec_ns = vector_namespace(ns);
+
+    // Advance past cursor: append \x00 to make the start exclusive.
+    let start_buf;
+    let start: &[u8] = if let Some(c) = cursor {
+        start_buf = {
+            let mut v = c.to_vec();
+            v.push(0);
+            v
+        };
+        &start_buf
+    } else {
+        b""
+    };
+
+    let budget = ScanBudget {
+        max_items: Some(page_size),
+        max_bytes: None,
+    };
+    let scan = engine.range_budgeted(&vec_ns, start, &[0xFF; 32], &budget)?;
+
+    let last_key = scan.items.last().map(|(k, _)| k.clone());
+    let truncated = scan.truncated;
+
+    let mut records = Vec::with_capacity(scan.items.len());
+    for (key, val_bytes) in scan.items {
+        let record = crate::vector::types::decode_vector_record(&val_bytes)
+            .map_err(|e| EdgestoreError::CorruptData(format!("decode vector record: {}", e)))?;
+        records.push((key, record));
+    }
+
+    Ok(VectorPage {
+        records,
+        next_key: if truncated { last_key } else { None },
+    })
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -370,5 +440,52 @@ mod tests {
                 "results should be sorted by ascending distance"
             );
         }
+    }
+
+    #[test]
+    fn test_vector_page_paginates_correctly() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+
+        // Insert 10 vectors; page size 3 → 4 pages (3+3+3+1)
+        for i in 0u8..10 {
+            let bytes = vec![i; 4 * 4];
+            engine
+                .vector_put(b"ns", &[i], 4, crate::vector::types::Dtype::F32, &bytes)
+                .unwrap();
+        }
+
+        let mut all_keys = vec![];
+        let mut cursor: Option<Vec<u8>> = None;
+        let mut pages = 0;
+
+        loop {
+            let page = vector_page(&engine, b"ns", cursor.as_deref(), 3).unwrap();
+            for (k, _) in &page.records {
+                all_keys.push(k.clone());
+            }
+            pages += 1;
+            let done = page.next_key.is_none();
+            cursor = page.next_key;
+            if done {
+                break;
+            }
+        }
+
+        assert_eq!(all_keys.len(), 10, "all 10 vectors should be visited");
+        // No duplicate keys
+        all_keys.sort();
+        all_keys.dedup();
+        assert_eq!(all_keys.len(), 10, "no duplicates across pages");
+        assert!(pages >= 4, "should need at least 4 pages for 10 vectors at size 3");
+    }
+
+    #[test]
+    fn test_vector_page_empty_namespace() {
+        let dir = TempDir::new().unwrap();
+        let engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+        let page = vector_page(&engine, b"empty", None, 10).unwrap();
+        assert!(page.records.is_empty());
+        assert!(page.next_key.is_none());
     }
 }

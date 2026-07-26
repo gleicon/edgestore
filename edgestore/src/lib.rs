@@ -94,5 +94,5 @@ pub use transaction::Transaction;
 pub use vector::api::{vector_namespace, VectorEngine};
 pub use vector::distance::{distance, distance_scalar, total_cmp_f32, Metric};
 pub use vector::hnsw::HnswIndex;
-pub use vector::search::{vector_search, VectorSearchResult};
+pub use vector::search::{vector_page, vector_search, VectorPage, VectorSearchResult};
 pub use vector::types::{Dtype, VectorRecord};

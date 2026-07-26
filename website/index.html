@@ -94,7 +94,7 @@
         <div>
           <div class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 text-sm font-medium mb-6 border border-white/20">
             <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
-            v1.4.0 Released
+            v1.6.0 Released
           </div>
           <h1 class="text-4xl lg:text-6xl font-bold leading-tight mb-6">
             Local-First Embedded<br>
@@ -138,16 +138,15 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       <div class="bg-edge-50 rounded-xl border border-edge-200 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center space-x-2 mb-2">
-            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.4.0</span>
-            <span class="text-sm text-slate-600 font-medium">2026-07-12</span>
+            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.6.0</span>
+            <span class="text-sm text-slate-600 font-medium">2026-07-25</span>
           </div>
-          <h3 class="font-semibold text-slate-900">Read-lock fast path for tiered reads + flush-wake notify</h3>
+          <h3 class="font-semibold text-slate-900">Cost accounting, bounded scans, search snippets, vector index stripping</h3>
           <p class="text-sm text-slate-600 mt-1">
-            <code>AsyncTieredEngine::get</code>, <code>range</code>, and <code>prefix</code> now try a read-lock fast path first,
-            only escalating to the write lock when an archived segment actually needs fetching.
-            Concurrent readers no longer serialize behind the single writer for hot-window queries.
-            <code>AsyncTieredEngine::flush_notify()</code> lets tiering workers react to a segment flush immediately
-            instead of waiting for a polling interval.
+            New <code>_with_stats</code> variants on every read API return a <code>QueryStats</code> struct (segments scanned, bytes scanned, items examined) — ideal for agent loops and quota enforcement.
+            <code>range_budgeted</code> / <code>prefix_budgeted</code> accept a <code>ScanBudget</code> and stop early, returning a <code>BudgetedScan</code> with a continuation token.
+            <code>search_text_with_snippets</code> returns context windows around matched terms for RAG / highlight display.
+            <code>strip_vector_index</code> and <code>with_vector_stripping</code> in <code>edgestore-tier</code> reclaim local disk when vector data is archived to S3.
           </p>
         </div>
         <a href="https://github.com/gleicon/edgestore/blob/main/CHANGELOG.md" class="px-4 py-2 bg-white border border-edge-300 text-edge-700 rounded-lg font-medium hover:bg-edge-50 transition text-sm whitespace-nowrap">Read Changelog</a>
@@ -220,6 +219,27 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
           </div>
           <h3 class="font-semibold text-slate-900 mb-2">Tiered Read Fast Path</h3>
           <p class="text-slate-600 text-sm"><code>AsyncTieredEngine</code> reads hot-window data under a read lock. Concurrent readers never block behind the single writer unless an archived segment must be fetched.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Cost Accounting</h3>
+          <p class="text-slate-600 text-sm"><code>_with_stats</code> variants on every read return a <code>QueryStats</code> struct. Agent loops and quota systems know exactly how many bytes and segments each query touched.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Bounded Scans</h3>
+          <p class="text-slate-600 text-sm"><code>range_budgeted</code> and <code>prefix_budgeted</code> accept a <code>ScanBudget</code> (max items + max bytes) and stop early. Returns a continuation cursor for safe pagination in constrained environments.</p>
+        </div>
+        <div class="p-6 rounded-xl border border-slate-200 hover:border-edge-300 hover:shadow-lg transition">
+          <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"/></svg>
+          </div>
+          <h3 class="font-semibold text-slate-900 mb-2">Search Snippets</h3>
+          <p class="text-slate-600 text-sm"><code>search_text_with_snippets</code> returns context windows around matched terms. Accurate character-offset tokenization drives highlighting and RAG context extraction.</p>
         </div>
       </div>
     </div>

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - 2026-07-25
 
+## [1.6.0] - 2026-07-26
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
 ### Added
 
 - **Cost-accounting variants for all major operations (ENG-12):** `get_with_stats`, `range_with_stats`, `prefix_with_stats`, `vector_search_with_stats`, `search_text_with_stats` — each returns the result alongside `QueryStats { segments_scanned, bytes_scanned, items_examined }`. Use for agent cost budgeting, quota enforcement, or observability. (`edgestore/src/engine.rs`)

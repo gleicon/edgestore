@@ -69,7 +69,7 @@ pub mod wal;
 
 pub use compactor::{CompactionStats, Compactor};
 pub use config::EdgestoreConfig;
-pub use engine::{BudgetedScan, Engine, ImportResult, QueryStats, ScanBudget};
+pub use engine::{BudgetedScan, Engine, ImportResult, QueryStats, RangePage, ScanBudget};
 pub use error::EdgestoreError;
 pub use fdp_backend::{FdpStorageBackend, MockFdpBackend};
 pub use immutable::ImmutableEngine;

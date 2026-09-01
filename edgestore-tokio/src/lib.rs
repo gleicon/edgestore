@@ -18,6 +18,8 @@ use edgestore::{
     SearchOptions, SegmentRef, TextEngine, TextSearchResult, VectorEngine,
 };
 
+pub use edgestore::RangePage;
+
 /// Async wrapper around the synchronous `edgestore::Engine`.
 ///
 /// All I/O runs on `tokio::task::spawn_blocking`. The core `edgestore` crate is
@@ -185,6 +187,58 @@ impl AsyncEngine {
                 e
             )))
         })?
+    }
+
+    /// Cursor-based forward range page.
+    ///
+    /// Each call reads only the segments whose key range overlaps `[cursor, end)` and
+    /// stops at `page_size` live items. Pass `next_key` from the result as `cursor`
+    /// on the next call. `next_key = None` means the scan is exhausted.
+    pub async fn range_page(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        cursor: Option<&[u8]>,
+        page_size: usize,
+    ) -> Result<RangePage, EdgestoreError> {
+        let ns = ns.to_vec();
+        let start = start.to_vec();
+        let end = end.to_vec();
+        let cursor = cursor.map(|c| c.to_vec());
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let engine = inner.blocking_read();
+            engine.range_page(&ns, &start, &end, cursor.as_deref(), page_size)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
+    }
+
+    /// Cursor-based reverse range page (descending key order).
+    ///
+    /// Returns up to `page_size` items in descending key order. Pass `next_key` from
+    /// the result as `cursor` on the next call to continue going left.
+    /// `next_key = None` means the scan has reached `start`.
+    pub async fn range_rev_page(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        cursor: Option<&[u8]>,
+        page_size: usize,
+    ) -> Result<RangePage, EdgestoreError> {
+        let ns = ns.to_vec();
+        let start = start.to_vec();
+        let end = end.to_vec();
+        let cursor = cursor.map(|c| c.to_vec());
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let engine = inner.blocking_read();
+            engine.range_rev_page(&ns, &start, &end, cursor.as_deref(), page_size)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
     }
 
     /// Vector put — lightweight write.
@@ -774,5 +828,70 @@ mod tests {
         for i in 1..results.len() {
             assert!(results[i - 1].distance <= results[i].distance);
         }
+    }
+
+    #[tokio::test]
+    async fn test_async_range_page_forward_pagination() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = AsyncEngine::open(EdgestoreConfig::new(dir.path())).await.unwrap();
+
+        // Write 25 keys, flush two segments, leave some in memtable
+        for i in 0u32..15 {
+            engine.put(b"ns", format!("k{:04}", i).as_bytes(), b"v").await.unwrap();
+        }
+        {
+            let mut e = engine.inner.write().await;
+            e.flush_to_segments().unwrap();
+        }
+        for i in 15u32..25 {
+            engine.put(b"ns", format!("k{:04}", i).as_bytes(), b"v").await.unwrap();
+        }
+
+        let mut all: Vec<Vec<u8>> = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = engine.range_page(b"ns", b"", b"\xff", cursor.as_deref(), 7).await.unwrap();
+            for (k, _) in &page.items {
+                all.push(k.clone());
+            }
+            cursor = page.next_key;
+            if cursor.is_none() { break; }
+        }
+        assert_eq!(all.len(), 25, "all 25 keys must be returned");
+        for w in all.windows(2) {
+            assert!(w[0] < w[1], "forward pages must be ascending");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_range_rev_page_descending_pagination() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = AsyncEngine::open(EdgestoreConfig::new(dir.path())).await.unwrap();
+
+        for i in 0u32..12 {
+            engine.put(b"ns", format!("r{:04}", i).as_bytes(), b"v").await.unwrap();
+        }
+        {
+            let mut e = engine.inner.write().await;
+            e.flush_to_segments().unwrap();
+        }
+
+        let mut all: Vec<Vec<u8>> = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = engine.range_rev_page(b"ns", b"", b"\xff", cursor.as_deref(), 5).await.unwrap();
+            for (k, _) in &page.items {
+                all.push(k.clone());
+            }
+            cursor = page.next_key;
+            if cursor.is_none() { break; }
+        }
+        assert_eq!(all.len(), 12, "all 12 keys must be returned in reverse pages");
+        // Globally descending
+        for w in all.windows(2) {
+            assert!(w[0] > w[1], "reverse pages must be globally descending");
+        }
+        // First key must be the lexicographically largest
+        assert_eq!(all[0], b"r0011".to_vec());
     }
 }

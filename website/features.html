@@ -220,6 +220,125 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       </div>
     </section>
 
+    <!-- Cost Accounting & Bounded Scans -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Cost Accounting &amp; Bounded Scans <span class="text-sm font-normal text-slate-500 ml-2">v1.5.0</span></h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Every read API has a <code>_with_stats</code> variant that returns a <code>QueryStats</code> struct alongside the result. Agent loops and quota-enforcement systems can measure exactly how many bytes and segments each query touched — no guesswork.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>get_with_stats</strong> — point lookup + <code>QueryStats{segments_scanned, bytes_scanned, items_examined}</code></li>
+            <li><strong>range_with_stats / prefix_with_stats</strong> — scan variants that count bytes as they iterate</li>
+            <li><strong>vector_search_with_stats / search_text_with_stats</strong> — same for ANN and BM25 paths</li>
+            <li><strong>range_budgeted / prefix_budgeted</strong> — accept a <code>ScanBudget{max_items, max_bytes}</code> and stop early, returning a <code>BudgetedScan{items, truncated}</code></li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Cost-aware point lookup</span>
+<span class="keyword">let</span> (val, stats) = db.get_with_stats(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>)?;
+println!(<span class="string">"bytes={} segs={}"</span>, stats.bytes_scanned, stats.segments_scanned);
+
+<span class="comment">// Bounded range scan — stop after 500 items or 1 MB</span>
+<span class="keyword">let</span> budget = ScanBudget { max_items: <span class="number">500</span>, max_bytes: <span class="number">1024</span> * <span class="number">1024</span> };
+<span class="keyword">let</span> result = db.range_budgeted(<span class="string">b"logs"</span>, <span class="string">b"2026-01"</span>, <span class="string">b"2026-07"</span>, budget)?;
+println!(<span class="string">"{} items, truncated={}"</span>, result.items.len(), result.truncated);
+
+<span class="comment">// For cursor pagination use range_page instead (see below)</span>
+
+<span class="comment">// ANN search with cost reporting</span>
+<span class="keyword">let</span> (hits, stats) = db.vector_search_with_stats(
+    <span class="string">b"vec"</span>, &query, <span class="number">10</span>, Metric::Cosine
+)?;</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Search Snippets -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Search Snippets <span class="text-sm font-normal text-slate-500 ml-2">v1.5.0</span></h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p><code>search_text_with_snippets</code> returns <code>SnippetResult</code> values that bundle a document ID, BM25 score, and a list of <code>Snippet</code> objects — each with a context window around every matched term. The tokenizer now records exact character offsets so context windows align precisely with the original text.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>SnippetResult</strong> — <code>{doc_id, score, snippets: Vec&lt;Snippet&gt;}</code></li>
+            <li><strong>Snippet</strong> — <code>{term, span, context_start, context_end}</code> where <code>span</code> is the matched text</li>
+            <li><strong>Character offsets</strong> — tokenizer v3 stores char-start positions, enabling accurate window extraction for any Unicode text</li>
+            <li>Ideal for RAG pipelines: pass <code>span</code> to an LLM as highlighted evidence without sending the full document</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code>db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>,
+    <span class="string">"The quick brown fox jumps over the lazy dog"</span>)?;
+
+<span class="keyword">let</span> results = db.search_text_with_snippets(
+    <span class="string">b"docs"</span>, <span class="string">"fox"</span>, <span class="number">5</span>
+)?;
+
+<span class="keyword">for</span> r <span class="keyword">in</span> results {
+    println!(<span class="string">"doc={} score={:.3}"</span>, r.doc_id, r.score);
+    <span class="keyword">for</span> s <span class="keyword">in</span> r.snippets {
+        <span class="comment">// span = "fox", context window around it</span>
+        println!(<span class="string">"  term={} span={:?}"</span>, s.term, s.span);
+    }
+}
+<span class="comment">// Output:</span>
+<span class="comment">//   doc=doc1  score=1.847</span>
+<span class="comment">//   term=fox  span="fox"</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Cursor Pagination -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Cursor Pagination <span class="text-sm font-normal text-slate-500 ml-2">v1.7.0</span></h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p><code>range_page</code> and <code>range_rev_page</code> provide bounded page-by-page iteration without loading the full range into memory. Each call reads only the segment blocks that overlap the current page window; the scan stops at the I/O level once <code>page_size</code> live items are collected.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li><strong>range_page</strong> — ascending iteration; cursor = last returned key</li>
+            <li><strong>range_rev_page</strong> — descending iteration; cursor = smallest key returned. Efficient for latest-N queries when keys encode time.</li>
+            <li><strong>RangePage.next_key</strong> — <code>None</code> when the range is exhausted, otherwise the cursor for the next call</li>
+            <li>Streaming block reads (one 4 KiB block per segment at a time) — I/O stops as soon as <code>page_size</code> items are collected across all segments</li>
+            <li>Works identically via <code>AsyncEngine</code> in <code>edgestore-tokio</code></li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Forward — walk all events in order</span>
+<span class="keyword">let mut</span> cursor: <span class="type">Option</span>&lt;<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;&gt; = <span class="type">None</span>;
+<span class="keyword">loop</span> {
+    <span class="keyword">let</span> page = db.<span class="function">range_page</span>(
+        <span class="string">b"events"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>,
+        cursor.<span class="function">as_deref</span>(), <span class="number">100</span>
+    )?;
+    <span class="keyword">for</span> (key, val) <span class="keyword">in</span> &amp;page.items { process(key, val); }
+    cursor = page.next_key;
+    <span class="keyword">if</span> cursor.<span class="function">is_none</span>() { <span class="keyword">break</span>; }
+}
+
+<span class="comment">// Reverse — newest-first, one page</span>
+<span class="keyword">let</span> page = db.<span class="function">range_rev_page</span>(
+    <span class="string">b"logs"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>, <span class="type">None</span>, <span class="number">50</span>
+)?;
+<span class="comment">// page.items[0] is the largest key in the namespace</span></code></pre>
+        </div>
+      </div>
+    </section>
+
     <!-- Replication -->
     <section class="mb-16">
       <div class="flex items-center space-x-3 mb-4">
@@ -276,6 +395,7 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
             <li><strong>Read lock fast path</strong> — hot-window queries never block behind the writer (v1.4.0)</li>
             <li><strong>Flush-wake notify</strong> — <code>flush_notify()</code> on <code>AsyncTieredEngine</code> wakes a tiering worker the moment a segment lands</li>
             <li><strong>Text index stripping</strong> — <code>with_text_stripping(true)</code> auto-strips text index bytes from archived segments to reclaim local disk</li>
+            <li><strong>Vector index stripping</strong> — <code>with_vector_stripping(true)</code> (v1.5.0) strips <code>__vec__</code> records from archived segments. Paired with <code>strip_vector_index(seg_id)</code> on the core engine for manual use.</li>
           </ul>
         </div>
         <div class="code-block p-4">

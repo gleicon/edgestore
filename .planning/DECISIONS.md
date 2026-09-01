@@ -350,3 +350,37 @@ pub trait RemoteStore: Send + Sync {
 **Rationale:** `HttpReplicationServer` serves from the primary's local manifest intentionally (hot data only). Cold data ownership is S3, not the primary node. Pierre confirmed shared S3 is acceptable.
 
 **Implication:** No changes to `HttpReplicationServer`. No segment-prune fencing or replica registration needed. Caller must ensure replica `TieredEngine` points to the same S3 bucket/prefix as primary. Source: Pierre feedback 2026-07-07.
+
+---
+
+## D34 — Async vector search: HNSW fast path via spawn_blocking + write lock; flat scan via cooperative VectorPage chunks
+
+**Decision:** `edgestore-tokio::AsyncEngine::vector_search` uses two paths:
+1. **HNSW fast path** — when `vector_count(ns)` returns `Some`, a single `tokio::task::spawn_blocking` with `blocking_write()` handles the search. `get_vector_index` may mutate engine state (lazy sidecar load), so write lock is correct. HNSW completes in <5 ms; a single blocking window is acceptable.
+2. **Flat scan path** — when no HNSW index is loaded, the scan uses `Engine::vector_page` (takes `&self`, read lock only) in a loop. Each page is fetched under a short `spawn_blocking` + read lock; the lock is released before distance computation. `tokio::task::yield_now()` between pages yields to the scheduler. No extra dependencies (no rayon).
+
+`Engine::vector_page(ns, cursor, page_size)` is a new `&self` method added to core. It uses `range_budgeted` internally and returns `VectorPage { records, next_key }`. `next_key` is the last key in the page; callers pass it as the cursor for the next page (internally advanced by appending `\x00` to skip the cursor key). This API is also usable directly by callers that want streaming access to vector data without loading all records into memory.
+
+**Rationale:** The core constraint ("no async in edgestore crate") rules out native async vector ops. Rayon would parallelize the flat scan but adds a dependency and a second thread pool; for PAGE_SIZE=512 at 128 dims the per-page distance computation is ~100μs — acceptable on the async thread. The HNSW / flat-scan split avoids regressing the common production case (HNSW loaded). `vector_page` as a `&self` read-only primitive is reusable for streaming exports, agent loops, and other non-search use cases.
+
+**Implication:** `VectorPage` is exported from `edgestore::vector::search` and re-exported from `edgestore`. Callers who load an HNSW index before querying see no change in behavior. Callers without an HNSW index on large collections (>512 vectors) now cooperate with the async scheduler instead of holding the write lock for the full flat-scan duration.
+
+---
+
+## D35 — DeferredChunkAppend-inspired scan: streaming cursors, budget propagation, cursor pagination
+
+**Decision:** Three structural changes to the range scan stack, plus two new APIs:
+
+1. **P1 — Store-level metadata pruning**: `SegmentCursor::open` compares the query range `[start, end)` against `reader.meta.min_key/max_key` before opening any file. Non-overlapping segments produce `None` and are skipped entirely.
+
+2. **P2 — Budget-aware K-way merge**: `SegmentStore::range_scan_budgeted` returns `(Vec<MemEntry>, bool)` where the bool signals that the merge was stopped early by `max_items`. `range_core` and `prefix_core` initialise `truncated = seg_truncated` before their own budget loop so the flag is correctly propagated when the segment scan is exactly consumed by the merge.
+
+3. **P3 — Streaming block reads (`SegmentCursor`)**: Replaces the pre-load-all approach. `SegmentCursor` holds an open `File` handle and reads one 4 KiB block at a time via `read_block_at_offset` (extracted free function, shared with `SegmentReader::read_block_at`). The K-way merge seeds from each cursor's first entry and advances per-cursor lazily. For `max_items=10` against 100 segments, I/O stops after the first ~10 live entries are collected — not after all 100 files are fully read.
+
+4. **P4 — `range_page` cursor API**: `Engine::range_page(ns, start, end, cursor, page_size) -> Result<RangePage>`. Mirrors `vector_page`. Cursor = last returned key + `\x00` to advance exclusive start. `next_key = None` signals exhaustion. Async wrapper in `edgestore-tokio::AsyncEngine`. Re-exported from `edgestore` and `edgestore-tokio` as `RangePage`.
+
+5. **P5 — `range_rev_page` descending scan**: `Engine::range_rev_page(ns, start, end, cursor, page_size) -> Result<RangePage>`. Items returned in descending key order. `next_key` = smallest key returned on this page (the caller passes it as the next `end_cursor`). Implemented via `SegmentStore::range_scan_rev_budgeted` (max-heap K-way merge over per-segment pre-loaded vecs served from tail, stopped by P2) merged with the memtable in descending order. Async wrapper in `edgestore-tokio::AsyncEngine`.
+
+**Rationale:** Maps directly to TimescaleDB's DeferredChunkAppend insight: planning cost (opening all segments) was O(segments) regardless of LIMIT/budget. P1-P3 push the budget to the I/O level. P4-P5 give callers correct cursor-based pagination without loading full ranges. The `(Vec, bool)` return from `range_scan_budgeted` is necessary because `range_core`'s `i < merged.len()` check produces a false negative when the segment budget exactly fills `merged` and the memtable is empty.
+
+**Implication:** `SegmentStore::range_scan` is removed; callers use `range_scan_budgeted(..., None)`. `read_block_at_offset` is now `pub(crate)` and shared between `SegmentReader` and `SegmentCursor`. Existing `range_budgeted` and `prefix_budgeted` semantics are unchanged; `truncated = true` is now correctly set when segments are budget-truncated even if the merged slice is fully consumed.

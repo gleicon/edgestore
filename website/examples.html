@@ -61,6 +61,8 @@
       <button class="tab-btn px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium text-sm transition" onclick="showTab('transactions')">Transactions</button>
       <button class="tab-btn px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium text-sm transition" onclick="showTab('replication')">Replication</button>
       <button class="tab-btn px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium text-sm transition" onclick="showTab('cli')">CLI</button>
+      <button class="tab-btn px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium text-sm transition" onclick="showTab('agent')">Cost Accounting</button>
+      <button class="tab-btn px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium text-sm transition" onclick="showTab('pagination')">Pagination</button>
     </div>
 
     <!-- KV Store -->
@@ -311,6 +313,194 @@ $ edgestore-cli compact --path ./mydb
 
 <span class="comment"># Export to JSON</span>
 $ edgestore-cli export --path ./mydb --output backup.json</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cost Accounting / Agent-friendly APIs -->
+    <div id="agent" class="tab-content">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Cost-Aware Reads</h3>
+        <p class="text-slate-600 text-sm mb-4">Every read has a <code>_with_stats</code> variant that returns a <code>QueryStats</code> struct alongside the result. Ideal for agent loops that need to track token- or byte-budgets per operation.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">use</span> edgestore::{EdgestoreConfig, Engine};
+
+<span class="keyword">fn</span> main() -> <span class="type">Result</span>&lt;(), <span class="type">Box</span>&lt;<span class="keyword">dyn</span> std::error::Error&gt;&gt; {
+    <span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/cost_demo"</span>))?;
+
+    db.put(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">b"hello world"</span>)?;
+    db.flush_to_segments()?;
+
+    <span class="comment">// Point lookup with cost reporting</span>
+    <span class="keyword">let</span> (val, stats) = db.get_with_stats(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>)?;
+    println!(<span class="string">"value={:?}"</span>, val);
+    println!(<span class="string">"bytes={} segs={} items={}"</span>,
+        stats.bytes_scanned,
+        stats.segments_scanned,
+        stats.items_examined);
+
+    <span class="comment">// Range scan with accounting</span>
+    <span class="keyword">let</span> (rows, stats) = db.range_with_stats(<span class="string">b"docs"</span>, <span class="string">b"a"</span>, <span class="string">b"z"</span>)?;
+    println!(<span class="string">"{} rows, {} bytes"</span>, rows.len(), stats.bytes_scanned);
+
+    <span class="comment">// Vector search with cost reporting</span>
+    <span class="keyword">let</span> (hits, stats) = db.vector_search_with_stats(
+        <span class="string">b"vec"</span>, &query_vec, <span class="number">10</span>, <span class="type">Metric::Cosine</span>
+    )?;
+    println!(<span class="string">"{} hits, {} bytes scanned"</span>, hits.len(), stats.bytes_scanned);
+
+    Ok(())
+}</code></pre>
+        </div>
+        <p class="text-sm text-slate-500 mt-3">Run: <code class="bg-slate-100 px-2 py-1 rounded">cargo run --example cost_accounting</code></p>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Bounded Scans with Pagination</h3>
+        <p class="text-slate-600 text-sm mb-4">Stop a scan early when a byte or item budget is hit. Use <code>next_key</code> as the start of the next page.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">use</span> edgestore::ScanBudget;
+
+<span class="keyword">let</span> budget = ScanBudget { max_items: <span class="number">100</span>, max_bytes: <span class="number">512</span> * <span class="number">1024</span> };
+<span class="keyword">let mut</span> start = <span class="string">b"2026-01-01"</span>.to_vec();
+<span class="keyword">let</span> end = <span class="string">b"2026-12-31"</span>;
+
+<span class="keyword">loop</span> {
+    <span class="keyword">let</span> page = db.range_budgeted(<span class="string">b"logs"</span>, &start, end, budget)?;
+
+    <span class="keyword">for</span> (k, v) <span class="keyword">in</span> &page.items {
+        process(k, v);
+    }
+
+    <span class="keyword">if</span> !page.truncated {
+        <span class="keyword">break</span>;
+    }
+    start = page.next_key;
+}
+
+<span class="comment">// Same pattern works for prefix scans</span>
+<span class="keyword">let</span> result = db.prefix_budgeted(<span class="string">b"events"</span>, <span class="string">b"click:"</span>, budget)?;
+println!(<span class="string">"got {} items, truncated={}"</span>, result.items.len(), result.truncated);</code></pre>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Search Snippets for RAG</h3>
+        <p class="text-slate-600 text-sm mb-4">Return context windows around matched terms. Pass snippets to an LLM as evidence without sending the full document.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/snippets_demo"</span>))?;
+<span class="keyword">let</span> ns = <span class="string">b"articles"</span>;
+
+db.index_text(ns, <span class="string">b"doc1"</span>,
+    <span class="string">"The quick brown fox jumps over the lazy dog near the river bank"</span>)?;
+db.index_text(ns, <span class="string">b"doc2"</span>,
+    <span class="string">"A fox and a hound became unlikely friends in the forest"</span>)?;
+
+<span class="keyword">let</span> results = db.search_text_with_snippets(ns, <span class="string">"fox"</span>, <span class="number">5</span>)?;
+
+<span class="keyword">for</span> r <span class="keyword">in</span> &results {
+    println!(<span class="string">"doc={} score={:.3}"</span>, r.doc_id, r.score);
+    <span class="keyword">for</span> s <span class="keyword">in</span> &r.snippets {
+        println!(<span class="string">"  matched={:?}  context={:?}"</span>, s.span,
+            &original_text[s.context_start..s.context_end]);
+    }
+}
+
+<span class="comment">// Output (approximate):</span>
+<span class="comment">//   doc=doc1  score=1.847</span>
+<span class="comment">//     matched="fox"  context="quick brown fox jumps over"</span>
+<span class="comment">//   doc=doc2  score=1.521</span>
+<span class="comment">//     matched="fox"  context="A fox and a hound became"</span></code></pre>
+        </div>
+        <p class="text-sm text-slate-500 mt-3">Run: <code class="bg-slate-100 px-2 py-1 rounded">cargo run --example search_snippets</code></p>
+      </div>
+    </div>
+
+    <!-- Cursor Pagination -->
+    <div id="pagination" class="tab-content">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Forward Pagination</h3>
+        <p class="text-slate-600 text-sm mb-4">Walk a key range in pages without loading the full range. Each call reads only the segment blocks that overlap the current window; I/O stops once <code>page_size</code> live items are collected.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">use</span> edgestore::{EdgestoreConfig, Engine, RangePage};
+
+<span class="keyword">fn</span> main() -> <span class="type">Result</span>&lt;(), <span class="type">Box</span>&lt;<span class="keyword">dyn</span> std::error::Error&gt;&gt; {
+    <span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/pagination_demo"</span>))?;
+
+    <span class="comment">// Write 1000 events with timestamp keys</span>
+    <span class="keyword">for</span> i <span class="keyword">in</span> <span class="number">0</span>..<span class="number">1000u32</span> {
+        <span class="keyword">let</span> key = format!(<span class="string">"2026-08-{:04}"</span>, i);
+        db.put(<span class="string">b"events"</span>, key.as_bytes(), <span class="string">b"payload"</span>)?;
+    }
+    db.flush_to_segments()?;
+
+    <span class="comment">// Page through all events 100 at a time</span>
+    <span class="keyword">let mut</span> cursor: <span class="type">Option</span>&lt;<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;&gt; = <span class="type">None</span>;
+    <span class="keyword">let mut</span> total = <span class="number">0usize</span>;
+    <span class="keyword">loop</span> {
+        <span class="keyword">let</span> page = db.range_page(
+            <span class="string">b"events"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>,
+            cursor.as_deref(), <span class="number">100</span>
+        )?;
+        total += page.items.len();
+        cursor = page.next_key;
+        <span class="keyword">if</span> cursor.is_none() { <span class="keyword">break</span>; }
+    }
+    println!(<span class="string">"total events: {total}"</span>); <span class="comment">// 1000</span>
+    <span class="type">Ok</span>(())
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Reverse Pagination — Latest-N</h3>
+        <p class="text-slate-600 text-sm mb-4">Descending scan for newest-first queries. When keys encode timestamps, <code>range_rev_page</code> returns the most recent records first and stops early without reading older segments.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Fetch the 5 most recent log entries</span>
+<span class="keyword">let</span> page = db.range_rev_page(
+    <span class="string">b"logs"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>, <span class="type">None</span>, <span class="number">5</span>
+)?;
+<span class="comment">// page.items[0] is the lexicographically largest key (most recent)</span>
+<span class="keyword">for</span> (key, val) <span class="keyword">in</span> &amp;page.items {
+    println!(<span class="string">"{}: {}"</span>, String::from_utf8_lossy(key), String::from_utf8_lossy(val));
+}
+
+<span class="comment">// Multi-page reverse walk</span>
+<span class="keyword">let mut</span> cursor: <span class="type">Option</span>&lt;<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;&gt; = <span class="type">None</span>;
+<span class="keyword">loop</span> {
+    <span class="keyword">let</span> page = db.range_rev_page(
+        <span class="string">b"logs"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>,
+        cursor.as_deref(), <span class="number">50</span>
+    )?;
+    <span class="keyword">for</span> (key, val) <span class="keyword">in</span> &amp;page.items { process_newest_first(key, val); }
+    cursor = page.next_key; <span class="comment">// smallest key in this page</span>
+    <span class="keyword">if</span> cursor.is_none() { <span class="keyword">break</span>; }
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Async Pagination (edgestore-tokio)</h3>
+        <p class="text-slate-600 text-sm mb-4">The same API is available on <code>AsyncEngine</code>. Each page call runs inside <code>spawn_blocking</code> and releases the read lock before the next page.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">use</span> edgestore_tokio::{AsyncEngine, RangePage};
+<span class="keyword">use</span> edgestore::EdgestoreConfig;
+
+<span class="keyword">async fn</span> export_all(engine: &amp;AsyncEngine) -> <span class="type">Vec</span>&lt;(<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;, <span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;)&gt; {
+    <span class="keyword">let mut</span> out = <span class="type">Vec</span>::new();
+    <span class="keyword">let mut</span> cursor: <span class="type">Option</span>&lt;<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;&gt; = <span class="type">None</span>;
+    <span class="keyword">loop</span> {
+        <span class="keyword">let</span> page = engine
+            .range_page(<span class="string">b"data"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>, cursor.as_deref(), <span class="number">200</span>)
+            .await
+            .unwrap();
+        out.extend(page.items);
+        cursor = page.next_key;
+        <span class="keyword">if</span> cursor.is_none() { <span class="keyword">break</span>; }
+        tokio::task::yield_now().await; <span class="comment">// cooperate with the scheduler</span>
+    }
+    out
+}</code></pre>
         </div>
       </div>
     </div>

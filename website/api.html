@@ -60,6 +60,8 @@
       <a href="#engine" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Engine</a>
       <a href="#config" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Config</a>
       <a href="#kv" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">KV API</a>
+      <a href="#cost" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Cost Accounting</a>
+      <a href="#pagination" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Pagination</a>
       <a href="#vector" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Vector</a>
       <a href="#text" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Text</a>
       <a href="#replication" class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:border-edge-300 hover:text-edge-600 transition">Replication</a>
@@ -169,6 +171,96 @@
       </div>
     </section>
 
+    <!-- Cost Accounting -->
+    <section id="cost" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Cost Accounting &amp; Bounded Scans <span class="text-xs font-normal bg-edge-100 text-edge-700 px-2 py-1 rounded-full ml-3">v1.5.0</span>
+      </h2>
+      <p class="text-slate-600 mb-4">Every read has a <code>_with_stats</code> twin that returns a <code>QueryStats</code> alongside the result. Bounded variants stop early when a <code>ScanBudget</code> is exceeded.</p>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.get_with_stats(ns, key) -> Result&lt;(Option&lt;Vec&lt;u8&gt;&gt;, QueryStats), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Point lookup with cost reporting. Returns zero stats on cache miss, 1 item + byte count on hit.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.range_with_stats(ns, start, end) -> Result&lt;(Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;, QueryStats), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Range scan that accumulates bytes_scanned and items_examined as it iterates.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.prefix_with_stats(ns, prefix) -> Result&lt;(Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;, QueryStats), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Prefix scan with cost accounting.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.range_budgeted(ns, start, end, budget: ScanBudget) -> Result&lt;BudgetedScan, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Range scan that stops when <code>max_items</code> or <code>max_bytes</code> is reached. <code>BudgetedScan.truncated</code> is true when cut short. For cursor-based pagination use <code>range_page</code> instead.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.prefix_budgeted(ns, prefix, budget: ScanBudget) -> Result&lt;BudgetedScan, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Prefix scan with early termination on budget exhaustion.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.vector_search_with_stats(ns, query, k, metric) -> Result&lt;(Vec&lt;VectorSearchResult&gt;, QueryStats), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">ANN / flat-scan search with byte and segment accounting.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.search_text_with_stats(ns, query, k) -> Result&lt;(Vec&lt;TextSearchResult&gt;, QueryStats), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">BM25 text search with cost reporting. Counts posting-list bytes read.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Cursor Pagination -->
+    <section id="pagination" class="mb-12">
+      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+        <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Cursor Pagination <span class="text-xs font-normal bg-edge-100 text-edge-700 px-2 py-1 rounded-full ml-3">v1.7.0</span>
+      </h2>
+      <p class="text-slate-600 mb-4">
+        Bounded page-by-page iteration over a key range. Each call reads only the segment blocks that overlap the current page window and stops at the I/O level once <code>page_size</code> live items are collected. Pass <code>next_key</code> from the result as <code>cursor</code> on the next call; <code>next_key = None</code> means the scan is exhausted.
+      </p>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-6">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.range_page(ns, start, end, cursor: Option&lt;&amp;[u8]&gt;, page_size) -> Result&lt;RangePage, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Forward cursor scan. Items returned in ascending key order. First call: <code>cursor = None</code>. Subsequent calls: <code>cursor = page.next_key.as_deref()</code>.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.range_rev_page(ns, start, end, cursor: Option&lt;&amp;[u8]&gt;, page_size) -> Result&lt;RangePage, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Reverse cursor scan. Items returned in descending key order. <code>next_key</code> is the smallest key on the current page; pass it as <code>cursor</code> to continue scanning leftward. Efficient for latest-N queries when keys encode time.</p>
+        </div>
+      </div>
+
+      <h3 class="text-lg font-semibold text-slate-900 mb-3">RangePage</h3>
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-6">
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">RangePage.items: Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Decoded <code>(key, value)</code> pairs. Ascending for <code>range_page</code>, descending for <code>range_rev_page</code>.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">RangePage.next_key: Option&lt;Vec&lt;u8&gt;&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Cursor for the next call. <code>None</code> when all items in the range have been returned.</p>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 rounded-xl p-5 code-block">
+        <pre class="text-sm"><code><span class="comment">// Forward pagination — ascending, page_size=100</span>
+<span class="keyword">let mut</span> cursor: <span class="type">Option</span>&lt;<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;&gt; = <span class="type">None</span>;
+<span class="keyword">loop</span> {
+    <span class="keyword">let</span> page = db.<span class="function">range_page</span>(<span class="string">b"events"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>, cursor.<span class="function">as_deref</span>(), <span class="number">100</span>)?;
+    <span class="keyword">for</span> (key, val) <span class="keyword">in</span> &amp;page.items { process(key, val); }
+    cursor = page.next_key;
+    <span class="keyword">if</span> cursor.<span class="function">is_none</span>() { <span class="keyword">break</span>; }
+}
+
+<span class="comment">// Reverse pagination — latest-N, descending</span>
+<span class="keyword">let mut</span> cursor: <span class="type">Option</span>&lt;<span class="type">Vec</span>&lt;<span class="type">u8</span>&gt;&gt; = <span class="type">None</span>;
+<span class="keyword">loop</span> {
+    <span class="keyword">let</span> page = db.<span class="function">range_rev_page</span>(<span class="string">b"logs"</span>, <span class="string">b""</span>, <span class="string">b"\xff"</span>, cursor.<span class="function">as_deref</span>(), <span class="number">50</span>)?;
+    <span class="keyword">for</span> (key, val) <span class="keyword">in</span> &amp;page.items { process_newest_first(key, val); }
+    cursor = page.next_key;
+    <span class="keyword">if</span> cursor.<span class="function">is_none</span>() { <span class="keyword">break</span>; }
+}</code></pre>
+      </div>
+    </section>
+
     <!-- Vector -->
     <section id="vector" class="mb-12">
       <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
@@ -195,9 +287,13 @@
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.build_vector_index(ns, dims, dtype, metric) -> Result&lt;(), EdgestoreError&gt;</code>
           <p class="text-slate-600 text-sm mt-1">Build an HNSW approximate index for the collection. Persists to a sidecar file.</p>
         </div>
-        <div class="api-item p-4">
+        <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.preload_vector_index(ns) -> Result&lt;bool, EdgestoreError&gt;</code>
           <p class="text-slate-600 text-sm mt-1">Lazy-load an existing HNSW index from disk.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.strip_vector_index(segment_id: u64) -> Result&lt;SegmentMeta, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Remove all <code>__vec__</code> namespace records from the named segment, returning a new segment (with a new ID) that contains only KV data. The original segment is deleted. Idempotent when called on the returned segment ID.</p>
         </div>
       </div>
 
@@ -231,6 +327,10 @@
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">TextEngine::delete_text(ns, key) -> Result&lt;(), EdgestoreError&gt;</code>
           <p class="text-slate-600 text-sm mt-1">Remove a document from the text index.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.search_text_with_snippets(ns, query, k) -> Result&lt;Vec&lt;SnippetResult&gt;, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">BM25 search that returns context windows around matched terms. Each <code>SnippetResult</code> contains a <code>doc_id</code>, <code>score</code>, and a list of <code>Snippet{term, span, context_start, context_end}</code>. Character offsets are exact — derived from the v3 tokenizer's <code>char_start</code> positions.</p>
         </div>
         <div class="api-item p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">SearchOptions</code>
@@ -294,9 +394,13 @@
           <code class="font-mono text-sm text-edge-700 font-semibold">tiered.get_needs_archived_fetch(ns, key) -> bool</code>
           <p class="text-slate-600 text-sm mt-1">Returns true if answering this get would require fetching an archived segment. Used by AsyncTieredEngine to decide whether to escalate from read lock to write lock.</p>
         </div>
-        <div class="api-item p-4">
+        <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">AsyncTieredEngine::flush_notify() -> Arc&lt;tokio::sync::Notify&gt;</code>
           <p class="text-slate-600 text-sm mt-1">Returns a Notify handle wired to the engine's flush callback. Race this against a polling interval to trigger archiving immediately after a segment is written.</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">TieredEngine::with_vector_stripping(self) -> TieredEngine <span class="text-xs text-slate-500 font-normal">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Builder method that wires <code>strip_vector_index</code> into the <code>archive_segments</code> path. When enabled, every segment uploaded to the remote store automatically has its <code>__vec__</code> records removed from the local copy, reclaiming disk proportional to vector data size.</p>
         </div>
       </div>
     </section>
@@ -330,6 +434,22 @@
         <div class="bg-white rounded-lg border border-slate-200 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">RangeMerkleTree</code>
           <p class="text-slate-600 text-sm mt-1">Merkle tree over key ranges for anti-entropy probes and delta sync.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">QueryStats <span class="text-xs text-slate-500 font-normal ml-1">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1"><code>segments_scanned: u64</code>, <code>bytes_scanned: u64</code>, <code>items_examined: u64</code>. Returned by all <code>_with_stats</code> read variants. Zero-valued on a miss that short-circuited before touching segments.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">ScanBudget <span class="text-xs text-slate-500 font-normal ml-1">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1"><code>max_items: usize</code>, <code>max_bytes: u64</code>. Passed to <code>range_budgeted</code> / <code>prefix_budgeted</code>. The scan stops when either limit is reached, whichever comes first.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">BudgetedScan <span class="text-xs text-slate-500 font-normal ml-1">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1"><code>items: Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;</code>, <code>truncated: bool</code>, <code>next_key: Vec&lt;u8&gt;</code>. When <code>truncated</code> is true, pass <code>next_key</code> as the <code>start</code> of the next call to continue pagination.</p>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">SnippetResult / Snippet <span class="text-xs text-slate-500 font-normal ml-1">v1.5.0</span></code>
+          <p class="text-slate-600 text-sm mt-1"><code>SnippetResult{doc_id, score, snippets: Vec&lt;Snippet&gt;}</code>. Each <code>Snippet{term, span, context_start, context_end}</code> holds the matched text and its character-accurate context window in the original document.</p>
         </div>
       </div>
     </section>

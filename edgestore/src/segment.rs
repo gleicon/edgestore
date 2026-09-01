@@ -427,48 +427,7 @@ impl SegmentReader {
         dat: &mut std::fs::File,
         offset: u64,
     ) -> Result<(Vec<(Vec<u8>, MemEntry)>, usize), EdgestoreError> {
-        dat.seek(SeekFrom::Start(offset))?;
-        let mut buf4 = [0u8; 4];
-        match dat.read_exact(&mut buf4) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok((vec![], 0)),
-            Err(e) => return Err(EdgestoreError::Io(e)),
-        }
-        let magic = u32::from_le_bytes(buf4);
-        if magic != SEGMENT_BLOCK_MAGIC {
-            return Ok((vec![], 0)); // hit padding or end
-        }
-        dat.read_exact(&mut buf4)?;
-        let compressed_len = u32::from_le_bytes(buf4) as usize;
-
-        let mut compressed = vec![0u8; compressed_len];
-        dat.read_exact(&mut compressed)?;
-
-        let payload_size = 8 + compressed_len;
-        let aligned_size = if payload_size.is_multiple_of(SEGMENT_BLOCK_SIZE) {
-            payload_size
-        } else {
-            (payload_size / SEGMENT_BLOCK_SIZE + 1) * SEGMENT_BLOCK_SIZE
-        };
-
-        const MAX_DECOMPRESSED: usize = SEGMENT_BLOCK_SIZE * 512;
-        let decompressed = zstd::decode_all(compressed.as_slice())
-            .map_err(|e| EdgestoreError::SegmentCorrupt(format!("zstd decode: {}", e)))?;
-        if decompressed.len() > MAX_DECOMPRESSED {
-            return Err(EdgestoreError::SegmentCorrupt(
-                "decompressed block too large".to_string(),
-            ));
-        }
-
-        let mut entries = Vec::new();
-        let mut pos = 0;
-        while pos < decompressed.len() {
-            match deserialize_entry(&decompressed, &mut pos) {
-                Ok(entry) => entries.push(entry),
-                Err(_) => break,
-            }
-        }
-        Ok((entries, aligned_size))
+        read_block_at_offset(dat, offset)
     }
 
     /// Look up a single key in this segment.
@@ -558,6 +517,126 @@ fn find_block_offset(index: &[(Vec<u8>, u64)], query_key: &[u8]) -> u64 {
         index[0].1
     } else {
         index[pos - 1].1
+    }
+}
+
+/// Decode one block from `dat` at `offset`. Shared by `SegmentReader` and `SegmentCursor`.
+#[allow(clippy::type_complexity)]
+pub(crate) fn read_block_at_offset(
+    dat: &mut std::fs::File,
+    offset: u64,
+) -> Result<(Vec<(Vec<u8>, MemEntry)>, usize), EdgestoreError> {
+    dat.seek(SeekFrom::Start(offset))?;
+    let mut buf4 = [0u8; 4];
+    match dat.read_exact(&mut buf4) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok((vec![], 0)),
+        Err(e) => return Err(EdgestoreError::Io(e)),
+    }
+    let magic = u32::from_le_bytes(buf4);
+    if magic != SEGMENT_BLOCK_MAGIC {
+        return Ok((vec![], 0));
+    }
+    dat.read_exact(&mut buf4)?;
+    let compressed_len = u32::from_le_bytes(buf4) as usize;
+    let mut compressed = vec![0u8; compressed_len];
+    dat.read_exact(&mut compressed)?;
+    let payload_size = 8 + compressed_len;
+    let aligned_size = if payload_size.is_multiple_of(SEGMENT_BLOCK_SIZE) {
+        payload_size
+    } else {
+        (payload_size / SEGMENT_BLOCK_SIZE + 1) * SEGMENT_BLOCK_SIZE
+    };
+    const MAX_DECOMPRESSED: usize = SEGMENT_BLOCK_SIZE * 512;
+    let decompressed = zstd::decode_all(compressed.as_slice())
+        .map_err(|e| EdgestoreError::SegmentCorrupt(format!("zstd decode: {}", e)))?;
+    if decompressed.len() > MAX_DECOMPRESSED {
+        return Err(EdgestoreError::SegmentCorrupt(
+            "decompressed block too large".to_string(),
+        ));
+    }
+    let mut entries = Vec::new();
+    let mut pos = 0;
+    while pos < decompressed.len() {
+        match deserialize_entry(&decompressed, &mut pos) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => break,
+        }
+    }
+    Ok((entries, aligned_size))
+}
+
+/// Streaming forward cursor over `[start, end)` within one segment file.
+///
+/// Reads one 4 KiB block at a time on demand. Used by `SegmentStore::range_scan_budgeted`
+/// so the K-way merge can stop at the I/O level once the item budget is satisfied.
+pub(crate) struct SegmentCursor {
+    dat: std::fs::File,
+    dat_len: u64,
+    current_offset: u64,
+    start: Vec<u8>,
+    end: Vec<u8>,
+    buffer: std::collections::VecDeque<(Vec<u8>, MemEntry)>,
+    done: bool,
+}
+
+impl SegmentCursor {
+    /// Open a cursor for `reader` over `[start, end)`.
+    /// Returns `None` when the segment's key range doesn't overlap `[start, end)` (P1 pruning).
+    pub(crate) fn open(
+        reader: &SegmentReader,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<Self>, EdgestoreError> {
+        if end <= reader.meta.min_key.as_slice() || start > reader.meta.max_key.as_slice() {
+            return Ok(None);
+        }
+        let start_offset = find_block_offset(&reader.index, start);
+        let dat = std::fs::File::open(reader.dat_path())?;
+        let dat_len = dat.metadata()?.len();
+        Ok(Some(SegmentCursor {
+            dat,
+            dat_len,
+            current_offset: start_offset,
+            start: start.to_vec(),
+            end: end.to_vec(),
+            buffer: std::collections::VecDeque::new(),
+            done: false,
+        }))
+    }
+
+    /// Read the next block and fill the entry buffer. Stops (sets `done`) when the
+    /// block's first key goes past `end` or the file is exhausted.
+    fn fill(&mut self) -> Result<(), EdgestoreError> {
+        while self.buffer.is_empty() && !self.done {
+            if self.current_offset >= self.dat_len {
+                self.done = true;
+                break;
+            }
+            let (entries, aligned_size) =
+                read_block_at_offset(&mut self.dat, self.current_offset)?;
+            if entries.is_empty() || aligned_size == 0 {
+                self.done = true;
+                break;
+            }
+            self.current_offset += aligned_size as u64;
+            for (k, entry) in entries {
+                if k.as_slice() >= self.end.as_slice() {
+                    self.done = true;
+                    break;
+                }
+                if k.as_slice() >= self.start.as_slice() {
+                    self.buffer.push_back((k, entry));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Consume and return the next `(key, entry)` pair, reading a new block if needed.
+    pub(crate) fn pop(&mut self) -> Result<Option<(Vec<u8>, MemEntry)>, EdgestoreError> {
+        self.fill()?;
+        Ok(self.buffer.pop_front())
     }
 }
 
@@ -739,100 +818,236 @@ impl SegmentStore {
         Ok(None)
     }
 
-    pub(crate) fn range_scan(
+    /// Range scan with P1 metadata pruning, P3 streaming block reads, and P2 early exit.
+    ///
+    /// - P1: skips segments whose `[min_key, max_key]` doesn't overlap `[start, end)`.
+    /// - P3: opens one `SegmentCursor` per relevant segment; reads one 4 KiB block at a time.
+    /// - P2: stops the K-way merge and returns as soon as `max_items` live results accumulate.
+    ///
+    /// Returns `(entries, was_truncated)`. `was_truncated = true` means the scan stopped
+    /// early due to `max_items` and the caller should propagate the truncation flag.
+    ///
+    /// Regression tests: `test_range_scan_dedups_by_lsn_across_segments`, `test_range_scan_delete_wins`.
+    pub(crate) fn range_scan_budgeted(
         &self,
         start: &[u8],
         end: &[u8],
-    ) -> Result<Vec<(Vec<u8>, MemEntry)>, EdgestoreError> {
-        // PERFORMANCE: K-way merge via BinaryHeap. Each reader's range_scan is sorted by key.
-        // DO NOT use HashMap here — it was O(n log n) + 4 allocations. K-way merge is O(n) + 2 allocations.
-        // The BinaryHeap tie-breaks on LSN so Ord and Eq are consistent (prevents heap corruption).
-        // Regression test: test_range_scan_dedups_by_lsn_across_segments, test_range_scan_delete_wins.
-        let mut per_reader: Vec<Vec<(Vec<u8>, MemEntry)>> = Vec::with_capacity(self.readers.len());
-        let mut total_len = 0usize;
+        max_items: Option<usize>,
+    ) -> Result<(Vec<(Vec<u8>, MemEntry)>, bool), EdgestoreError> {
+        // P1: create cursors only for segments that overlap [start, end)
+        let mut cursors: Vec<SegmentCursor> = Vec::with_capacity(self.readers.len());
         for reader in &self.readers {
-            let mut seg = reader.range_scan(start, end)?;
-            // Sort by key within segment (already sorted, but ensure)
-            seg.sort_by(|(a, _), (b, _)| a.cmp(b));
-            total_len += seg.len();
-            per_reader.push(seg);
+            if let Some(cursor) = SegmentCursor::open(reader, start, end)? {
+                cursors.push(cursor);
+            }
         }
-        // K-way merge: keep highest-LSN per key, filter deletes.
+        if cursors.is_empty() {
+            return Ok((vec![], false));
+        }
+
+        // P3 + P2: streaming K-way merge, stops when max_items live results are emitted.
         use std::collections::BinaryHeap;
-        #[derive(Eq, PartialEq)]
-        struct Item<'a> {
-            key: &'a [u8],
-            entry: &'a MemEntry,
-            reader_idx: usize,
-            elem_idx: usize,
+        use std::cmp::Ordering;
+
+        struct HeapItem {
+            key: Vec<u8>,
+            entry: MemEntry,
+            cursor_idx: usize,
         }
-        impl<'a> Ord for Item<'a> {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                // Reverse so BinaryHeap is a min-heap on key
-                let key_cmp = other.key.cmp(self.key);
-                if key_cmp != std::cmp::Ordering::Equal {
+        impl PartialEq for HeapItem {
+            fn eq(&self, other: &Self) -> bool {
+                self.key == other.key
+            }
+        }
+        impl Eq for HeapItem {}
+        impl Ord for HeapItem {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // Min-heap on key; tie-break: higher LSN popped first (both are for same key)
+                let key_cmp = other.key.cmp(&self.key);
+                if key_cmp != Ordering::Equal {
                     return key_cmp;
                 }
-                // Tie-break by lsn (reverse) so higher LSN is considered "smaller"
-                // (popped first when keys are equal, which doesn't matter for correctness)
                 other.entry.lsn.cmp(&self.entry.lsn)
             }
         }
-        impl<'a> PartialOrd for Item<'a> {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        impl PartialOrd for HeapItem {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
                 Some(self.cmp(other))
             }
         }
+
+        // Seed the heap with the first entry from each cursor.
         let mut heap = BinaryHeap::new();
-        for (ri, seg) in per_reader.iter().enumerate() {
-            if let Some((k, e)) = seg.first() {
-                heap.push(Item {
-                    key: k,
-                    entry: e,
-                    reader_idx: ri,
-                    elem_idx: 0,
-                });
+        for (i, cursor) in cursors.iter_mut().enumerate() {
+            if let Some((k, e)) = cursor.pop()? {
+                heap.push(HeapItem { key: k, entry: e, cursor_idx: i });
             }
         }
-        let mut results: Vec<(Vec<u8>, MemEntry)> = Vec::with_capacity(total_len);
+
+        let mut results: Vec<(Vec<u8>, MemEntry)> = Vec::new();
         let mut last_key: Option<Vec<u8>> = None;
         let mut last_entry: Option<MemEntry> = None;
+
         while let Some(item) = heap.pop() {
-            let seg = &per_reader[item.reader_idx];
-            let next_idx = item.elem_idx + 1;
-            if next_idx < seg.len() {
-                let (k, e) = &seg[next_idx];
-                heap.push(Item {
-                    key: k,
-                    entry: e,
-                    reader_idx: item.reader_idx,
-                    elem_idx: next_idx,
-                });
+            // Advance the cursor that contributed this item and re-seed the heap.
+            if let Some((k, e)) = cursors[item.cursor_idx].pop()? {
+                heap.push(HeapItem { key: k, entry: e, cursor_idx: item.cursor_idx });
             }
-            match last_key {
-                Some(ref lk) if lk == item.key => {
-                    // Same key: keep highest LSN
+
+            match &last_key {
+                Some(lk) if lk == &item.key => {
+                    // Same key across segments: keep highest LSN
                     if let Some(ref le) = last_entry {
                         if item.entry.lsn > le.lsn {
-                            last_entry = Some(item.entry.clone());
+                            last_entry = Some(item.entry);
                         }
                     }
                 }
                 _ => {
-                    // New key: flush previous
+                    // New key: emit the previous one if it's a live entry
                     if let Some(e) = last_entry.take() {
                         if e.op != Operation::Delete {
-                            if let Some(lk) = last_key {
+                            if let Some(lk) = last_key.take() {
                                 results.push((lk, e));
+                                // P2: stop the merge as soon as the budget is reached
+                                if max_items.is_some_and(|m| results.len() >= m) {
+                                    return Ok((results, true));
+                                }
                             }
                         }
                     }
-                    last_key = Some(item.key.to_vec());
-                    last_entry = Some(item.entry.clone());
+                    last_key = Some(item.key);
+                    last_entry = Some(item.entry);
                 }
             }
         }
-        // Flush final entry
+        // Flush the final pending entry
+        if let Some(e) = last_entry {
+            if e.op != Operation::Delete {
+                if let Some(lk) = last_key {
+                    results.push((lk, e));
+                }
+            }
+        }
+        Ok((results, false))
+    }
+
+    /// Descending range scan: returns up to `max_items` live entries in reverse key order.
+    ///
+    /// - P1: skips non-overlapping segments via metadata.
+    /// - P2: stops the reverse K-way merge once `max_items` live results accumulate.
+    ///
+    /// Pre-loads matching entries from each relevant segment (forward sort, served from
+    /// the end) — efficient for `page_size`-bounded reverse pagination where the caller
+    /// stops after the first page rather than iterating the full range.
+    pub(crate) fn range_scan_rev_budgeted(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        max_items: usize,
+    ) -> Result<Vec<(Vec<u8>, MemEntry)>, EdgestoreError> {
+        // P1: skip non-overlapping segments
+        let mut per_reader: Vec<Vec<(Vec<u8>, MemEntry)>> = Vec::new();
+        for reader in &self.readers {
+            if end <= reader.meta.min_key.as_slice() || start > reader.meta.max_key.as_slice() {
+                continue;
+            }
+            let seg = reader.range_scan(start, end)?;
+            if !seg.is_empty() {
+                per_reader.push(seg);
+            }
+        }
+        if per_reader.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Max-heap K-way merge (descending key order), serving from the tail of each sorted vec.
+        use std::collections::BinaryHeap;
+        use std::cmp::Ordering;
+
+        struct HeapItem {
+            key: Vec<u8>,
+            entry: MemEntry,
+            reader_idx: usize,
+            elem_idx: usize,
+        }
+        impl PartialEq for HeapItem {
+            fn eq(&self, other: &Self) -> bool {
+                self.key == other.key
+            }
+        }
+        impl Eq for HeapItem {}
+        impl Ord for HeapItem {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // Max-heap on key; tie-break: higher LSN popped first
+                let key_cmp = self.key.cmp(&other.key);
+                if key_cmp != Ordering::Equal {
+                    return key_cmp;
+                }
+                self.entry.lsn.cmp(&other.entry.lsn)
+            }
+        }
+        impl PartialOrd for HeapItem {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        let mut heap = BinaryHeap::new();
+        for (ri, seg) in per_reader.iter().enumerate() {
+            if !seg.is_empty() {
+                let ei = seg.len() - 1;
+                heap.push(HeapItem {
+                    key: seg[ei].0.clone(),
+                    entry: seg[ei].1.clone(),
+                    reader_idx: ri,
+                    elem_idx: ei,
+                });
+            }
+        }
+
+        let mut results: Vec<(Vec<u8>, MemEntry)> = Vec::new();
+        let mut last_key: Option<Vec<u8>> = None;
+        let mut last_entry: Option<MemEntry> = None;
+
+        while let Some(item) = heap.pop() {
+            // Step backward in this reader's vec
+            if item.elem_idx > 0 {
+                let prev = item.elem_idx - 1;
+                let seg = &per_reader[item.reader_idx];
+                heap.push(HeapItem {
+                    key: seg[prev].0.clone(),
+                    entry: seg[prev].1.clone(),
+                    reader_idx: item.reader_idx,
+                    elem_idx: prev,
+                });
+            }
+
+            match &last_key {
+                Some(lk) if lk == &item.key => {
+                    if let Some(ref le) = last_entry {
+                        if item.entry.lsn > le.lsn {
+                            last_entry = Some(item.entry);
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(e) = last_entry.take() {
+                        if e.op != Operation::Delete {
+                            if let Some(lk) = last_key.take() {
+                                results.push((lk, e));
+                                // P2: stop when budget reached
+                                if results.len() >= max_items {
+                                    return Ok(results);
+                                }
+                            }
+                        }
+                    }
+                    last_key = Some(item.key);
+                    last_entry = Some(item.entry);
+                }
+            }
+        }
         if let Some(e) = last_entry {
             if e.op != Operation::Delete {
                 if let Some(lk) = last_key {
@@ -1113,7 +1328,7 @@ mod tests {
         store.add_imported_segment(meta0, reader0).unwrap();
         store.add_imported_segment(meta1, reader1).unwrap();
 
-        let results = store.range_scan(&key, &key_end).unwrap();
+        let (results, _) = store.range_scan_budgeted(&key, &key_end, None).unwrap();
         assert_eq!(results.len(), 1, "should deduplicate to 1 entry");
         assert_eq!(results[0].1.lsn, 2, "higher LSN should win");
     }
@@ -1133,7 +1348,7 @@ mod tests {
         let mut store = SegmentStore::open(dir.path().to_path_buf(), 3600).unwrap();
         let reader = SegmentReader::open(dir.path().to_path_buf(), 0).unwrap();
         store.add_imported_segment(meta, reader).unwrap();
-        let results = store.range_scan(&key, &key_end).unwrap();
+        let (results, _) = store.range_scan_budgeted(&key, &key_end, None).unwrap();
         assert!(results.is_empty(), "delete should filter out the key");
     }
 

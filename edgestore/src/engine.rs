@@ -68,6 +68,18 @@ pub struct BudgetedScan<T> {
     pub stats: QueryStats,
 }
 
+/// Result of a cursor-based paginated range scan (forward or reverse).
+///
+/// Use `next_key` as the cursor for the next call to [`Engine::range_page`] or
+/// [`Engine::range_rev_page`]. `None` means the scan is exhausted.
+#[derive(Debug, Clone)]
+pub struct RangePage {
+    /// Decoded `(key, value)` pairs in ascending order for forward, descending for reverse.
+    pub items: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Cursor for the next page, or `None` when all items have been returned.
+    pub next_key: Option<Vec<u8>>,
+}
+
 /// Result of importing a remote segment via `Engine::import_segment`.
 pub enum ImportResult {
     /// Segment applied. Record-level counts reflect LWW decisions.
@@ -505,6 +517,140 @@ impl Engine {
         budget: &ScanBudget,
     ) -> Result<BudgetedKvScan, EdgestoreError> {
         self.prefix_core(ns, prefix, Some(budget))
+    }
+
+    /// Cursor-based forward range page (P4).
+    ///
+    /// Returns up to `page_size` items in ascending key order starting just after `cursor`.
+    /// On the first call pass `cursor = None`; on subsequent calls pass the `next_key`
+    /// returned by the previous call. `next_key = None` in the result means no more pages.
+    ///
+    /// Each call is bounded at the I/O level: only segments whose key range overlaps the
+    /// effective `[cursor, end)` window are read, and reading stops as soon as `page_size`
+    /// live items are collected.
+    pub fn range_page(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        cursor: Option<&[u8]>,
+        page_size: usize,
+    ) -> Result<RangePage, EdgestoreError> {
+        if page_size == 0 {
+            return Ok(RangePage { items: vec![], next_key: None });
+        }
+        let effective_start_buf;
+        let effective_start: &[u8] = match cursor {
+            Some(c) => {
+                effective_start_buf = { let mut v = c.to_vec(); v.push(0); v };
+                &effective_start_buf
+            }
+            None => start,
+        };
+        let budget = ScanBudget { max_items: Some(page_size), max_bytes: None };
+        let scan = self.range_budgeted(ns, effective_start, end, &budget)?;
+        let next_key = if scan.truncated {
+            scan.items.last().map(|(k, _)| k.clone())
+        } else {
+            None
+        };
+        Ok(RangePage { items: scan.items, next_key })
+    }
+
+    /// Cursor-based reverse range page (P5).
+    ///
+    /// Returns up to `page_size` items in **descending** key order starting just below
+    /// `cursor`. On the first call pass `cursor = None` to start from `end`; on subsequent
+    /// calls pass the `next_key` returned by the previous call.
+    ///
+    /// `next_key` is the smallest key in the current page (the furthest-left point
+    /// reached). Pass it as `cursor` to the next call to continue going left.
+    /// `next_key = None` means the scan reached `start` and is exhausted.
+    pub fn range_rev_page(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        cursor: Option<&[u8]>,
+        page_size: usize,
+    ) -> Result<RangePage, EdgestoreError> {
+        if page_size == 0 {
+            return Ok(RangePage { items: vec![], next_key: None });
+        }
+        let effective_end: &[u8] = cursor.unwrap_or(end);
+        let enc_start = encode_key(ns, start);
+        let enc_end = encode_key(ns, effective_end);
+        if enc_end <= enc_start {
+            return Ok(RangePage { items: vec![], next_key: None });
+        }
+
+        // Segment results: descending, deduped, tombstones filtered (budget-aware via P2)
+        let seg_results = self.segment_store.range_scan_rev_budgeted(
+            &enc_start,
+            &enc_end,
+            page_size,
+        )?;
+        // Memtable results: ascending (includes tombstones) — reverse for descending merge
+        let mem_asc = self.memtable.range(&enc_start, &enc_end);
+
+        // Two-pointer merge of two descending sequences
+        let mut si = 0usize;
+        let mut mi = mem_asc.len();
+        let mut merged: Vec<(Vec<u8>, MemEntry)> =
+            Vec::with_capacity(seg_results.len() + mem_asc.len());
+        loop {
+            let has_seg = si < seg_results.len();
+            let has_mem = mi > 0;
+            if !has_seg && !has_mem {
+                break;
+            }
+            let pick_seg = if !has_seg {
+                false
+            } else if !has_mem {
+                true
+            } else {
+                seg_results[si].0.as_slice() >= mem_asc[mi - 1].0
+            };
+            if pick_seg {
+                merged.push(seg_results[si].clone());
+                si += 1;
+            } else {
+                mi -= 1;
+                merged.push((mem_asc[mi].0.to_vec(), mem_asc[mi].1.clone()));
+            }
+        }
+
+        // Dedup by encoded key (keep highest LSN), filter tombstones, decode, apply budget
+        let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        let mut i = 0usize;
+        while i < merged.len() {
+            let (k, e) = &merged[i];
+            let mut best = e.clone();
+            i += 1;
+            while i < merged.len() && &merged[i].0 == k {
+                if merged[i].1.lsn > best.lsn {
+                    best = merged[i].1.clone();
+                }
+                i += 1;
+            }
+            if best.op == Operation::Delete {
+                continue;
+            }
+            if let Some(val) = &best.value {
+                let (_, raw_key) = decode_key(k)?;
+                out.push((raw_key, val.clone()));
+                if out.len() >= page_size {
+                    break;
+                }
+            }
+        }
+
+        let next_key = if out.len() >= page_size {
+            out.last().map(|(k, _)| k.clone())
+        } else {
+            None
+        };
+        Ok(RangePage { items: out, next_key })
     }
 
     /// Flush the current memtable to a new segment file.
@@ -975,7 +1121,9 @@ impl Engine {
         let enc_start = encode_key(ns, start);
         let enc_end = encode_key(ns, end);
 
-        let seg_results = self.segment_store.range_scan(&enc_start, &enc_end)?;
+        let max_items = budget.and_then(|b| b.max_items);
+        let (seg_results, seg_truncated) =
+            self.segment_store.range_scan_budgeted(&enc_start, &enc_end, max_items)?;
         let mem_results = self.memtable.range(&enc_start, &enc_end);
         let has_seg = !seg_results.is_empty();
 
@@ -1003,7 +1151,9 @@ impl Engine {
             segments_scanned: if has_seg { 1 } else { 0 },
             ..Default::default()
         };
-        let mut truncated = false;
+        // If the segment scan was truncated by budget, the final result is also truncated
+        // even if the merged slice happens to be fully consumed.
+        let mut truncated = seg_truncated;
         let mut i = 0usize;
         while i < merged.len() {
             let (k, e) = &merged[i];
@@ -1037,7 +1187,7 @@ impl Engine {
                     let over_items = b.max_items.is_some_and(|m| out.len() >= m);
                     let over_bytes = b.max_bytes.is_some_and(|m| stats.bytes_scanned >= m);
                     if over_items || over_bytes {
-                        truncated = i < merged.len();
+                        truncated = truncated || i < merged.len();
                         break;
                     }
                 }
@@ -1060,14 +1210,17 @@ impl Engine {
 
         // PERFORMANCE: same merge+dedup algorithm as range_core.
         // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
-        let seg_results = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
-            self.segment_store
-                .range_scan(&enc_prefix, &enc_end)?
+        let max_items = budget.and_then(|b| b.max_items);
+        let (seg_results, seg_truncated) = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
+            let (raw, trunc) =
+                self.segment_store.range_scan_budgeted(&enc_prefix, &enc_end, max_items)?;
+            let filtered = raw
                 .into_iter()
                 .filter(|(k, _)| k.starts_with(&enc_prefix))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (filtered, trunc)
         } else {
-            vec![]
+            (vec![], false)
         };
         let mem_results = self.memtable.prefix(&enc_prefix);
         let has_seg = !seg_results.is_empty();
@@ -1096,7 +1249,7 @@ impl Engine {
             segments_scanned: if has_seg { 1 } else { 0 },
             ..Default::default()
         };
-        let mut truncated = false;
+        let mut truncated = seg_truncated;
         let mut i = 0usize;
         while i < merged.len() {
             let (k, e) = &merged[i];
@@ -1130,7 +1283,7 @@ impl Engine {
                     let over_items = b.max_items.is_some_and(|m| out.len() >= m);
                     let over_bytes = b.max_bytes.is_some_and(|m| stats.bytes_scanned >= m);
                     if over_items || over_bytes {
-                        truncated = i < merged.len();
+                        truncated = truncated || i < merged.len();
                         break;
                     }
                 }
@@ -3100,5 +3253,168 @@ mod tests {
             None,
             "fresh engine has no index"
         );
+    }
+
+    // ── range_page (P4) ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_range_page_paginates_correctly() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        // Write 25 keys across two segments so the cursor spans a flush boundary
+        for i in 0u32..15 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+        for i in 15u32..25 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+
+        let mut all = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = engine
+                .range_page(b"ns", b"", b"\xff", cursor.as_deref(), 7)
+                .unwrap();
+            assert!(page.items.len() <= 7, "page must not exceed page_size");
+            all.extend(page.items);
+            cursor = page.next_key;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(all.len(), 25, "all 25 keys must be returned across pages");
+        // Keys must be returned in ascending order
+        for w in all.windows(2) {
+            assert!(w[0].0 < w[1].0, "keys must be ascending");
+        }
+    }
+
+    #[test]
+    fn test_range_page_empty_range() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_engine(&dir);
+        let page = engine.range_page(b"ns", b"", b"\xff", None, 10).unwrap();
+        assert!(page.items.is_empty());
+        assert!(page.next_key.is_none());
+    }
+
+    #[test]
+    fn test_range_page_cursor_excludes_previous_last_key() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u32..6 {
+            engine.put(b"ns", format!("k{}", i).as_bytes(), b"v").unwrap();
+        }
+        let page1 = engine.range_page(b"ns", b"", b"\xff", None, 3).unwrap();
+        assert_eq!(page1.items.len(), 3);
+        let page2 = engine
+            .range_page(b"ns", b"", b"\xff", page1.next_key.as_deref(), 3)
+            .unwrap();
+        assert_eq!(page2.items.len(), 3);
+        assert!(page2.next_key.is_none(), "should be exhausted");
+        // The last key of page1 must not appear in page2
+        let last1 = &page1.items.last().unwrap().0;
+        assert!(!page2.items.iter().any(|(k, _)| k == last1));
+    }
+
+    // ── range_rev_page (P5) ────────────────────────────────────────────────
+
+    #[test]
+    fn test_range_rev_page_descending_order() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u32..10 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+
+        let page = engine
+            .range_rev_page(b"ns", b"", b"\xff", None, 4)
+            .unwrap();
+        assert_eq!(page.items.len(), 4, "should return page_size items");
+        // Must be descending
+        for w in page.items.windows(2) {
+            assert!(w[0].0 > w[1].0, "keys must be descending");
+        }
+        // First item must be the largest key
+        assert_eq!(page.items[0].0, b"key-0009".to_vec());
+    }
+
+    #[test]
+    fn test_range_rev_page_paginates_correctly() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u32..20 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+
+        let mut all: Vec<Vec<u8>> = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = engine
+                .range_rev_page(b"ns", b"", b"\xff", cursor.as_deref(), 6)
+                .unwrap();
+            assert!(page.items.len() <= 6);
+            for (k, _) in &page.items {
+                all.push(k.clone());
+            }
+            cursor = page.next_key;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(all.len(), 20, "all 20 keys must be returned across reverse pages");
+        // Globally descending
+        for w in all.windows(2) {
+            assert!(w[0] > w[1], "global order must be descending");
+        }
+    }
+
+    #[test]
+    fn test_range_rev_page_memtable_delete_excluded() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0u32..5 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+        // Delete the largest key via memtable
+        engine.delete(b"ns", b"key-0004").unwrap();
+
+        let page = engine
+            .range_rev_page(b"ns", b"", b"\xff", None, 10)
+            .unwrap();
+        let keys: Vec<_> = page.items.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys.len(), 4, "deleted key must be absent");
+        assert!(!keys.contains(&b"key-0004".to_vec()), "key-0004 deleted by memtable");
+        assert_eq!(keys[0], b"key-0003".to_vec(), "key-0003 is now largest");
+    }
+
+    // ── range_scan_budgeted (P1/P2/P3) via segment tests ──────────────────
+
+    #[test]
+    fn test_range_scan_budgeted_stops_at_segment_level() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        // 30 keys across two flushed segments — ensures range_scan_budgeted
+        // must open both segments but stops reading after max_items
+        for i in 0u32..15 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+        for i in 15u32..30 {
+            engine.put(b"ns", format!("key-{:04}", i).as_bytes(), b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+
+        let budget = ScanBudget { max_items: Some(5), max_bytes: None };
+        let result = engine.range_budgeted(b"ns", b"", b"\xff", &budget).unwrap();
+        assert_eq!(result.items.len(), 5);
+        assert!(result.truncated);
+        // Must be the first 5 keys in ascending order
+        assert_eq!(result.items[0].0, b"key-0000".to_vec());
+        assert_eq!(result.items[4].0, b"key-0004".to_vec());
     }
 }

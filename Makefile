@@ -238,7 +238,9 @@ publish:
 	@for crate in $(CRATES); do \
 		echo ""; \
 		echo "Publishing $$crate..."; \
-		cargo publish -p $$crate; \
+		cargo publish -p $$crate || exit 1; \
+		echo "  Waiting 30s for crates.io to index $$crate..."; \
+		sleep 30; \
 	done
 	@echo ""
 	@echo "All crates published. Verify at:"

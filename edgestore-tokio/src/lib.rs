@@ -425,7 +425,7 @@ impl AsyncEngine {
         let ns = ns.to_vec();
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
+            let engine = inner.blocking_read();
             engine.preload_vector_index(&ns)
         })
         .await

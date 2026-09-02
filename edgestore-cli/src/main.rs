@@ -1004,7 +1004,7 @@ fn handle_vector_search(cmd: VectorSearch) -> Result<(), Box<dyn std::error::Err
 
     // Open the engine
     let config = EdgestoreConfig::new(&cmd.path);
-    let mut engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
+    let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
 
     // Build query record
     let query = VectorRecord {

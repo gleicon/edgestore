@@ -138,52 +138,72 @@ println!(<span class="string">"Compacted {} cohorts, {} bytes written"</span>,
     <div id="vectors" class="tab-content">
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
         <h3 class="text-lg font-semibold text-slate-900 mb-2">Vector Search (Flat + HNSW)</h3>
-        <p class="text-slate-600 text-sm mb-4">Store embeddings and search by cosine similarity. Build an HNSW index for approximate search on large collections.</p>
+        <p class="text-slate-600 text-sm mb-4">Store embeddings and search by cosine similarity. Build an HNSW index for approximate search on large collections. <code>build_vector_index</code> infers dims, dtype, and metric from the stored records.</p>
         <div class="code-block p-4">
-          <pre><code><span class="keyword">use</span> edgestore::{Dtype, Metric};
-<span class="keyword">use</span> rand::random;
+          <pre><code><span class="keyword">use</span> edgestore::{EdgestoreConfig, Engine, VectorEngine};
+<span class="keyword">use</span> edgestore::vector::types::{Dtype, VectorRecord};
+<span class="keyword">use</span> edgestore::vector::distance::Metric;
 
 <span class="keyword">fn</span> main() -> <span class="type">Result</span>&lt;(), <span class="type">Box</span>&lt;<span class="keyword">dyn</span> std::error::Error&gt;&gt; {
     <span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/vec_demo"</span>))?;
 
-    <span class="keyword">let</span> dims = <span class="number">128</span>;
+    <span class="keyword">let</span> dims: <span class="type">u16</span> = <span class="number">128</span>;
     <span class="keyword">let</span> ns = <span class="string">b"embeddings"</span>;
 
-    <span class="comment">// Insert 1000 random f32 vectors</span>
-    <span class="keyword">for</span> i <span class="keyword">in</span> <span class="number">0</span>..<span class="number">1000</span> {
-        <span class="keyword">let</span> vec: <span class="type">Vec</span>&lt;<span class="type">f32</span>&gt; = (<span class="number">0</span>..dims).map(|_| random::&lt;<span class="type">f32</span>&gt;()).collect();
-        <span class="keyword">let</span> bytes = <span class="keyword">unsafe</span> {
-            std::slice::from_raw_parts(
-                vec.as_ptr() <span class="keyword">as</span> *<span class="keyword">const</span> <span class="type">u8</span>,
-                vec.len() * std::mem::size_of::&lt;<span class="type">f32</span>&gt;()
-            )
-        };
-        db.vector_put(ns, format!(<span class="string">"vec-{i}"</span>).as_bytes(),
-            dims <span class="keyword">as</span> <span class="type">u16</span>, Dtype::F32, bytes)?;
+    <span class="comment">// Insert 1000 f32 vectors (4 bytes per element)</span>
+    <span class="keyword">for</span> i <span class="keyword">in</span> <span class="number">0u32</span>..<span class="number">1000</span> {
+        <span class="keyword">let</span> val = (i <span class="keyword">as</span> <span class="type">f32</span>).to_le_bytes();
+        <span class="keyword">let</span> bytes: <span class="type">Vec</span>&lt;<span class="type">u8</span>&gt; = (<span class="number">0</span>..dims).flat_map(|_| val).collect();
+        db.vector_put(ns, format!(<span class="string">"vec-{i}"</span>).as_bytes(), dims, Dtype::F32, &bytes)?;
     }
+    db.flush_to_segments()?;
 
-    <span class="comment">// Build HNSW index for fast ANN search</span>
-    db.build_vector_index(ns, dims <span class="keyword">as</span> <span class="type">u16</span>, Dtype::F32, Metric::Cosine)?;
+    <span class="comment">// Build HNSW index — dims/dtype/metric inferred from stored records</span>
+    db.build_vector_index(ns)?;
+    println!(<span class="string">"vectors loaded: {:?}"</span>, db.vector_count(ns));
 
     <span class="comment">// Search top-5 nearest neighbors</span>
-    <span class="keyword">let</span> query: <span class="type">Vec</span>&lt;<span class="type">f32</span>&gt; = (<span class="number">0</span>..dims).map(|_| random::&lt;<span class="type">f32</span>&gt;()).collect();
-    <span class="keyword">let</span> q_bytes = <span class="keyword">unsafe</span> {
-        std::slice::from_raw_parts(
-            query.as_ptr() <span class="keyword">as</span> *<span class="keyword">const</span> <span class="type">u8</span>,
-            query.len() * std::mem::size_of::&lt;<span class="type">f32</span>&gt;()
-        )
-    };
+    <span class="keyword">let</span> q_bytes: <span class="type">Vec</span>&lt;<span class="type">u8</span>&gt; = (<span class="number">0</span>..dims).flat_map(|_| <span class="number">0.5f32</span>.to_le_bytes()).collect();
+    <span class="keyword">let</span> query = VectorRecord { dims, dtype: Dtype::F32, data: q_bytes };
 
-    <span class="keyword">let</span> results = db.vector_search(ns, q_bytes, <span class="number">5</span>, Metric::Cosine)?;
+    <span class="comment">// vector_search takes &self — no mut needed after build</span>
+    <span class="keyword">let</span> results = db.vector_search(ns, &query, <span class="number">5</span>, Metric::L2)?;
     <span class="keyword">for</span> (i, r) <span class="keyword">in</span> results.iter().enumerate() {
         println!(<span class="string">"#{} {}  distance={:.4}"</span>,
             i + <span class="number">1</span>, std::str::from_utf8(&r.key)?, r.distance);
     }
-
-    Ok(())
+    <span class="type">Ok</span>(())
 }</code></pre>
         </div>
-        <p class="text-sm text-slate-500 mt-3">Run: <code class="bg-slate-100 px-2 py-1 rounded">cargo run --example vector_search</code></p>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Concurrent Vector Search <span class="text-xs font-normal bg-edge-100 text-edge-700 px-2 py-1 rounded-full ml-2">v1.8.0</span></h3>
+        <p class="text-slate-600 text-sm mb-4"><code>vector_search</code> takes <code>&amp;self</code> — multiple threads can search concurrently with no external lock. The HNSW cache handles lazy loading internally.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Build once (needs &mut self)</span>
+<span class="keyword">let mut</span> db = Engine::open(config)?;
+<span class="comment">// ... insert vectors ...</span>
+db.build_vector_index(<span class="string">b"products"</span>)?;
+
+<span class="comment">// Search from N threads — no Mutex, no serialization</span>
+<span class="keyword">let</span> query = VectorRecord { dims: <span class="number">128</span>, dtype: Dtype::F32, data: q_bytes };
+std::thread::scope(|s| {
+    <span class="keyword">for</span> _ <span class="keyword">in</span> <span class="number">0</span>..<span class="number">16</span> {
+        s.spawn(|| {
+            <span class="keyword">let</span> hits = db.vector_search(
+                <span class="string">b"products"</span>, &query, <span class="number">10</span>, Metric::Cosine
+            ).unwrap();
+            handle(hits);
+        });
+    }
+});
+
+<span class="comment">// Same in async — both HNSW and flat-scan use read lock</span>
+<span class="keyword">let</span> hits = async_engine
+    .vector_search(<span class="string">b"products"</span>, &query, <span class="number">10</span>, Metric::Cosine)
+    .await?;</code></pre>
+        </div>
       </div>
     </div>
 

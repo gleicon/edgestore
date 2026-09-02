@@ -295,6 +295,10 @@
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.preload_vector_index(ns) -> Result&lt;bool, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.8.0: &amp;self</span></code>
           <p class="text-slate-600 text-sm mt-1">Load the HNSW index from disk into the interior cache. Returns <code>true</code> if loaded, <code>false</code> if no index exists. Now takes <code>&amp;self</code> — safe to call from a shared reference.</p>
         </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.vector_count(ns) -> Option&lt;u64&gt; <span class="text-xs text-slate-500 font-normal">v1.6.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Returns the number of vectors in the HNSW cache for the namespace if the index is loaded, <code>None</code> otherwise. Never triggers a disk scan. Call <code>preload_vector_index</code> first if you need a guaranteed count. Takes <code>&amp;self</code>.</p>
+        </div>
         <div class="api-item p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.strip_vector_index(segment_id: u64) -> Result&lt;SegmentMeta, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.5.0</span></code>
           <p class="text-slate-600 text-sm mt-1">Remove all <code>__vec__</code> namespace records from the named segment, returning a new segment (with a new ID) that contains only KV data. The original segment is deleted. Idempotent when called on the returned segment ID.</p>

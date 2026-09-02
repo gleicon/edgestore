@@ -108,7 +108,7 @@ pub struct Engine {
     pub(crate) segment_store: crate::segment::SegmentStore,
     pub(crate) snapshot_registry: crate::snapshot::SnapshotRegistry,
     metrics: EngineMetrics,
-    vector_indices: HashMap<Vec<u8>, HnswIndex>,
+    vector_indices: std::sync::RwLock<HashMap<Vec<u8>, std::sync::Arc<HnswIndex>>>,
     /// In-memory cache of deserialized text indexes per namespace.
     /// Warmed on write (index_text / delete_text); read-only searches fall back to disk
     /// because TextEngine::search takes &self. Still O(1) single-record deserialize.
@@ -183,7 +183,7 @@ impl Engine {
             segment_store,
             snapshot_registry: crate::snapshot::SnapshotRegistry::new(),
             metrics: EngineMetrics::new(),
-            vector_indices: HashMap::new(),
+            vector_indices: std::sync::RwLock::new(HashMap::new()),
             text_indices: HashMap::new(),
             on_segment_flushed: None,
         };
@@ -232,6 +232,8 @@ impl Engine {
     /// This method never triggers a disk scan.
     pub fn vector_count(&self, ns: &[u8]) -> Option<u64> {
         self.vector_indices
+            .read()
+            .unwrap()
             .get(ns)
             .map(|idx| idx.nodes.len() as u64)
     }
@@ -1833,7 +1835,10 @@ impl Engine {
         std::fs::write(&stamp_path, current_hash)?;
 
         // Cache
-        self.vector_indices.insert(ns.to_vec(), index);
+        self.vector_indices
+            .write()
+            .unwrap()
+            .insert(ns.to_vec(), std::sync::Arc::new(index));
 
         let elapsed_ms = t0.elapsed().as_millis() as u64;
         self.metrics.vector_index_load_nanos.fetch_add(
@@ -1851,7 +1856,7 @@ impl Engine {
     /// Preload the HNSW index for a namespace into memory.
     ///
     /// Returns true if the index was loaded (or already cached), false if no index exists.
-    pub fn preload_vector_index(&mut self, ns: &[u8]) -> Result<bool, EdgestoreError> {
+    pub fn preload_vector_index(&self, ns: &[u8]) -> Result<bool, EdgestoreError> {
         match self.get_vector_index(ns) {
             Ok(Some(_)) => Ok(true),
             Ok(None) => Ok(false),
@@ -1861,20 +1866,47 @@ impl Engine {
 
     /// Get the HNSW index for a namespace, loading from sidecar if needed.
     ///
-    /// Checks staleness against segment-id hash and falls back to None if stale.
-    fn get_vector_index(&mut self, ns: &[u8]) -> Result<Option<&HnswIndex>, EdgestoreError> {
-        // Fast path: already cached
-        if self.vector_indices.contains_key(ns) {
-            // Check staleness
-            let stale = self.is_index_stale(ns)?;
-            if stale {
-                self.vector_indices.remove(ns);
-                self.metrics
-                    .vector_index_stales
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Ok(None);
+    /// Uses a two-phase (double-checked) lock: optimistic read lock on the cache,
+    /// write lock only on a cache miss or stale entry. Returns an `Arc` so the
+    /// caller can hold the index after the lock is released.
+    fn get_vector_index(
+        &self,
+        ns: &[u8],
+    ) -> Result<Option<std::sync::Arc<HnswIndex>>, EdgestoreError> {
+        // Fast read path: already cached and fresh
+        {
+            let indices = self.vector_indices.read().unwrap();
+            if let Some(arc) = indices.get(ns) {
+                if !self.is_index_stale(ns)? {
+                    return Ok(Some(arc.clone()));
+                }
+                // Stale — fall through to write path
+            } else {
+                let ns_slug = Self::ns_to_slug(ns);
+                let sidecar_path = self
+                    .config
+                    .path
+                    .join("vector")
+                    .join(format!("{}.hnsw", ns_slug));
+                if !sidecar_path.exists() {
+                    return Ok(None);
+                }
+                // Sidecar exists but not cached — fall through to write path
             }
-            return Ok(self.vector_indices.get(ns));
+        }
+
+        // Write path: evict stale or load from disk
+        let mut indices = self.vector_indices.write().unwrap();
+
+        // Double-check after acquiring write lock
+        if let Some(arc) = indices.get(ns) {
+            if !self.is_index_stale(ns)? {
+                return Ok(Some(arc.clone()));
+            }
+            indices.remove(ns);
+            self.metrics
+                .vector_index_stales
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         let t0 = Instant::now();
@@ -1905,16 +1937,15 @@ impl Engine {
         let bytes = std::fs::read(&sidecar_path)?;
         let index = HnswIndex::deserialize(&bytes)?;
 
-        // Validate staleness
-        let stale = self.is_index_stale(ns)?;
-        if stale {
+        if self.is_index_stale(ns)? {
             self.metrics
                 .vector_index_stales
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(None);
         }
 
-        self.vector_indices.insert(ns.to_vec(), index);
+        let arc = std::sync::Arc::new(index);
+        indices.insert(ns.to_vec(), arc.clone());
         self.metrics
             .vector_index_loads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1923,7 +1954,32 @@ impl Engine {
             std::sync::atomic::Ordering::Relaxed,
         );
 
-        Ok(self.vector_indices.get(ns))
+        Ok(Some(arc))
+    }
+
+    /// Try an HNSW search, returning `None` if no fresh index is available.
+    ///
+    /// Used by `edgestore-tokio` to attempt the fast HNSW path under a read lock
+    /// before falling back to the paged flat scan. The interior `RwLock` on the
+    /// index cache handles lazy loading without needing the outer engine write lock.
+    pub fn try_hnsw_search(
+        &self,
+        ns: &[u8],
+        query: &VectorRecord,
+        k: usize,
+    ) -> Result<Option<Vec<VectorSearchResult>>, EdgestoreError> {
+        if let Some(index) = self.get_vector_index(ns)? {
+            if index.dtype == query.dtype && index.dims == query.dims {
+                let hnsw_results = index.search(&query.data, k, 50)?;
+                return Ok(Some(
+                    hnsw_results
+                        .into_iter()
+                        .map(|(key, distance)| VectorSearchResult { key, distance })
+                        .collect(),
+                ));
+            }
+        }
+        Ok(None)
     }
 
     /// Check if the cached HNSW index is stale by comparing segment hashes.
@@ -1948,7 +2004,7 @@ impl Engine {
     ///
     /// Uses HNSW when an index exists and is fresh; falls back to flat scan otherwise.
     pub fn vector_search(
-        &mut self,
+        &self,
         ns: &[u8],
         query: &VectorRecord,
         k: usize,
@@ -1975,7 +2031,7 @@ impl Engine {
     /// a flat scan. For HNSW paths, only the result set bytes are counted (graph
     /// traversal does not materialize all vectors).
     pub fn vector_search_with_stats(
-        &mut self,
+        &self,
         ns: &[u8],
         query: &VectorRecord,
         k: usize,
@@ -3416,5 +3472,83 @@ mod tests {
         // Must be the first 5 keys in ascending order
         assert_eq!(result.items[0].0, b"key-0000".to_vec());
         assert_eq!(result.items[4].0, b"key-0004".to_vec());
+    }
+
+    // ── Concurrent vector search (no serialization) ───────────────────────
+
+    #[test]
+    fn test_vector_search_concurrent_reads() {
+        use crate::vector::distance::Metric;
+        use crate::vector::types::{Dtype, VectorRecord};
+        use crate::VectorEngine;
+
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+
+        for i in 0u8..20 {
+            let data = vec![i; 16 * 4];
+            engine.vector_put(b"ns", &[i], 16, Dtype::F32, &data).unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+        engine.build_vector_index(b"ns").unwrap();
+
+        let query = VectorRecord {
+            dims: 16,
+            dtype: Dtype::F32,
+            data: vec![0u8; 16 * 4],
+        };
+
+        // Spawn 8 threads all calling vector_search concurrently on &engine.
+        // This compiles only because vector_search takes &self — &mut self would
+        // require external serialization and this test would not build.
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    s.spawn(|| {
+                        let results = engine.vector_search(b"ns", &query, 3, Metric::L2).unwrap();
+                        assert_eq!(results.len(), 3);
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn test_vector_search_concurrent_flat_scan() {
+        use crate::vector::distance::Metric;
+        use crate::vector::types::{Dtype, VectorRecord};
+        use crate::VectorEngine;
+
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+
+        // No build_vector_index → forces flat scan path
+        for i in 0u8..10 {
+            let data = vec![i; 16 * 4];
+            engine.vector_put(b"ns", &[i], 16, Dtype::F32, &data).unwrap();
+        }
+
+        let query = VectorRecord {
+            dims: 16,
+            dtype: Dtype::F32,
+            data: vec![0u8; 16 * 4],
+        };
+
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        let results = engine.vector_search(b"ns", &query, 5, Metric::Cosine).unwrap();
+                        assert_eq!(results.len(), 5);
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
     }
 }

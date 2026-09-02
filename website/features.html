@@ -298,6 +298,52 @@ println!(<span class="string">"{} items, truncated={}"</span>, result.items.len(
       </div>
     </section>
 
+    <!-- Concurrent Vector Search -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Concurrent Vector Search <span class="text-sm font-normal text-slate-500 ml-2">v1.8.0</span></h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p><code>vector_search</code>, <code>vector_search_with_stats</code>, and <code>preload_vector_index</code> now take <code>&amp;self</code> — N concurrent searches no longer serialize against each other. The HNSW index cache uses an interior <code>std::sync::RwLock</code> with double-checked locking: a shared read lock is held for cache hits; a write lock is acquired only on the first load of a sidecar file, then released before returning results.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-3">
+            <li>BM25 text search was already <code>&amp;self</code>; vector search now matches</li>
+            <li>HNSW lazy load: write lock acquired once per namespace, then falls back to read-only access</li>
+            <li><code>build_vector_index</code> still takes <code>&amp;mut self</code> — it is a write operation</li>
+            <li>In <code>AsyncEngine</code>, HNSW and flat-scan paths both use <code>blocking_read</code></li>
+            <li>Downstream wrappers using <code>Arc&lt;Mutex&lt;Engine&gt;&gt;</code> can switch to <code>Arc&lt;RwLock&lt;Engine&gt;&gt;</code> — all search methods are now compatible with shared read access</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// vector_search now takes &amp;self — concurrent reads compile</span>
+<span class="keyword">use</span> std::thread;
+
+<span class="keyword">let</span> engine = Engine::open(config)?;
+<span class="comment">// ... put vectors, build_vector_index ...</span>
+
+<span class="comment">// 8 threads, one shared &amp;Engine — no Mutex needed</span>
+thread::scope(|s| {
+    <span class="keyword">for</span> _ <span class="keyword">in</span> <span class="number">0</span>..<span class="number">8</span> {
+        s.spawn(|| {
+            <span class="keyword">let</span> results = engine.<span class="function">vector_search</span>(
+                <span class="string">b"products"</span>, &amp;query, <span class="number">10</span>, Metric::Cosine
+            ).unwrap();
+            process(results);
+        });
+    }
+});
+
+<span class="comment">// AsyncEngine: HNSW + flat scan both use read lock</span>
+<span class="keyword">let</span> results = async_engine
+    .<span class="function">vector_search</span>(<span class="string">b"products"</span>, &amp;query, <span class="number">10</span>, Metric::Cosine)
+    .await?;</code></pre>
+        </div>
+      </div>
+    </section>
+
     <!-- Cursor Pagination -->
     <section class="mb-16">
       <div class="flex items-center space-x-3 mb-4">

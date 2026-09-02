@@ -384,3 +384,17 @@ pub trait RemoteStore: Send + Sync {
 **Rationale:** Maps directly to TimescaleDB's DeferredChunkAppend insight: planning cost (opening all segments) was O(segments) regardless of LIMIT/budget. P1-P3 push the budget to the I/O level. P4-P5 give callers correct cursor-based pagination without loading full ranges. The `(Vec, bool)` return from `range_scan_budgeted` is necessary because `range_core`'s `i < merged.len()` check produces a false negative when the segment budget exactly fills `merged` and the memtable is empty.
 
 **Implication:** `SegmentStore::range_scan` is removed; callers use `range_scan_budgeted(..., None)`. `read_block_at_offset` is now `pub(crate)` and shared between `SegmentReader` and `SegmentCursor`. Existing `range_budgeted` and `prefix_budgeted` semantics are unchanged; `truncated = true` is now correctly set when segments are budget-truncated even if the merged slice is fully consumed.
+
+---
+
+## D36 — Concurrent vector search via interior RwLock on HNSW cache (v1.8.0)
+
+**Question:** `Engine::vector_search` and `vector_search_with_stats` took `&mut self` because `get_vector_index` inserts into `self.vector_indices: HashMap<Vec<u8>, HnswIndex>` on a cache miss. This forced external callers (including `Arc<Mutex<Engine>>` wrappers) to serialize all vector searches, making concurrent BM25 + vector queries impossible and blocking reads for the full duration of a `build_vector_index` call.
+
+**Decision:** Change `vector_indices` to `std::sync::RwLock<HashMap<Vec<u8>, Arc<HnswIndex>>>` (interior mutability). `get_vector_index` now takes `&self`, acquires a read lock on cache hit, and upgrades to a write lock only on a cache miss (double-checked locking pattern). Returns `Arc<HnswIndex>` so the caller can hold the index after the lock is released.
+
+**Consequence:**
+- `vector_search`, `vector_search_with_stats`, `preload_vector_index`, `try_hnsw_search` all take `&self`.
+- `build_vector_index` keeps `&mut self` — it is a write operation on WAL-backed data.
+- `AsyncEngine::vector_search` drops the read-then-write-lock dance; both HNSW and flat-scan paths now use `blocking_read` throughout. A new `Engine::try_hnsw_search(&self, ...) -> Option<Vec<...>>` method is the boundary between the two strategies.
+- Downstream wrappers using `Arc<Mutex<Engine>>` can switch to `Arc<RwLock<Engine>>` — all search methods are now compatible with shared read access.

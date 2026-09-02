@@ -332,21 +332,23 @@ impl AsyncEngine {
         let query_owned = query.clone();
         let inner = self.inner.clone();
 
-        // Read-lock check: is an HNSW index already in memory?
-        let has_hnsw = {
-            let engine = self.inner.read().await;
-            engine.vector_count(&ns_owned).is_some()
-        };
-
-        if has_hnsw {
-            // HNSW: fast (<5 ms). Uses write lock because get_vector_index may
-            // lazy-load the sidecar file on first call.
-            return tokio::task::spawn_blocking(move || {
-                let mut engine = inner.blocking_write();
-                engine.vector_search(&ns_owned, &query_owned, k, metric)
+        // Try HNSW path under a read lock.
+        // get_vector_index uses an interior RwLock for lazy sidecar loading, so
+        // the outer engine lock can stay shared here — no write lock needed.
+        {
+            let ns2 = ns_owned.clone();
+            let q2 = query_owned.clone();
+            let inner2 = inner.clone();
+            let hnsw_result = tokio::task::spawn_blocking(move || {
+                let engine = inner2.blocking_read();
+                engine.try_hnsw_search(&ns2, &q2, k)
             })
             .await
             .map_err(|e| EdgestoreError::Io(std::io::Error::other(e.to_string())))?;
+
+            if let Some(results) = hnsw_result? {
+                return Ok(results);
+            }
         }
 
         // Flat scan: paged with cooperative yield between pages.
@@ -893,5 +895,46 @@ mod tests {
         }
         // First key must be the lexicographically largest
         assert_eq!(all[0], b"r0011".to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_async_vector_search_concurrent_no_write_lock() {
+        use edgestore::vector::distance::Metric;
+        use edgestore::vector::types::{Dtype, VectorRecord};
+        use edgestore::VectorEngine;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = AsyncEngine::open(EdgestoreConfig::new(dir.path())).await.unwrap();
+
+        // Write vectors and build HNSW index
+        for i in 0u8..16 {
+            let data = vec![i; 16 * 4];
+            engine.vector_put(b"ns", &[i], 16, Dtype::F32, &data).await.unwrap();
+        }
+        {
+            let mut e = engine.inner.write().await;
+            e.flush_to_segments().unwrap();
+            e.build_vector_index(b"ns").unwrap();
+        }
+
+        let query = VectorRecord {
+            dims: 16,
+            dtype: Dtype::F32,
+            data: vec![0u8; 16 * 4],
+        };
+
+        // Launch 8 concurrent vector searches — all run under read lock
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let q = query.clone();
+            let e = engine.clone();
+            tasks.push(tokio::spawn(async move {
+                let results = e.vector_search(b"ns", &q, 4, Metric::L2).await.unwrap();
+                assert_eq!(results.len(), 4);
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
     }
 }

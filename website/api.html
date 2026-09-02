@@ -280,16 +280,20 @@
           <p class="text-slate-600 text-sm mt-1">Remove a vector from the collection.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">engine.vector_search(ns, query, k, metric) -> Result&lt;Vec&lt;VectorSearchResult&gt;, EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">Search top-k nearest neighbors. Routes to HNSW if an index exists, otherwise flat SIMD scan.</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.vector_search(ns, query, k, metric) -> Result&lt;Vec&lt;VectorSearchResult&gt;, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.8.0: &amp;self</span></code>
+          <p class="text-slate-600 text-sm mt-1">Search top-k nearest neighbors. Routes to HNSW if an index exists, otherwise flat scan. Takes <code>&amp;self</code> — concurrent reads do not block each other. The HNSW cache uses interior <code>RwLock</code> for lazy loading so the outer engine lock stays shared.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">engine.build_vector_index(ns, dims, dtype, metric) -> Result&lt;(), EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">Build an HNSW approximate index for the collection. Persists to a sidecar file.</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.try_hnsw_search(ns, query, k) -> Result&lt;Option&lt;Vec&lt;VectorSearchResult&gt;&gt;, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.8.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Attempt the HNSW path only. Returns <code>None</code> if no fresh index is available, <code>Some(results)</code> otherwise. Used by <code>AsyncEngine</code> to try the fast path under a read lock before falling back to a paged flat scan.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">engine.preload_vector_index(ns) -> Result&lt;bool, EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">Lazy-load an existing HNSW index from disk.</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.build_vector_index(ns) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Build an HNSW approximate index for the collection. Persists to a sidecar file. Takes <code>&amp;mut self</code> — this is a write operation.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.preload_vector_index(ns) -> Result&lt;bool, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.8.0: &amp;self</span></code>
+          <p class="text-slate-600 text-sm mt-1">Load the HNSW index from disk into the interior cache. Returns <code>true</code> if loaded, <code>false</code> if no index exists. Now takes <code>&amp;self</code> — safe to call from a shared reference.</p>
         </div>
         <div class="api-item p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.strip_vector_index(segment_id: u64) -> Result&lt;SegmentMeta, EdgestoreError&gt; <span class="text-xs text-slate-500 font-normal">v1.5.0</span></code>

@@ -107,6 +107,12 @@ pub struct Engine {
     lockfile: std::fs::File,
     pub(crate) segment_store: crate::segment::SegmentStore,
     pub(crate) snapshot_registry: crate::snapshot::SnapshotRegistry,
+    /// Monotonically increasing write token for primary fencing.
+    ///
+    /// Persisted to `{db_path}/WTOKEN`. A replica being promoted to primary increments
+    /// this token so the old primary's segments are rejected by anti-entropy loops that
+    /// have already observed the higher token. Inspired by BtrLog §4.2.
+    write_token: u64,
     metrics: EngineMetrics,
     vector_indices: std::sync::RwLock<HashMap<Vec<u8>, std::sync::Arc<HnswIndex>>>,
     /// In-memory cache of deserialized text indexes per namespace.
@@ -173,6 +179,8 @@ impl Engine {
         let segment_store =
             crate::segment::SegmentStore::open(config.path.clone(), config.cohort_window_secs)?;
 
+        let write_token = Self::load_write_token_from_path(&config.path)?;
+
         let mut engine = Engine {
             config,
             wal,
@@ -186,6 +194,7 @@ impl Engine {
             vector_indices: std::sync::RwLock::new(HashMap::new()),
             text_indices: HashMap::new(),
             on_segment_flushed: None,
+            write_token,
         };
 
         // Rebuild any text indices that are missing their merged index sidecar.
@@ -223,6 +232,62 @@ impl Engine {
     ) -> Self {
         self.on_segment_flushed = Some(Box::new(cb));
         self
+    }
+
+    // -----------------------------------------------------------------------
+    // Commit watermark & write token  (BtrLog §4.2 — arXiv:2606.27051)
+    // -----------------------------------------------------------------------
+
+    /// Highest LSN whose segment is durably flushed and visible to replicas.
+    ///
+    /// Computed as `max(meta.max_lsn)` across all segment metas in the manifest.
+    /// In-flight WAL records that have not yet been flushed to a segment are NOT
+    /// counted — replicas use this value to decide what is safe to serve.
+    ///
+    /// Returns 0 when no segments have been written yet.
+    pub fn confirmed_lsn(&self) -> u64 {
+        self.list_segment_metas()
+            .iter()
+            .map(|m| m.max_lsn)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Current write token.
+    ///
+    /// A monotonically increasing u64 that survives restarts.  When a replica is
+    /// promoted to primary it increments this token so anti-entropy loops on peers
+    /// that already observed the old token will recognise the topology change and
+    /// can refuse or warn on stale segments.
+    pub fn write_token(&self) -> u64 {
+        self.write_token
+    }
+
+    /// Persist a new write token to disk and update the in-memory value.
+    ///
+    /// Callers must guarantee `token > self.write_token()` for fencing to hold —
+    /// `ReplicatedEngine::promote_to_primary` enforces this invariant.
+    pub fn set_write_token(&mut self, token: u64) -> Result<(), EdgestoreError> {
+        let path = self.config.path.join("WTOKEN");
+        std::fs::write(&path, token.to_le_bytes())?;
+        self.write_token = token;
+        Ok(())
+    }
+
+    /// Load the write token from `{db_path}/WTOKEN`.  Returns 0 for a new database.
+    fn load_write_token_from_path(db_path: &std::path::Path) -> Result<u64, EdgestoreError> {
+        let path = db_path.join("WTOKEN");
+        match std::fs::read(&path) {
+            Ok(bytes) if bytes.len() == 8 => {
+                Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+            }
+            Ok(_) => {
+                log::warn!("WTOKEN file is corrupt (wrong length); resetting to 0");
+                Ok(0)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(EdgestoreError::Io(e)),
+        }
     }
 
     /// Returns the number of vectors in the given namespace if the HNSW index is
@@ -3550,5 +3615,59 @@ mod tests {
                 h.join().unwrap();
             }
         });
+    }
+
+    #[test]
+    fn test_confirmed_lsn_zero_before_flush() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        assert_eq!(engine.confirmed_lsn(), 0);
+        engine.put(b"ns", b"k", b"v").unwrap();
+        // WAL record written but no segment flushed yet.
+        assert_eq!(engine.confirmed_lsn(), 0);
+    }
+
+    #[test]
+    fn test_confirmed_lsn_advances_after_flush() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        for i in 0..10u8 {
+            engine.put(b"ns", &[i], b"v").unwrap();
+        }
+        engine.flush_to_segments().unwrap();
+        assert!(engine.confirmed_lsn() > 0);
+    }
+
+    #[test]
+    fn test_write_token_zero_on_new_engine() {
+        let dir = TempDir::new().unwrap();
+        let engine = open_engine(&dir);
+        assert_eq!(engine.write_token(), 0);
+        // No WTOKEN file must exist yet (absent = 0).
+        assert!(!dir.path().join("WTOKEN").exists());
+    }
+
+    #[test]
+    fn test_set_write_token_persists_across_reopen() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut engine = open_engine(&dir);
+            assert_eq!(engine.write_token(), 0);
+            engine.set_write_token(7).unwrap();
+            assert_eq!(engine.write_token(), 7);
+        }
+        // Reopen — token must be loaded from disk.
+        let engine2 = open_engine(&dir);
+        assert_eq!(engine2.write_token(), 7);
+    }
+
+    #[test]
+    fn test_set_write_token_wtoken_file_contents() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = open_engine(&dir);
+        engine.set_write_token(42).unwrap();
+        let bytes = std::fs::read(dir.path().join("WTOKEN")).unwrap();
+        assert_eq!(bytes.len(), 8);
+        assert_eq!(u64::from_le_bytes(bytes.try_into().unwrap()), 42u64);
     }
 }

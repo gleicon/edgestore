@@ -369,9 +369,37 @@
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.range_merkle_root() -> Result&lt;[u8; 32], EdgestoreError&gt;</code>
           <p class="text-slate-600 text-sm mt-1">Compute the root hash of the range-level Merkle tree over all segments.</p>
         </div>
-        <div class="api-item p-4">
+        <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.compare_merkle(other_root) -> Result&lt;bool, EdgestoreError&gt;</code>
           <p class="text-slate-600 text-sm mt-1">Compare local Merkle root with a peer's. Returns true if identical.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4 bg-edge-50">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.confirmed_lsn() -> u64 <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Highest LSN whose segment is durably flushed. Replicas use this to know what is safe to serve. Returns 0 when no segments exist yet.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4 bg-edge-50">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.write_token() -> u64 <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Current write-fencing token. Monotonically increasing; persisted to <code class="font-mono">WTOKEN</code>. A replica promoted to primary increments this token so anti-entropy loops detect the failover.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4 bg-edge-50">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.set_write_token(token: u64) -> Result&lt;(), EdgestoreError&gt; <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Persist a new write token atomically. Use via <code class="font-mono">ReplicatedEngine::promote_to_primary</code> which enforces the monotonic invariant.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4 bg-edge-50">
+          <code class="font-mono text-sm text-edge-700 font-semibold">GET /watermark → WatermarkResponse { confirmed_lsn, wtoken } <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">New HTTP endpoint on <code class="font-mono">HttpReplicationServer</code>. Returns the current commit watermark and write token. Polled by <code class="font-mono">AntiEntropyLoop</code> each cycle.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4 bg-edge-50">
+          <code class="font-mono text-sm text-edge-700 font-semibold">ReplicatedEngine::promote_to_primary(config, bind_addr, old_primary_url) <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Fence the old primary, increment write token, start the replication server. Pass <code class="font-mono">None</code> for <code class="font-mono">old_primary_url</code> when the old primary is already down.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4 bg-edge-50">
+          <code class="font-mono text-sm text-edge-700 font-semibold">remote_store.upload_if_absent(hash, data) -> Result&lt;bool, EdgestoreError&gt; <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">Idempotent-create on <code class="font-mono">RemoteStore</code>. Returns <code class="font-mono">true</code> on first write, <code class="font-mono">false</code> when already present. Filesystem: <code class="font-mono">O_CREAT|O_EXCL</code>. S3: <code class="font-mono">If-None-Match: *</code> (HTTP 412 → false).</p>
+        </div>
+        <div class="api-item p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">ReplicationProtocol::watermark() -> Result&lt;WatermarkResponse, EdgestoreError&gt; <span class="text-slate-400 font-normal">v1.9.0</span></code>
+          <p class="text-slate-600 text-sm mt-1">New method on the <code class="font-mono">ReplicationProtocol</code> trait. Default returns <code class="font-mono">Err(InvalidOperation)</code> for backward compatibility. <code class="font-mono">HttpReplicationClient</code> implements it against <code class="font-mono">GET /watermark</code>.</p>
         </div>
       </div>
     </section>

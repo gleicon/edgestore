@@ -207,6 +207,36 @@ impl RemoteStore for S3RemoteStore {
         Ok(())
     }
 
+    /// Idempotent PUT using `If-None-Match: *` (BtrLog §5.1, arXiv:2606.27051).
+    ///
+    /// S3 returns HTTP 412 when the key already exists; the SDK surfaces this as a
+    /// `ServiceError` with status 412, which we translate to `Ok(false)`.  Any other
+    /// error is a real failure and propagates as `Err(_)`.
+    fn upload_if_absent(&self, hash: &[u8; 32], data: &[u8]) -> Result<bool, EdgestoreError> {
+        let key = self.seg_key(hash);
+        let result = self.block_on(async {
+            self.client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .if_none_match("*")
+                .body(ByteStream::from(data.to_vec()))
+                .send()
+                .await
+        });
+        match result {
+            Ok(_) => Ok(true),
+            Err(aws_sdk_s3::error::SdkError::ServiceError(service_err))
+                if service_err.raw().status().as_u16() == 412 =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(EdgestoreError::ReplicationError(format!(
+                "S3 upload_if_absent failed for {key}: {e}"
+            ))),
+        }
+    }
+
     fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
         let key = self.seg_key(hash);
 

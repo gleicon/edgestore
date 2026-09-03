@@ -664,8 +664,8 @@ impl TieredEngine {
 
         let mut last_err = None;
         for attempt in 0..=MAX_RETRIES {
-            match self.remote.upload(hash, data) {
-                Ok(()) => return Ok(()),
+            match self.remote.upload_if_absent(hash, data) {
+                Ok(_already_or_new) => return Ok(()),
                 Err(e) => {
                     let msg = e.to_string();
                     last_err = Some(e);

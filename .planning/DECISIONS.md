@@ -398,3 +398,25 @@ pub trait RemoteStore: Send + Sync {
 - `build_vector_index` keeps `&mut self` — it is a write operation on WAL-backed data.
 - `AsyncEngine::vector_search` drops the read-then-write-lock dance; both HNSW and flat-scan paths now use `blocking_read` throughout. A new `Engine::try_hnsw_search(&self, ...) -> Option<Vec<...>>` method is the boundary between the two strategies.
 - Downstream wrappers using `Arc<Mutex<Engine>>` can switch to `Arc<RwLock<Engine>>` — all search methods are now compatible with shared read access.
+
+---
+
+## D37 — BtrLog-inspired replication safety: commit watermark, write fencing, idempotent uploads (v1.9.0)
+
+**Source:** Kuschewski et al., "BtrLog: Low-Latency Logging for Cloud Database Systems," VLDB 2026 (arXiv:2606.27051). §4 (commit LSN, write token) and §5.1 (idempotent segment flush) directly inspired the three changes below.
+
+**P1 — Commit watermark (`confirmed_lsn` + `GET /watermark`)**
+
+`Engine::confirmed_lsn() -> u64` computes `max(meta.max_lsn)` across all durably-flushed segment metas. This is the highest LSN that is safe for replicas to serve. Added `Engine::write_token() -> u64` and `Engine::set_write_token(u64)` (persisted to `{db_path}/WTOKEN` as an 8-byte little-endian file). `WatermarkResponse { confirmed_lsn, wtoken }` added to `edgestore::replication`. `GET /watermark` added to `HttpReplicationServer`, `watermark()` added to `HttpReplicationClient` and to the `ReplicationProtocol` trait as a defaulted method (backward-compatible — returns `Err(InvalidOperation)` for peers that don't implement it). `AntiEntropyLoop` fetches the watermark each cycle and updates `PeerCursor::last_known_wtoken`; a jump warns of a primary failover.
+
+**P2 — Write-token fencing (`promote_to_primary`)**
+
+`ReplicatedEngine::promote_to_primary(config, bind_addr, old_primary_url)` implements the fencing protocol: fetch old primary's `wtoken` via `/watermark` (non-fatal on failure), compute `new_token = max(fetched, local) + 1`, persist via `set_write_token`, then start `HttpReplicationServer`. Ensures any replica that has already seen the old token will detect the monotonic jump.
+
+**P3 — Idempotent segment upload (`upload_if_absent`)**
+
+`RemoteStore::upload_if_absent(hash, data) -> Result<bool>` added to the trait with a default impl that calls `upload()` and returns `Ok(true)`. `FilesystemRemoteStore` overrides it with `O_CREAT | O_EXCL` (`create_new(true)`) — atomically creates only if absent, `EEXIST` → `Ok(false)`. `S3RemoteStore` overrides it with `put_object().if_none_match("*")` — S3 HTTP 412 → `Ok(false)`. `TieredEngine::upload_with_retry` and `AntiEntropyLoop::run_once` updated to call `upload_if_absent` instead of `upload`, eliminating redundant re-uploads on retry.
+
+**Rationale:** Enables safe primary failover without split-brain writes, prevents double-uploads on retry without requiring a `list()` probe, and lets replicas detect topology changes without a separate gossip protocol.
+
+**Implication:** Existing `RemoteStore` implementors compile unchanged (default impl for `upload_if_absent`). Existing `ReplicationProtocol` implementors compile unchanged (default impl for `watermark`). The `WTOKEN` file is absent on existing databases — `load_write_token_from_path` treats `NotFound` as token 0 (backward-compatible).

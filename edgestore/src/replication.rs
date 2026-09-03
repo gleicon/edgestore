@@ -56,6 +56,22 @@ impl SegmentRef {
     }
 }
 
+/// Commit watermark and write-fencing token returned by `GET /watermark`.
+///
+/// Inspired by BtrLog §4 (arXiv:2606.27051, Kuschewski et al., VLDB 2026):
+/// - `confirmed_lsn` is the highest LSN whose segment is durably flushed;
+///   replicas use it to know what data is safe to serve.
+/// - `wtoken` is a monotonically increasing primary-fencing counter; a replica
+///   promoted to primary increments it so stale anti-entropy loops can detect
+///   the topology change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatermarkResponse {
+    /// Highest confirmed-durable LSN.
+    pub confirmed_lsn: u64,
+    /// Current write token.
+    pub wtoken: u64,
+}
+
 /// Pull-only replication protocol trait (D02, D08).
 ///
 /// Two nodes compare Merkle roots first (`merkle_root`); if equal, sync is skipped entirely.
@@ -79,4 +95,16 @@ pub trait ReplicationProtocol {
     ///
     /// Caller MUST verify `BLAKE3(data) == hash` before applying (T-04-01).
     fn fetch_segment(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError>;
+
+    /// Returns the primary's current `confirmed_lsn` and `wtoken`.
+    ///
+    /// Optional: callers that implement topology-change detection (e.g.
+    /// `AntiEntropyLoop`) call this to detect primary failovers.  Default
+    /// implementation returns `Err(InvalidOperation)` for peers that do not yet
+    /// expose this endpoint (backward-compatible).
+    fn watermark(&self) -> Result<WatermarkResponse, EdgestoreError> {
+        Err(EdgestoreError::InvalidOperation(
+            "watermark not implemented for this peer".to_string(),
+        ))
+    }
 }

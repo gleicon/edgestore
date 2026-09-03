@@ -76,7 +76,7 @@ pub use immutable::ImmutableEngine;
 pub use merkle::RangeMerkleTree;
 pub use metrics::MetricsSnapshot;
 pub use remote_store::RemoteStore;
-pub use replication::{HostId, ReplicationProtocol, SegmentRef};
+pub use replication::{HostId, ReplicationProtocol, SegmentRef, WatermarkResponse};
 pub use segment::in_memory::InMemorySegmentReader;
 pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use storage_backend::{

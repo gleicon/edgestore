@@ -30,6 +30,11 @@ pub struct PeerCursor {
     pub last_attempt_secs: u64,
     /// Total number of segments applied to date.
     pub segments_applied_total: u64,
+    /// Last observed write token from the primary (BtrLog §4.2, arXiv:2606.27051).
+    ///
+    /// If the peer's reported `wtoken` ever exceeds this value the loop logs a
+    /// warning — a monotonic jump signals a primary failover.
+    pub last_known_wtoken: u64,
 }
 
 /// Background pull-only anti-entropy loop.
@@ -127,6 +132,23 @@ fn run_once(
 
     // Step 3: Create client and probe peer Merkle root.
     let client = HttpReplicationClient::new(peer_url);
+
+    // Step 3a: Fetch watermark — detect primary failovers (BtrLog §4.2).
+    // Non-fatal: old primaries that do not yet expose /watermark return InvalidOperation.
+    if let Ok(wm) = client.watermark() {
+        if wm.wtoken > cursor.last_known_wtoken {
+            if cursor.last_known_wtoken > 0 {
+                eprintln!(
+                    "[anti_entropy] peer {} write token jumped {} → {} — primary failover detected",
+                    peer_id, cursor.last_known_wtoken, wm.wtoken
+                );
+            }
+            cursor.last_known_wtoken = wm.wtoken;
+            if let Err(e) = flush_cursor(&cursor, &cursor_path) {
+                eprintln!("[anti_entropy] cursor flush (wtoken) error: {}", e);
+            }
+        }
+    }
 
     let peer_root = match client.merkle_root() {
         Ok(r) => r,
@@ -241,8 +263,9 @@ fn run_once(
                 );
 
                 // Upload to remote store if configured (D08). Non-fatal on error.
+                // Uses upload_if_absent so re-archiving on retry never double-writes.
                 if let Some(rs) = remote_store {
-                    if let Err(e) = rs.upload(&hash, &data) {
+                    if let Err(e) = rs.upload_if_absent(&hash, &data) {
                         eprintln!(
                             "[anti_entropy] remote_store upload warning for {}: {}",
                             hex_str(&hash),

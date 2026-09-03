@@ -266,7 +266,7 @@ assert!(db.get(<span class="string">b"accounts"</span>, <span class="string">b"c
 
     <!-- Replication -->
     <div id="replication" class="tab-content">
-      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
         <h3 class="text-lg font-semibold text-slate-900 mb-2">Merkle Replication</h3>
         <p class="text-slate-600 text-sm mb-4">Synchronize two engines using content-addressed segments and Merkle tree comparison.</p>
         <div class="code-block p-4">
@@ -297,6 +297,59 @@ primary.flush_to_segments()?;
 assert!(match_ok);</code></pre>
         </div>
         <p class="text-sm text-slate-500 mt-3">Run: <code class="bg-slate-100 px-2 py-1 rounded">cargo run --example replication</code></p>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Primary Failover with Write-Token Fencing <span class="text-xs font-normal text-slate-500 ml-1">v1.9.0</span></h3>
+        <p class="text-slate-600 text-sm mb-4">Safely promote a replica to primary. The write token is incremented so anti-entropy loops on other replicas detect the topology change. Inspired by BtrLog §4.2 (Kuschewski et al., VLDB 2026).</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">use</span> edgestore_repl::ReplicatedEngine;
+<span class="keyword">use</span> edgestore::EdgestoreConfig;
+
+<span class="comment">// Normal startup: open as primary</span>
+<span class="keyword">let</span> primary = ReplicatedEngine::open_primary(
+    EdgestoreConfig::new(<span class="string">"/var/db/node-a"</span>),
+    <span class="string">"0.0.0.0:8900"</span>,
+)?;
+
+<span class="comment">// --- Later: node-a goes down, promote node-b ---</span>
+
+<span class="comment">// promote_to_primary fetches old primary's wtoken via GET /watermark,</span>
+<span class="comment">// advances it by 1, persists to WTOKEN, then starts the HTTP server.</span>
+<span class="keyword">let</span> new_primary = ReplicatedEngine::promote_to_primary(
+    EdgestoreConfig::new(<span class="string">"/var/db/node-b"</span>),
+    <span class="string">"0.0.0.0:8900"</span>,
+    <span class="type">Some</span>(<span class="string">"http://node-a:8900"</span>),  <span class="comment">// None if old primary is already down</span>
+)?;
+
+<span class="comment">// Inspect the watermark</span>
+<span class="keyword">let</span> eng = new_primary.engine().lock().unwrap();
+println!(<span class="string">"confirmed_lsn={} wtoken={}"</span>,
+    eng.confirmed_lsn(), eng.write_token());
+<span class="comment">// Anti-entropy loops on other replicas observe wtoken jump → log failover warning</span></code></pre>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">Idempotent Remote Upload <span class="text-xs font-normal text-slate-500 ml-1">v1.9.0</span></h3>
+        <p class="text-slate-600 text-sm mb-4">Use <code>upload_if_absent</code> in retry loops to avoid re-uploading segments already present on S3 or local replica stores.</p>
+        <div class="code-block p-4">
+          <pre><code><span class="keyword">use</span> edgestore_repl::{FilesystemRemoteStore, S3RemoteStore};
+<span class="keyword">use</span> edgestore::RemoteStore;
+
+<span class="comment">// Filesystem: O_CREAT|O_EXCL — atomically creates or signals already-exists</span>
+<span class="keyword">let</span> fs_store = FilesystemRemoteStore::new(<span class="string">"/data/segments"</span>.into())?;
+<span class="keyword">let</span> wrote = fs_store.upload_if_absent(&hash, &segment_bytes)?;
+<span class="comment">// wrote == true  → freshly written</span>
+<span class="comment">// wrote == false → already present, no write performed</span>
+
+<span class="comment">// S3: PutObject with If-None-Match: * — HTTP 412 → false</span>
+<span class="keyword">let</span> s3_store = S3RemoteStore::new(<span class="string">"my-bucket"</span>, <span class="type">None</span>, <span class="type">None</span>)?;
+<span class="keyword">let</span> wrote = s3_store.upload_if_absent(&hash, &segment_bytes)?;
+
+<span class="comment">// TieredEngine and AntiEntropyLoop use upload_if_absent automatically.</span>
+<span class="comment">// No manual check needed — retry your outer loop without fear of double-writes.</span></code></pre>
+        </div>
       </div>
     </div>
 

@@ -28,6 +28,27 @@ pub trait RemoteStore: Send + Sync {
     /// write without returning an error.
     fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError>;
 
+    /// Store segment bytes only if absent; returns `true` when newly written.
+    ///
+    /// Semantics (BtrLog §5.1 — arXiv:2606.27051, Kuschewski et al., VLDB 2026):
+    /// - Returns `Ok(true)`  when the segment was written for the first time.
+    /// - Returns `Ok(false)` when a segment with the same hash already existed.
+    /// - Returns `Err(_)`    on any real I/O or network failure.
+    ///
+    /// The default implementation calls `upload()` and returns `Ok(true)` — fully
+    /// correct but not atomic.  Override for true idempotent-create semantics:
+    /// - `FilesystemRemoteStore`: `OpenOptions::new().create_new(true)` — the OS
+    ///   rejects concurrent writers via `EEXIST`.
+    /// - `S3RemoteStore`: `put_object().if_none_match("*")` — S3 returns HTTP 412
+    ///   when the key already exists.
+    ///
+    /// Used by `TieredEngine::archive_segments` and `AntiEntropyLoop::run_once` to
+    /// prevent double-uploads on retry without requiring a prior `list()` call.
+    fn upload_if_absent(&self, hash: &[u8; 32], data: &[u8]) -> Result<bool, EdgestoreError> {
+        self.upload(hash, data)?;
+        Ok(true)
+    }
+
     /// Retrieve segment bytes by content hash.
     ///
     /// Returns `EdgestoreError::KeyNotFound` if the hash is not present.

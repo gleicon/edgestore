@@ -425,6 +425,47 @@ thread::scope(|s| {
       </div>
     </section>
 
+    <!-- Replication Safety: Watermark + Write Token + Idempotent Upload -->
+    <section class="mb-16">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-edge-100 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-edge-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900">Replication Safety <span class="text-sm font-normal text-slate-500 ml-2">v1.9.0</span></h2>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-8">
+        <div class="prose text-slate-600">
+          <p>Three primitives for safe failover and crash-resilient archiving, inspired by the BtrLog paper (Kuschewski et al., VLDB 2026 — arXiv:2606.27051):</p>
+          <ul class="list-disc pl-5 space-y-2 mt-3">
+            <li><strong>Commit watermark</strong> — <code>engine.confirmed_lsn()</code> returns the highest LSN whose segment is durably flushed. <code>GET /watermark</code> exposes it over HTTP alongside the write token. Replicas know exactly what is safe to serve.</li>
+            <li><strong>Write-token fencing</strong> — <code>engine.write_token()</code> is a monotonic u64 persisted to <code>WTOKEN</code>. <code>ReplicatedEngine::promote_to_primary(config, bind_addr, old_primary_url)</code> fetches the old primary's token, advances it by one, and starts the HTTP server. Anti-entropy loops detect the jump and log a failover warning — no gossip required.</li>
+            <li><strong>Idempotent uploads</strong> — <code>RemoteStore::upload_if_absent</code> returns <code>true</code> on first write and <code>false</code> when already present. Filesystem: <code>O_CREAT|O_EXCL</code>. S3: <code>If-None-Match: *</code> (HTTP 412 → <code>false</code>). Retry loops in <code>TieredEngine</code> and <code>AntiEntropyLoop</code> never double-upload.</li>
+          </ul>
+        </div>
+        <div class="code-block p-4">
+          <pre><code><span class="comment">// Failover: promote a replica to primary (v1.9.0)</span>
+<span class="keyword">use</span> edgestore_repl::ReplicatedEngine;
+
+<span class="comment">// Old primary URL — fetch its write token before fencing.</span>
+<span class="comment">// Pass None if the old primary is already down.</span>
+<span class="keyword">let</span> new_primary = ReplicatedEngine::promote_to_primary(
+    EdgestoreConfig::new(<span class="string">"/var/db/replica"</span>),
+    <span class="string">"0.0.0.0:8900"</span>,
+    <span class="type">Some</span>(<span class="string">"http://old-primary:8900"</span>),
+)?;
+
+<span class="comment">// Inspect the watermark on any engine</span>
+<span class="keyword">let</span> eng = new_primary.engine().lock().unwrap();
+println!(<span class="string">"confirmed_lsn={} wtoken={}"</span>,
+    eng.confirmed_lsn(), eng.write_token());
+
+<span class="comment">// Idempotent-safe archiving (called automatically by TieredEngine)</span>
+<span class="keyword">let</span> wrote = remote_store.upload_if_absent(&hash, &data)?;
+<span class="comment">// wrote == false → already on S3, skip re-compress</span></code></pre>
+        </div>
+      </div>
+    </section>
+
     <!-- Tiered Storage -->
     <section class="mb-16">
       <div class="flex items-center space-x-3 mb-4">

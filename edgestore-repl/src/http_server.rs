@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use edgestore::WatermarkResponse;
 use edgestore::EdgestoreError;
 use edgestore::Engine;
 
@@ -288,6 +289,22 @@ fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) 
             };
 
             respond_raw(request, dat_bytes);
+        }
+
+        (tiny_http::Method::Get, ["watermark"]) => {
+            // GET /watermark — return confirmed_lsn + wtoken as MessagePack.
+            match engine.lock() {
+                Ok(eng) => {
+                    let resp = WatermarkResponse {
+                        confirmed_lsn: eng.confirmed_lsn(),
+                        wtoken: eng.write_token(),
+                    };
+                    respond_msgpack(request, &resp, debug_json);
+                }
+                Err(_) => {
+                    respond_error(request, 500, "engine lock poisoned");
+                }
+            }
         }
 
         _ => {

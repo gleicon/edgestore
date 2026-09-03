@@ -10,7 +10,7 @@ use std::io::Read;
 use serde::{Deserialize, Serialize};
 
 use edgestore::replication::{ReplicationProtocol, SegmentRef};
-use edgestore::EdgestoreError;
+use edgestore::{EdgestoreError, WatermarkResponse};
 
 /// MessagePack wire struct for GET /merkle response.
 #[derive(Serialize, Deserialize)]
@@ -96,6 +96,20 @@ impl ReplicationProtocol for HttpReplicationClient {
             .collect();
 
         Ok(refs)
+    }
+
+    /// Fetch the primary's commit watermark.
+    ///
+    /// Calls `GET {base_url}/watermark`, deserializes MessagePack as
+    /// `{confirmed_lsn, wtoken}`.  Used by `AntiEntropyLoop` to detect
+    /// primary failovers when `wtoken` increases.
+    fn watermark(&self) -> Result<WatermarkResponse, EdgestoreError> {
+        let url = format!("{}/watermark", self.base_url);
+        let response = ureq::get(&url)
+            .call()
+            .map_err(|e| EdgestoreError::ReplicationError(format!("GET /watermark: {e}")))?;
+        rmp_serde::from_read(response.into_reader())
+            .map_err(|e| EdgestoreError::ReplicationError(format!("GET /watermark decode: {e}")))
     }
 
     /// Fetch one segment's raw bytes by content hash.

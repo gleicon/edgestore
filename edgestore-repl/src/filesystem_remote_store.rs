@@ -77,6 +77,29 @@ impl RemoteStore for FilesystemRemoteStore {
         Ok(())
     }
 
+    /// Atomically create the segment file only if it does not exist.
+    ///
+    /// Uses `O_CREAT | O_EXCL` (`create_new(true)`) to give true atomic
+    /// idempotent-create semantics without a TOCTOU race.  Returns `Ok(true)`
+    /// on first write, `Ok(false)` when the file already exists.
+    fn upload_if_absent(&self, hash: &[u8; 32], data: &[u8]) -> Result<bool, EdgestoreError> {
+        use std::io::Write as _;
+        let dest = self.seg_path(hash);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+        {
+            Ok(mut file) => {
+                file.write_all(data)
+                    .map_err(|e| EdgestoreError::ReplicationError(e.to_string()))?;
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(EdgestoreError::ReplicationError(e.to_string())),
+        }
+    }
+
     /// Download the segment bytes for `hash`.
     ///
     /// Returns `EdgestoreError::ReplicationError` if the segment is not present.
@@ -307,6 +330,25 @@ mod tests {
             result.is_err(),
             "download_aux of non-existent sidecar should Err"
         );
+    }
+
+    #[test]
+    fn test_upload_if_absent_returns_true_first_time() {
+        let (_dir, store) = make_store();
+        let hash = [0x10u8; 32];
+        let result = store.upload_if_absent(&hash, b"data").unwrap();
+        assert!(result, "first upload_if_absent must return true");
+    }
+
+    #[test]
+    fn test_upload_if_absent_returns_false_when_present() {
+        let (_dir, store) = make_store();
+        let hash = [0x11u8; 32];
+        store.upload_if_absent(&hash, b"original").unwrap();
+        let result = store.upload_if_absent(&hash, b"other").unwrap();
+        assert!(!result, "second upload_if_absent must return false");
+        // Content must be unchanged (first write wins).
+        assert_eq!(store.download(&hash).unwrap(), b"original");
     }
 
     #[test]

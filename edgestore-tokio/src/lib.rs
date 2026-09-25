@@ -87,22 +87,33 @@ impl AsyncEngine {
         })
     }
 
+    async fn run_read<F, T>(&self, f: F) -> Result<T, EdgestoreError>
+    where
+        F: FnOnce(&Engine) -> Result<T, EdgestoreError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || f(&inner.blocking_read()))
+            .await
+            .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
+    }
+
+    async fn run_write<F, T>(&self, f: F) -> Result<T, EdgestoreError>
+    where
+        F: FnOnce(&mut Engine) -> Result<T, EdgestoreError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || f(&mut inner.blocking_write()))
+            .await
+            .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
+    }
+
     /// Lightweight read — acquires read lock and returns immediately.
     pub async fn get(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.get(&ns, &key)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(move |e| e.get(&ns, &key)).await
     }
 
     /// Lightweight write — acquires write lock and returns immediately.
@@ -110,18 +121,7 @@ impl AsyncEngine {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let val = val.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.put(&ns, &key, &val)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.put(&ns, &key, &val)).await
     }
 
     /// Lightweight write with TTL — record expires via deathtime-cohort compaction.
@@ -135,36 +135,14 @@ impl AsyncEngine {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let val = val.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.put_with_ttl(&ns, &key, &val, ttl_secs)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.put_with_ttl(&ns, &key, &val, ttl_secs)).await
     }
 
     /// Lightweight delete.
     pub async fn delete(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.delete(&ns, &key)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.delete(&ns, &key)).await
     }
 
     /// Heavy prefix scan — runs on spawn_blocking.
@@ -175,18 +153,7 @@ impl AsyncEngine {
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
         let ns = ns.to_vec();
         let prefix = prefix.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.prefix(&ns, &prefix)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(move |e| e.prefix(&ns, &prefix)).await
     }
 
     /// Cursor-based forward range page.
@@ -206,13 +173,7 @@ impl AsyncEngine {
         let start = start.to_vec();
         let end = end.to_vec();
         let cursor = cursor.map(|c| c.to_vec());
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.range_page(&ns, &start, &end, cursor.as_deref(), page_size)
-        })
-        .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
+        self.run_read(move |e| e.range_page(&ns, &start, &end, cursor.as_deref(), page_size)).await
     }
 
     /// Cursor-based reverse range page (descending key order).
@@ -232,13 +193,7 @@ impl AsyncEngine {
         let start = start.to_vec();
         let end = end.to_vec();
         let cursor = cursor.map(|c| c.to_vec());
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.range_rev_page(&ns, &start, &end, cursor.as_deref(), page_size)
-        })
-        .await
-        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
+        self.run_read(move |e| e.range_rev_page(&ns, &start, &end, cursor.as_deref(), page_size)).await
     }
 
     /// Vector put — lightweight write.
@@ -253,18 +208,7 @@ impl AsyncEngine {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let data = data.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.vector_put(&ns, &key, dims, dtype, &data)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.vector_put(&ns, &key, dims, dtype, &data)).await
     }
 
     /// Vector get — lightweight read.
@@ -275,36 +219,14 @@ impl AsyncEngine {
     ) -> Result<Option<VectorRecord>, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.vector_get(&ns, &key)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(move |e| e.vector_get(&ns, &key)).await
     }
 
     /// Vector delete — lightweight write.
     pub async fn vector_delete(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.vector_delete(&ns, &key)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.vector_delete(&ns, &key)).await
     }
 
     /// Vector search — HNSW fast path or cooperative chunked flat scan.
@@ -406,83 +328,28 @@ impl AsyncEngine {
     /// Build vector index — heavy operation, runs on spawn_blocking.
     pub async fn build_vector_index(&self, ns: &[u8]) -> Result<(), EdgestoreError> {
         let ns = ns.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.build_vector_index(&ns)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.build_vector_index(&ns)).await
     }
 
     /// Preload vector index — heavy operation, runs on spawn_blocking.
     pub async fn preload_vector_index(&self, ns: &[u8]) -> Result<bool, EdgestoreError> {
         let ns = ns.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.preload_vector_index(&ns)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(move |e| e.preload_vector_index(&ns)).await
     }
 
     /// Flush WAL.
     pub async fn flush(&self) -> Result<(), EdgestoreError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.flush()
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(|e| e.flush()).await
     }
 
     /// Flush the current memtable to a new immutable segment file — heavy I/O, runs on spawn_blocking.
     pub async fn flush_to_segments(&self) -> Result<SegmentMeta, EdgestoreError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.flush_to_segments()
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(|e| e.flush_to_segments()).await
     }
 
     /// Local segment manifest (hash + id per segment) — used by replication/backup callers.
     pub async fn export_manifest(&self) -> Result<Vec<SegmentRef>, EdgestoreError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.export_manifest()
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(|e| e.export_manifest()).await
     }
 
     /// Index a document for BM25 full-text search — lightweight write.
@@ -496,18 +363,7 @@ impl AsyncEngine {
         let ns = ns.to_vec();
         let key = key.to_vec();
         let text = text.to_string();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.index_text(&ns, &key, &text, facets)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.index_text(&ns, &key, &text, facets)).await
     }
 
     /// BM25 search — heavy operation (scoring), runs on spawn_blocking.
@@ -519,18 +375,7 @@ impl AsyncEngine {
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
         let ns = ns.to_vec();
         let query = query.to_string();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.search_text(&ns, &query, k)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(move |e| e.search_text(&ns, &query, k)).await
     }
 
     /// BM25 search with facet filters / typo tolerance — heavy, runs on spawn_blocking.
@@ -542,36 +387,14 @@ impl AsyncEngine {
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
         let ns = ns.to_vec();
         let query = query.to_string();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.search_text_with_options(&ns, &query, &options)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_read(move |e| e.search_text_with_options(&ns, &query, &options)).await
     }
 
     /// Remove a document from the text index — lightweight write.
     pub async fn delete_text(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
         let ns = ns.to_vec();
         let key = key.to_vec();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.delete_text(&ns, &key)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.delete_text(&ns, &key)).await
     }
 
     /// Get metrics snapshot.
@@ -593,18 +416,7 @@ impl AsyncEngine {
     ) -> Result<ImportResult, EdgestoreError> {
         let data = data.to_vec();
         let expected_hash = *expected_hash;
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.import_segment(&data, &expected_hash)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
+        self.run_write(move |e| e.import_segment(&data, &expected_hash)).await
     }
 }
 

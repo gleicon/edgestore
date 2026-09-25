@@ -1,6 +1,6 @@
 //! Range-level Merkle tree over 16 key-range buckets.
 //!
-//! Used as an anti-entropy probe only (D02). Two nodes compare roots; if equal, sync is
+//! Used as an anti-entropy probe: two nodes compare roots; if equal, sync is
 //! skipped. The tree does not route which segments to sync — manifest-diff handles that.
 //!
 //! Bucket assignment: `bucket_idx = segment.min_key[0] >> 4` (leading nibble, 0..16).
@@ -9,8 +9,8 @@ use crate::types::SegmentMeta;
 
 /// A 16-bucket Merkle tree built over segment key ranges.
 ///
-/// Used as an anti-entropy probe only (D02). Two nodes compare roots; if equal, sync is
-/// skipped. The tree does not route which segments to sync — manifest-diff handles that.
+/// Anti-entropy probe: two nodes compare roots; if equal, sync is skipped.
+/// The tree does not route which segments to sync — manifest-diff handles that.
 pub struct RangeMerkleTree {
     /// One 32-byte BLAKE3 hash per bucket (0..16). Empty bucket = all-zeros.
     pub buckets: [[u8; 32]; 16],

@@ -2,9 +2,9 @@
 //!
 //! `AntiEntropyLoop` wakes every N seconds, probes the peer's Merkle root, and if
 //! diverged pulls all missing segments one by one. Progress is tracked in a per-peer
-//! cursor file at `{db_path}/sync/{peer_id}.cursor` (MessagePack format, D08).
+//! cursor file at `{db_path}/sync/{peer_id}.cursor` (MessagePack format).
 //!
-//! Cursor fields (D08):
+//! Cursor fields:
 //!   - `last_known_merkle_root` — peer's Merkle root as of last successful sync
 //!   - `segments_pending`       — hashes not yet applied (resume after crash)
 //!   - `last_attempt_secs`      — unix timestamp of last probe attempt
@@ -18,8 +18,9 @@ use edgestore::replication::ReplicationProtocol;
 use edgestore::{Engine, ImportResult, RemoteStore};
 
 use crate::http_client::HttpReplicationClient;
+use crate::wire::hash_to_hex;
 
-/// Per-peer cursor: durable progress state for the anti-entropy loop (D08).
+/// Per-peer cursor: durable progress state for the anti-entropy loop.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct PeerCursor {
     /// Peer's Merkle root from the last completed sync (32 bytes stored as Vec).
@@ -50,7 +51,7 @@ pub struct AntiEntropyLoop {
     /// Probe interval in seconds. Default: 30.
     pub interval_secs: u64,
     /// Optional durable segment backend. When `Some`, each successfully applied
-    /// segment is uploaded after import (D08). Upload failure is non-fatal — the
+    /// segment is uploaded after import. Upload failure is non-fatal — the
     /// segment is already applied locally.
     remote_store: Option<Arc<dyn RemoteStore>>,
 }
@@ -120,21 +121,18 @@ fn run_once(
     db_path: &Path,
     remote_store: Option<&dyn RemoteStore>,
 ) {
-    // Step 1: Load or create cursor.
     let cursor_path = cursor_file_path(db_path, peer_id);
     let mut cursor = load_cursor(&cursor_path);
 
-    // Step 2: Update attempt timestamp.
     cursor.last_attempt_secs = now_secs();
     if let Err(e) = flush_cursor(&cursor, &cursor_path) {
         eprintln!("[anti_entropy] cursor flush error: {}", e);
     }
 
-    // Step 3: Create client and probe peer Merkle root.
     let client = HttpReplicationClient::new(peer_url);
 
-    // Step 3a: Fetch watermark — detect primary failovers (BtrLog §4.2).
-    // Non-fatal: old primaries that do not yet expose /watermark return InvalidOperation.
+    // Fetch watermark to detect primary failovers (BtrLog §4.2, arXiv:2606.27051).
+    // Non-fatal: peers without /watermark return InvalidOperation.
     if let Ok(wm) = client.watermark() {
         if wm.wtoken > cursor.last_known_wtoken {
             if cursor.last_known_wtoken > 0 {
@@ -158,7 +156,6 @@ fn run_once(
         }
     };
 
-    // Step 4: Compare Merkle roots.
     let in_sync = {
         match engine.lock() {
             Ok(eng) => match eng.compare_merkle(&peer_root) {
@@ -184,7 +181,6 @@ fn run_once(
         return;
     }
 
-    // Step 5: Fetch peer segment manifest.
     let peer_segments = match client.list_segments() {
         Ok(segs) => segs,
         Err(e) => {
@@ -193,7 +189,6 @@ fn run_once(
         }
     };
 
-    // Step 6: Compute missing segments.
     let missing: Vec<[u8; 32]> = {
         match engine.lock() {
             Ok(eng) => eng.missing_segments(&peer_segments),
@@ -204,13 +199,11 @@ fn run_once(
         }
     };
 
-    // Step 7: Update cursor with pending hashes.
     cursor.segments_pending = missing.iter().map(|h| h.to_vec()).collect();
     if let Err(e) = flush_cursor(&cursor, &cursor_path) {
         eprintln!("[anti_entropy] cursor flush (pending) error: {}", e);
     }
 
-    // Step 8: Pull and apply each missing segment.
     let pending_hashes: Vec<Vec<u8>> = cursor.segments_pending.clone();
     for hash_vec in &pending_hashes {
         if hash_vec.len() != 32 {
@@ -257,18 +250,17 @@ fn run_once(
                 }
                 eprintln!(
                     "[anti_entropy] applied segment {}: {} written, {} skipped",
-                    hex_str(&hash),
+                    hash_to_hex(&hash),
                     keys_written,
                     keys_skipped
                 );
 
-                // Upload to remote store if configured (D08). Non-fatal on error.
                 // Uses upload_if_absent so re-archiving on retry never double-writes.
                 if let Some(rs) = remote_store {
                     if let Err(e) = rs.upload_if_absent(&hash, &data) {
                         eprintln!(
                             "[anti_entropy] remote_store upload warning for {}: {}",
-                            hex_str(&hash),
+                            hash_to_hex(&hash),
                             e
                         );
                     }
@@ -286,7 +278,7 @@ fn run_once(
                 // Do NOT remove from pending — will retry next cycle.
                 eprintln!(
                     "[anti_entropy] BLAKE3 mismatch for segment {} — will retry",
-                    hex_str(&hash)
+                    hash_to_hex(&hash)
                 );
             }
             Err(e) => {
@@ -296,7 +288,6 @@ fn run_once(
         }
     }
 
-    // Step 9: Update cursor with the peer root we just synced to.
     cursor.last_known_merkle_root = peer_root.to_vec();
     if let Err(e) = flush_cursor(&cursor, &cursor_path) {
         eprintln!("[anti_entropy] cursor flush (final) error: {}", e);
@@ -308,7 +299,7 @@ fn cursor_file_path(db_path: &Path, peer_id: &str) -> PathBuf {
     db_path.join("sync").join(format!("{}.cursor", peer_id))
 }
 
-/// Load cursor from disk. Returns a default cursor on parse failure or missing file (D08).
+/// Load cursor from disk, returning a default on parse failure or missing file.
 ///
 /// Corrupt cursor is treated as empty to avoid blocking sync on bad state.
 fn load_cursor(cursor_path: &Path) -> PeerCursor {
@@ -318,7 +309,7 @@ fn load_cursor(cursor_path: &Path) -> PeerCursor {
     }
 }
 
-/// Flush cursor atomically: write to `.tmp`, then rename to final path (D08, T-04-09).
+/// Flush cursor atomically: write to `.tmp`, then rename to final path.
 ///
 /// Atomic write prevents corrupt cursor state on crash mid-write.
 fn flush_cursor(cursor: &PeerCursor, cursor_path: &Path) -> Result<(), std::io::Error> {
@@ -345,7 +336,3 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// Format a 32-byte hash as a hex string.
-fn hex_str(hash: &[u8; 32]) -> String {
-    hash.iter().map(|b| format!("{:02x}", b)).collect()
-}

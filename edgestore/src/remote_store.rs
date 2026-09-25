@@ -1,16 +1,14 @@
 //! Trait for durable segment backends.
 //!
-//! `FilesystemRemoteStore` is the Phase 4 impl (Plan 04-04). S3 is a future phase (D04).
-//!
 //! All operations are content-addressed by BLAKE3 hash. `upload` is idempotent.
 
 use crate::error::EdgestoreError;
 
 /// Abstraction over a durable, content-addressed segment store.
 ///
-/// Phase 4 provides `FilesystemRemoteStore` (Plan 04-04). S3 (`S3RemoteStore`) is a
-/// future-phase deliverable (D04, D05). Implementations must be `Send + Sync` so they
-/// can be shared across threads.
+/// Two built-in implementations are provided in `edgestore-repl`:
+/// `FilesystemRemoteStore` for local-filesystem use and `S3RemoteStore` for AWS S3
+/// (enable the `s3` cargo feature). Implementations must be `Send + Sync`.
 ///
 /// ## Sidecar methods
 ///

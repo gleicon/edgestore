@@ -360,19 +360,19 @@ impl Engine {
 
     /// Persist all in-memory text indices to disk.
     fn persist_text_indices(&mut self) -> Result<(), EdgestoreError> {
-        // Step 1: serialize all indices (immutable borrow)
+        // Serialise first (immutable borrow of text_indices), then write
+        // (which borrows self mutably via put), then update sidecar_lsn —
+        // three phases to satisfy the borrow checker.
         let to_persist: Vec<(Vec<u8>, Vec<u8>)> = self
             .text_indices
             .iter()
             .map(|(ns, index)| (ns.clone(), index.serialize()))
             .collect();
-        // Step 2: write to disk and capture LSNS (no text_indices borrow)
         let mut lsns: Vec<(Vec<u8>, u64)> = Vec::with_capacity(to_persist.len());
         for (ns, bytes) in to_persist {
             let lsn = self.put(&ns, TEXT_INDEX_KEY, &bytes)?;
             lsns.push((ns, lsn));
         }
-        // Step 3: update sidecar_lsn on each index (mutable borrow)
         for (ns, lsn) in lsns {
             if let Some(index) = self.text_indices.get_mut(&ns) {
                 index.sidecar_lsn = lsn;
@@ -720,7 +720,18 @@ impl Engine {
         Ok(RangePage { items: out, next_key })
     }
 
-    /// Flush the current memtable to a new segment file.
+    /// Flush the current memtable to a new on-disk segment.
+    ///
+    /// After a successful flush:
+    /// - The memtable is cleared.
+    /// - WAL files older than the current one are deleted (they are now redundant
+    ///   for crash recovery — the segment is the durable record).
+    /// - The `on_segment_flushed` callback fires if configured.
+    ///
+    /// Returns `Err` if the memtable is empty (nothing to flush).
+    ///
+    /// This is also called automatically when the memtable exceeds
+    /// `EdgestoreConfig::memtable_max_bytes`.
     pub fn flush_to_segments(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
         let t0 = Instant::now();
         let r = self.flush_to_segments_inner();
@@ -1374,6 +1385,16 @@ impl Engine {
         if let Some(cb) = &self.on_segment_flushed {
             cb(&meta);
         }
+        // Retire WAL files whose data is now durably stored in the segment.
+        // Keep only the current WAL file — it may hold entries written after this flush.
+        let current_wal = self.wal.path().to_path_buf();
+        if let Ok(wal_files) = crate::recovery::list_wal_files(&self.config.path) {
+            for path in &wal_files {
+                if path != &current_wal {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
         Ok(meta)
     }
 
@@ -1480,14 +1501,13 @@ impl Engine {
     /// - `Ok(ImportResult::HashMismatch)` if BLAKE3(data) != claimed hash — segment rejected.
     /// - `Ok(ImportResult::Applied { keys_written, keys_skipped })` on success.
     ///
-    /// // LWW correctness requires NTP synchronization (D06). Clock skew > segment flush interval
+    /// // LWW correctness requires NTP synchronization. Clock skew > segment flush interval
     /// // can cause incorrect merge outcomes.
     pub fn import_segment(
         &mut self,
         data: &[u8],
         hash: &[u8; 32],
     ) -> Result<ImportResult, EdgestoreError> {
-        // Step 1: Check if already present.
         let hash_vec: Vec<u8> = hash.to_vec();
         let already_present = self
             .segment_store
@@ -1498,24 +1518,25 @@ impl Engine {
             return Ok(ImportResult::Skipped);
         }
 
-        // Step 2: Verify BLAKE3.
         let computed: [u8; 32] = *blake3::hash(data).as_bytes();
         if computed != *hash {
             return Ok(ImportResult::HashMismatch);
         }
 
-        // Step 3: Write to .tmp file.
-        let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let hash_hex: String = {
+            let mut s = String::with_capacity(64);
+            for b in hash { s.push_str(&format!("{b:02x}")); }
+            s
+        };
         let base = self.segment_store.base_path().to_path_buf();
         let tmp_path = base.join(format!("{}.tmp", hash_hex));
         let dat_path = base.join(format!("{}.dat", hash_hex));
 
         std::fs::write(&tmp_path, data)?;
 
-        // Step 4: Rename to final path atomically.
         std::fs::rename(&tmp_path, &dat_path)?;
 
-        // Step 5: Parse segment records from raw bytes using segment::deserialize_entry.
+
         let mut keys_written: u64 = 0;
         let mut keys_skipped: u64 = 0;
         let mut segment_keys: Vec<Vec<u8>> = Vec::new();
@@ -1524,123 +1545,57 @@ impl Engine {
         let mut min_lsn: Lsn = u64::MAX;
         let mut max_lsn: Lsn = 0;
 
-        // The raw bytes are a full .dat file with file header + blocks.
-        // Skip the 8-byte file header (magic 4 bytes + version 1 byte + padding 3 bytes).
-        let mut offset = 8usize;
-        while offset < data.len() {
-            // Read block header: magic (4) + compressed_len (4).
-            if offset + 8 > data.len() {
-                break;
+        for (encoded_key, incoming) in crate::segment::parse_dat_entries(data)? {
+            segment_keys.push(encoded_key.clone());
+            min_key = Some(match min_key {
+                None => encoded_key.clone(),
+                Some(ref mk) if encoded_key < *mk => encoded_key.clone(),
+                Some(mk) => mk,
+            });
+            max_key = Some(match max_key {
+                None => encoded_key.clone(),
+                Some(ref mk) if encoded_key > *mk => encoded_key.clone(),
+                Some(mk) => mk,
+            });
+            if incoming.lsn < min_lsn {
+                min_lsn = incoming.lsn;
             }
-            let magic = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-            if magic != crate::segment::SEGMENT_BLOCK_MAGIC {
-                break; // hit padding or end
+            if incoming.lsn > max_lsn {
+                max_lsn = incoming.lsn;
             }
-            let compressed_len =
-                u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
 
-            let payload_size = 8 + compressed_len;
-            let aligned_size = if payload_size.is_multiple_of(crate::segment::SEGMENT_BLOCK_SIZE) {
-                payload_size
-            } else {
-                (payload_size / crate::segment::SEGMENT_BLOCK_SIZE + 1)
-                    * crate::segment::SEGMENT_BLOCK_SIZE
+            // LWW: newer wall-clock timestamp wins; favor local on tie.
+            let local_entry = self
+                .memtable
+                .get(&encoded_key)
+                .cloned()
+                .or_else(|| self.segment_store.get(&encoded_key).ok().flatten());
+
+            let apply = match local_entry {
+                None => true,
+                Some(ref local) => incoming.timestamp > local.timestamp,
             };
 
-            if offset + 8 + compressed_len > data.len() {
-                break;
-            }
-            let compressed = &data[offset + 8..offset + 8 + compressed_len];
-            let decompressed = zstd::decode_all(compressed).map_err(|e| {
-                EdgestoreError::SegmentCorrupt(format!("import_segment zstd decode: {}", e))
-            })?;
-
-            // Step 6: Apply LWW per record.
-            let mut pos = 0;
-            while pos < decompressed.len() {
-                match crate::segment::deserialize_entry(&decompressed, &mut pos) {
-                    Ok((encoded_key, incoming)) => {
-                        // Track segment bounds and keys for sidecar files (C-02, C-03).
-                        segment_keys.push(encoded_key.clone());
-                        min_key = Some(match min_key {
-                            None => encoded_key.clone(),
-                            Some(ref mk) if encoded_key < *mk => encoded_key.clone(),
-                            Some(mk) => mk,
-                        });
-                        max_key = Some(match max_key {
-                            None => encoded_key.clone(),
-                            Some(ref mk) if encoded_key > *mk => encoded_key.clone(),
-                            Some(mk) => mk,
-                        });
-                        if incoming.lsn < min_lsn {
-                            min_lsn = incoming.lsn;
-                        }
-                        if incoming.lsn > max_lsn {
-                            max_lsn = incoming.lsn;
-                        }
-
-                        // Look up local entry by encoded key.
-                        let local_entry = self
-                            .memtable
-                            .get(&encoded_key)
-                            .cloned()
-                            .or_else(|| self.segment_store.get(&encoded_key).ok().flatten());
-
-                        let apply = match local_entry {
-                            None => true,
-                            Some(ref local) => {
-                                if local.timestamp > incoming.timestamp {
-                                    // Local wins — skip.
-                                    false
-                                } else if local.timestamp == incoming.timestamp {
-                                    // Timestamp tie: lower host_id wins.
-                                    // host_id is not stored in MemEntry in v1; favor local on tie.
-                                    false
-                                } else {
-                                    // incoming.timestamp > local.timestamp — incoming wins.
-                                    true
-                                }
-                            }
-                        };
-
-                        if apply {
-                            // Decode ns and key from encoded_key for put_with_timestamp.
-                            if let Ok((ns, key)) = crate::types::decode_key(&encoded_key) {
-                                if incoming.op == crate::types::Operation::Put {
-                                    if let Some(ref val) = incoming.value {
-                                        self.put_with_timestamp(
-                                            &ns,
-                                            &key,
-                                            val,
-                                            incoming.timestamp,
-                                        )?;
-                                        keys_written += 1;
-                                    } else {
-                                        // Malformed Put with no value — count as skipped.
-                                        keys_skipped += 1;
-                                    }
-                                } else if incoming.op == crate::types::Operation::Delete {
-                                    self.delete_with_timestamp(&ns, &key, incoming.timestamp)?;
-                                    keys_written += 1;
-                                }
-                            }
+            if apply {
+                if let Ok((ns, key)) = crate::types::decode_key(&encoded_key) {
+                    if incoming.op == crate::types::Operation::Put {
+                        if let Some(ref val) = incoming.value {
+                            self.put_with_timestamp(&ns, &key, val, incoming.timestamp)?;
+                            keys_written += 1;
                         } else {
                             keys_skipped += 1;
                         }
+                    } else if incoming.op == crate::types::Operation::Delete {
+                        self.delete_with_timestamp(&ns, &key, incoming.timestamp)?;
+                        keys_written += 1;
                     }
-                    Err(_) => break,
                 }
+            } else {
+                keys_skipped += 1;
             }
-
-            offset += aligned_size;
         }
 
-        // Step 7: Build SegmentMeta for the imported segment and add to manifest.
-        // We need a new segment_id allocated from the store.
         let new_segment_id = self.segment_store.alloc_segment_id();
-
-        // Read the hash_metas from the existing dat file to reconstruct SegmentMeta.
-        // Build a minimal meta from what we know (the data was already imported and LWW applied).
         // Re-read the segment using SegmentReader::open after we register the dat file properly.
         // The imported segment .dat is stored under hash_hex.dat, but SegmentReader expects
         // segment-{id:08}.dat format. Rename to the canonical segment file path.
@@ -1650,7 +1605,6 @@ impl Engine {
         // Flush WAL to ensure LWW-applied records are durable.
         self.wal.fsync()?;
 
-        // Build SegmentMeta from the decoded data (C-02, C-03).
         let now_nanos = crate::engine::Engine::now_nanos();
         let segment_hash_vec: Vec<u8> = hash.to_vec();
         let meta = crate::types::SegmentMeta {
@@ -1679,7 +1633,7 @@ impl Engine {
         let idx_path = base.join(format!("segment-{:08}.idx", new_segment_id));
         crate::segment::write_idx_file(&[(vec![], 8u64)], &idx_path)?;
 
-        // Build xor filter from decoded keys (C-02: was empty, breaking post-restart reads).
+        // Build xor filter from decoded keys (empty filter broke post-restart reads).
         let xf_path = base.join(format!("segment-{:08}.xf", new_segment_id));
         let filter = crate::segment::build_xor_filter(&segment_keys)?;
         crate::segment::write_xf_file(&filter, &xf_path)?;
@@ -1793,7 +1747,7 @@ impl Engine {
         Ok(lsn)
     }
 
-    /// Returns the local RangeMerkleTree root for anti-entropy probing (D02).
+    /// Returns the local RangeMerkleTree root for anti-entropy probing.
     ///
     /// The root is computed from each segment's content hash (`segment_hash`, the BLAKE3
     /// of raw segment bytes). Using `segment_hash` — rather than the per-segment
@@ -1827,7 +1781,7 @@ impl Engine {
     /// Returns true if local Merkle root matches other_root (nodes are in sync).
     ///
     /// Returns false if diverged — caller should call export_manifest + missing_segments to
-    /// determine what to pull (D02).
+    /// determine what to pull.
     pub fn compare_merkle(&self, other_root: &[u8; 32]) -> Result<bool, EdgestoreError> {
         let local_root = self.range_merkle_root()?;
         Ok(local_root == *other_root)

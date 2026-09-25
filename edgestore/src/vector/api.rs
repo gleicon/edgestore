@@ -4,7 +4,7 @@ use crate::vector::types::{Dtype, VectorRecord};
 
 /// Trait for vector operations on top of a KV engine.
 ///
-/// Vector records are stored under synthetic namespaces (`__vec__{ns}` per D09)
+/// Vector records are stored under synthetic namespaces (`__vec__{ns}`)
 /// so they are isolated from plain KV data.
 pub trait VectorEngine {
     /// Store a vector record under the given namespace and key.
@@ -26,8 +26,8 @@ pub trait VectorEngine {
 
 /// Generate the synthetic namespace for vector storage.
 ///
-/// Prepends `__vec__` to the user-supplied namespace bytes.
-/// Per D09: this isolates vector records from plain KV data.
+/// Prepends `__vec__` to the user-supplied namespace bytes,
+/// isolating vector records from plain KV data.
 pub fn vector_namespace(ns: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + ns.len());
     out.extend_from_slice(b"__vec__");

@@ -3,7 +3,7 @@
 //! Holds segments entirely in memory. No WAL, no memtable, no local filesystem.
 //! Initialized from a manifest + downloaded segment bytes.
 //!
-//! Phase 9 deliverable. See `.planning/phases/09-readonly-edge/09-00-PLAN.md`.
+//! No WAL, no memtable, no local filesystem writes.
 
 use std::collections::BinaryHeap;
 

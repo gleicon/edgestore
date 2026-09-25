@@ -108,7 +108,7 @@ impl Compactor {
 
     /// Remove all segment files and manifest entries for a fully-expired cohort.
     ///
-    /// Zero live records are relocated (COMPACT-04 invariant).
+    /// Zero live records are relocated (all were expired).
     /// Missing files are logged and skipped — not treated as errors.
     /// Caller is responsible for ensuring no pinned segments are in the cohort.
     /// Delete all files belonging to an expired cohort.

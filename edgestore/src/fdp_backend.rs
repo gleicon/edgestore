@@ -44,8 +44,7 @@ impl StorageBackend for FdpStorageBackend {
             // skip the hint silently.
             if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
                 let _fd = std::os::fd::AsRawFd::as_raw_fd(&file);
-                // FDP hint would be emitted here via fcntl(fd, F_SET_FILE_DATA_PLACEMENT_HINT, ...)
-                // For now, just log the hint.
+                // FDP ioctl would go here; log the hint until kernel support is wired.
                 log::info!(
                     "FDP hint: cohort_bucket={} for {:?}",
                     hint.cohort_bucket,

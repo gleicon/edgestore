@@ -566,6 +566,59 @@ pub(crate) fn read_block_at_offset(
     Ok((entries, aligned_size))
 }
 
+/// Parse all entries from a raw .dat segment byte slice.
+///
+/// Called by `Engine::import_segment` to iterate incoming segment bytes before
+/// the sidecar files (`.idx`, `.xf`, `.meta`) that `SegmentReader::open` requires
+/// have been written.  Uses the same block-parsing logic as `read_block_at_offset`,
+/// including the decompressed-size cap.
+pub(crate) fn parse_dat_entries(
+    data: &[u8],
+) -> Result<Vec<(Vec<u8>, MemEntry)>, EdgestoreError> {
+    const MAX_DECOMPRESSED: usize = SEGMENT_BLOCK_SIZE * 512;
+    let mut entries = Vec::new();
+    // Skip 8-byte file header (magic 4 bytes + version 1 byte + padding 3 bytes).
+    let mut offset = 8usize;
+    while offset < data.len() {
+        if offset + 8 > data.len() {
+            break;
+        }
+        let magic = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        if magic != SEGMENT_BLOCK_MAGIC {
+            break;
+        }
+        let compressed_len =
+            u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let payload_size = 8 + compressed_len;
+        let aligned_size = if payload_size.is_multiple_of(SEGMENT_BLOCK_SIZE) {
+            payload_size
+        } else {
+            (payload_size / SEGMENT_BLOCK_SIZE + 1) * SEGMENT_BLOCK_SIZE
+        };
+        if offset + 8 + compressed_len > data.len() {
+            break;
+        }
+        let compressed = &data[offset + 8..offset + 8 + compressed_len];
+        let decompressed = zstd::decode_all(compressed).map_err(|e| {
+            EdgestoreError::SegmentCorrupt(format!("parse_dat_entries zstd decode: {e}"))
+        })?;
+        if decompressed.len() > MAX_DECOMPRESSED {
+            return Err(EdgestoreError::SegmentCorrupt(
+                "decompressed block too large".to_string(),
+            ));
+        }
+        let mut pos = 0;
+        while pos < decompressed.len() {
+            match deserialize_entry(&decompressed, &mut pos) {
+                Ok(entry) => entries.push(entry),
+                Err(_) => break,
+            }
+        }
+        offset += aligned_size;
+    }
+    Ok(entries)
+}
+
 /// Streaming forward cursor over `[start, end)` within one segment file.
 ///
 /// Reads one 4 KiB block at a time on demand. Used by `SegmentStore::range_scan_budgeted`
@@ -1383,5 +1436,55 @@ mod tests {
         );
         assert!(!dir.path().join(format!("segment-{:08}.dat", id)).exists());
         assert_eq!(store.readers.len(), 0);
+    }
+
+    // ─ parse_dat_entries ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_dat_entries_empty_slice_returns_empty() {
+        // Slice shorter than the 8-byte file header — must not panic.
+        let result = parse_dat_entries(&[]).unwrap();
+        assert!(result.is_empty());
+        let result = parse_dat_entries(&[0u8; 7]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dat_entries_truncated_block_returns_empty() {
+        // 8-byte header + valid magic + compressed_len that overflows the slice.
+        let mut data = vec![0u8; 8]; // file header
+        data.extend_from_slice(&SEGMENT_BLOCK_MAGIC.to_le_bytes()); // block magic
+        data.extend_from_slice(&1000u32.to_le_bytes()); // compressed_len = 1000, but no payload follows
+        let result = parse_dat_entries(&data).unwrap();
+        assert!(result.is_empty(), "truncated block must be skipped, not error");
+    }
+
+    #[test]
+    fn test_parse_dat_entries_unknown_magic_returns_empty() {
+        // 8-byte header + wrong magic — parser must stop without error.
+        let mut data = vec![0u8; 8];
+        data.extend_from_slice(&0xDEADBEEFu32.to_le_bytes()); // bad magic
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let result = parse_dat_entries(&data).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dat_entries_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let entries = sorted_entries(50);
+        let mut writer = SegmentWriter::new(dir.path().to_path_buf(), 0, 3600);
+        writer.flush(&entries).unwrap();
+
+        let dat_bytes = std::fs::read(dir.path().join("segment-00000000.dat")).unwrap();
+        let parsed = parse_dat_entries(&dat_bytes).unwrap();
+
+        assert_eq!(parsed.len(), entries.len(), "parsed count must match written count");
+        for ((exp_key, exp_entry), (got_key, got_entry)) in entries.iter().zip(parsed.iter()) {
+            assert_eq!(got_key, exp_key, "key mismatch");
+            assert_eq!(got_entry.value, exp_entry.value, "value mismatch for key {:?}", exp_key);
+            assert_eq!(got_entry.op, exp_entry.op, "op mismatch");
+            assert_eq!(got_entry.lsn, exp_entry.lsn, "lsn mismatch");
+        }
     }
 }

@@ -820,11 +820,12 @@ impl TieredEngine {
     }
 }
 
-/// Encode a 32-byte hash as a 64-character lowercase hex string.
 fn hex_hash(hash: &[u8; 32]) -> String {
-    hash.iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>()
+    let mut s = String::with_capacity(64);
+    for b in hash {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Build a minimal `SegmentMeta` from an archived segment hash for use with

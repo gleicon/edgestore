@@ -3,19 +3,18 @@
 //! Files are content-addressed: named `{hash_hex}.seg` where `hash_hex` is the
 //! 64-character lowercase hex encoding of the 32-byte BLAKE3 hash. Listing the
 //! directory is equivalent to listing stored segments.
-//!
-//! This is the Phase 4 implementation (Plan 04-04, D04). Real S3 (`S3RemoteStore`)
-//! is a future phase deliverable.
 
 use std::path::PathBuf;
 
 use edgestore::error::EdgestoreError;
 use edgestore::RemoteStore;
 
+use crate::wire::hash_to_hex;
+
 /// Local-filesystem implementation of `RemoteStore`.
 ///
 /// All operations are idempotent and atomic where applicable.
-/// `upload` uses a `.tmp` write + rename to prevent torn writes (T-04-10).
+/// `upload` uses a `.tmp` write + rename to prevent torn writes.
 pub struct FilesystemRemoteStore {
     base_dir: PathBuf,
 }
@@ -30,16 +29,8 @@ impl FilesystemRemoteStore {
         Ok(Self { base_dir })
     }
 
-    /// Encode a 32-byte hash as a 64-character lowercase hex string.
-    fn hash_hex(hash: &[u8; 32]) -> String {
-        hash.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()
-    }
-
-    /// Return the path `{base_dir}/{hash_hex}.seg` for the given hash.
     fn seg_path(&self, hash: &[u8; 32]) -> PathBuf {
-        self.base_dir.join(format!("{}.seg", Self::hash_hex(hash)))
+        self.base_dir.join(format!("{}.seg", hash_to_hex(hash)))
     }
 
     fn aux_path(&self, hash: &[u8; 32], ext: &str) -> Result<PathBuf, EdgestoreError> {
@@ -51,7 +42,7 @@ impl FilesystemRemoteStore {
         }
         Ok(self
             .base_dir
-            .join(format!("{}.{}", Self::hash_hex(hash), ext)))
+            .join(format!("{}.{}", hash_to_hex(hash), ext)))
     }
 }
 
@@ -67,7 +58,7 @@ impl RemoteStore for FilesystemRemoteStore {
             return Ok(());
         }
 
-        let tmp = self.base_dir.join(format!("{}.tmp", Self::hash_hex(hash)));
+        let tmp = self.base_dir.join(format!("{}.tmp", hash_to_hex(hash)));
 
         std::fs::write(&tmp, data).map_err(|e| EdgestoreError::ReplicationError(e.to_string()))?;
 
@@ -109,7 +100,7 @@ impl RemoteStore for FilesystemRemoteStore {
             if e.kind() == std::io::ErrorKind::NotFound {
                 EdgestoreError::ReplicationError(format!(
                     "segment not found: {}",
-                    Self::hash_hex(hash)
+                    hash_to_hex(hash)
                 ))
             } else {
                 EdgestoreError::ReplicationError(e.to_string())
@@ -120,7 +111,7 @@ impl RemoteStore for FilesystemRemoteStore {
     /// List all stored segment hashes by scanning `{base_dir}/*.seg`.
     ///
     /// Filenames that are not exactly 64 lowercase hex characters followed by `.seg`
-    /// are silently skipped (T-04-12).
+    /// are silently skipped.
     fn list(&self) -> Result<Vec<[u8; 32]>, EdgestoreError> {
         let entries = std::fs::read_dir(&self.base_dir)
             .map_err(|e| EdgestoreError::ReplicationError(e.to_string()))?;
@@ -176,7 +167,7 @@ impl RemoteStore for FilesystemRemoteStore {
         }
         let tmp = self
             .base_dir
-            .join(format!("{}.{}.tmp", Self::hash_hex(hash), ext));
+            .join(format!("{}.{}.tmp", hash_to_hex(hash), ext));
         std::fs::write(&tmp, data).map_err(|e| EdgestoreError::ReplicationError(e.to_string()))?;
         std::fs::rename(&tmp, &dest).map_err(|e| EdgestoreError::ReplicationError(e.to_string()))
     }
@@ -187,7 +178,7 @@ impl RemoteStore for FilesystemRemoteStore {
             if e.kind() == std::io::ErrorKind::NotFound {
                 EdgestoreError::ReplicationError(format!(
                     "sidecar not found: {}.{}",
-                    Self::hash_hex(hash),
+                    hash_to_hex(hash),
                     ext
                 ))
             } else {

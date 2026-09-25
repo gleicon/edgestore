@@ -479,3 +479,21 @@ fn test_import_post_restart_range() {
     );
     assert_eq!(prefix_results[0].0, b"beta");
 }
+
+/// BLAKE3 integrity guard: data whose hash does not match the claimed hash must be rejected
+/// without being applied or written to disk.
+#[test]
+fn test_import_segment_hash_mismatch_rejected() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+    // Any data with a deliberately wrong hash — the guard must catch it.
+    let data = vec![0u8; 128];
+    let wrong_hash = [0xFFu8; 32]; // BLAKE3([0;128]) ≠ [0xFF;32]
+    let result = engine.import_segment(&data, &wrong_hash).unwrap();
+    assert!(
+        matches!(result, ImportResult::HashMismatch),
+        "expected HashMismatch, got something else"
+    );
+    // Engine must remain consistent: no keys written.
+    assert!(engine.prefix(b"ns", b"").unwrap().is_empty());
+}

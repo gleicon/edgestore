@@ -457,6 +457,89 @@ fn test_wal_rotates_inline_without_reopen() {
     }
 }
 
+// ── WAL retirement ───────────────────────────────────────────────────────────
+
+/// After flush_to_segments, old WAL files must be removed to prevent unbounded
+/// accumulation. Regression for the issue where 22,999 WAL files accumulated
+/// because nothing deleted them after data was durably flushed to segments.
+#[test]
+fn test_flush_to_segments_retires_old_wal_files() {
+    let dir = TempDir::new().unwrap();
+
+    // Tiny WAL so every few writes forces a new file on the next open.
+    let mut cfg = EdgestoreConfig::new(dir.path());
+    cfg.wal_max_bytes = 300;
+    cfg.segment_size_bytes = 512; // small enough that 10 entries triggers auto-flush
+
+    // Write and close 5 times to accumulate multiple WAL files.
+    for batch in 0u32..5 {
+        let cfg2 = EdgestoreConfig::new(dir.path());
+        let mut e = Engine::open({
+            let mut c = cfg2;
+            c.wal_max_bytes = 300;
+            c.segment_size_bytes = u64::MAX; // disable auto-flush for accumulation phase
+            c
+        })
+        .unwrap();
+        for i in 0u32..4 {
+            e.put(
+                b"ns",
+                format!("k{:03}", batch * 4 + i).as_bytes(),
+                b"value-data-padding",
+            )
+            .unwrap();
+        }
+        // Drop without flush — WAL files accumulate across reopens.
+    }
+
+    let wal_count_before = count_wal_files(dir.path());
+    assert!(
+        wal_count_before >= 2,
+        "expected at least 2 WAL files before flush, got {}",
+        wal_count_before
+    );
+
+    // Now open and flush to segments.
+    let mut engine = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+    engine.flush_to_segments().unwrap();
+
+    let wal_count_after = count_wal_files(dir.path());
+    assert_eq!(
+        wal_count_after, 1,
+        "exactly 1 WAL file (the current one) must remain after flush_to_segments; got {}",
+        wal_count_after
+    );
+
+    // All data must survive the cleanup.
+    for batch in 0u32..5 {
+        for i in 0u32..4 {
+            let key = format!("k{:03}", batch * 4 + i);
+            let got = engine.get(b"ns", key.as_bytes()).unwrap();
+            assert_eq!(
+                got,
+                Some(b"value-data-padding".to_vec()),
+                "key {} must be readable after WAL retirement",
+                key
+            );
+        }
+    }
+
+    drop(engine);
+
+    // Reopen must also recover all data (segments cover it, no WAL replay needed).
+    let engine2 = Engine::open(EdgestoreConfig::new(dir.path())).unwrap();
+    for batch in 0u32..5 {
+        for i in 0u32..4 {
+            let key = format!("k{:03}", batch * 4 + i);
+            assert!(
+                engine2.get(b"ns", key.as_bytes()).unwrap().is_some(),
+                "key {} must survive reopen after WAL retirement",
+                key
+            );
+        }
+    }
+}
+
 // ── Timing ───────────────────────────────────────────────────────────────────
 
 #[test]

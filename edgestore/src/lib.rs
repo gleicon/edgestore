@@ -31,7 +31,7 @@ pub mod config;
 pub mod error;
 /// FDP (Flexible Data Placement) storage backends.
 pub mod fdp_backend;
-/// Read-only in-memory engine for serverless / WASM environments (Phase 9).
+/// Read-only in-memory engine for serverless / WASM environments.
 pub mod immutable;
 /// Range-level Merkle tree for anti-entropy probes.
 pub mod merkle;

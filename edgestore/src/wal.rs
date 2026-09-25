@@ -127,6 +127,7 @@ pub(crate) fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError
 
 pub(crate) struct WalWriter {
     file: File,
+    path: std::path::PathBuf,
     bytes_written: u64,
     created_at_secs: u64,
     wal_max_bytes: u64,
@@ -136,6 +137,7 @@ pub(crate) struct WalWriter {
 impl std::fmt::Debug for WalWriter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WalWriter")
+            .field("path", &self.path)
             .field("bytes_written", &self.bytes_written)
             .field("created_at_secs", &self.created_at_secs)
             .field("wal_max_bytes", &self.wal_max_bytes)
@@ -197,6 +199,7 @@ impl WalWriter {
 
         Ok(WalWriter {
             file,
+            path: path.to_path_buf(),
             bytes_written: WAL_HEADER_LEN as u64,
             created_at_secs: now_unix_secs(),
             wal_max_bytes: config.wal_max_bytes,
@@ -215,11 +218,17 @@ impl WalWriter {
 
         Ok(WalWriter {
             file,
+            path: path.to_path_buf(),
             bytes_written: end,
             created_at_secs: now_unix_secs(),
             wal_max_bytes: config.wal_max_bytes,
             wal_max_age_secs: config.wal_max_age_secs,
         })
+    }
+
+    /// Path of the file this writer is appending to.
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
     }
 
     /// Append one record.  Format:  {crc32c:u32-LE}{compressed_len:u32-LE}{lz4_payload}

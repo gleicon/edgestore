@@ -1,29 +1,14 @@
-//! HTTP replication client implementing the `ReplicationProtocol` trait.
+//! HTTP replication client implementing `ReplicationProtocol`.
 //!
-//! Uses MessagePack (rmp-serde) for control messages (D07).
-//! Raw bytes for segment data transfer.
-//!
+//! Uses MessagePack (rmp-serde) for control messages and raw bytes for segment transfer.
 //! All network errors are mapped to `EdgestoreError::ReplicationError`.
 
 use std::io::Read;
 
-use serde::{Deserialize, Serialize};
-
 use edgestore::replication::{ReplicationProtocol, SegmentRef};
 use edgestore::{EdgestoreError, WatermarkResponse};
 
-/// MessagePack wire struct for GET /merkle response.
-#[derive(Serialize, Deserialize)]
-struct MerkleResponse {
-    root: Vec<u8>,
-}
-
-/// MessagePack wire struct for one item in GET /segments response.
-#[derive(Serialize, Deserialize)]
-struct SegmentEntry {
-    segment_id: u64,
-    segment_hash: Vec<u8>,
-}
+use crate::wire::{hash_to_hex, MerkleResponse, SegmentEntry};
 
 /// HTTP replication client that implements `ReplicationProtocol` against an `HttpReplicationServer`.
 ///
@@ -115,9 +100,9 @@ impl ReplicationProtocol for HttpReplicationClient {
     /// Fetch one segment's raw bytes by content hash.
     ///
     /// Calls `GET {base_url}/segments/{hash_hex}`, reads raw bytes from body.
-    /// Caller MUST verify BLAKE3 before applying (T-04-01).
+    /// Caller MUST verify BLAKE3 before applying.
     fn fetch_segment(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
-        let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let hash_hex = hash_to_hex(hash);
         let url = format!("{}/segments/{}", self.base_url, hash_hex);
 
         let response = ureq::get(&url).call().map_err(|e| {

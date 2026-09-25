@@ -36,6 +36,8 @@ use aws_sdk_s3::primitives::ByteStream;
 use edgestore::error::EdgestoreError;
 use edgestore::RemoteStore;
 
+use crate::wire::hash_to_hex;
+
 /// S3-backed implementation of `RemoteStore`.
 ///
 /// # Example
@@ -137,22 +139,12 @@ impl S3RemoteStore {
         aws_sdk_s3::Client::from_conf(s3_builder.build())
     }
 
-    /// Encode a 32-byte hash as a 64-character lowercase hex string.
-    fn hash_hex(hash: &[u8; 32]) -> String {
-        let mut s = String::with_capacity(64);
-        for b in hash {
-            s.push_str(&format!("{:02x}", b));
-        }
-        s
-    }
-
-    /// Build the S3 object key for a segment hash.
     fn seg_key(&self, hash: &[u8; 32]) -> String {
-        format!("{}segments/{}.dat", self.prefix, Self::hash_hex(hash))
+        format!("{}segments/{}.dat", self.prefix, hash_to_hex(hash))
     }
 
     fn aux_key(&self, hash: &[u8; 32], ext: &str) -> String {
-        format!("{}segments/{}.{}", self.prefix, Self::hash_hex(hash), ext)
+        format!("{}segments/{}.{}", self.prefix, hash_to_hex(hash), ext)
     }
 
     fn validate_ext(ext: &str) -> Result<(), EdgestoreError> {
@@ -446,7 +438,7 @@ mod tests {
             assert!(
                 listed.contains(h),
                 "listed should contain {}",
-                S3RemoteStore::hash_hex(h)
+                hash_to_hex(h)
             );
         }
     }

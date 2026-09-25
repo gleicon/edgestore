@@ -1,36 +1,32 @@
-//! HTTP replication server exposing 3 pull-only endpoints.
+//! HTTP replication server.
 //!
 //! Endpoints:
 //!   GET /merkle              → MessagePack `{root: Vec<u8>}`
 //!   GET /segments            → MessagePack `[{segment_id, segment_hash}]`
 //!   GET /segments/{hash_hex} → raw segment bytes (application/octet-stream)
+//!   GET /watermark           → MessagePack `{confirmed_lsn, wtoken}`
 //!
-//! All endpoints support `?debug=json` to re-serialize as JSON for human inspection (D07).
-//!
-//! Engine access is serialized via `Arc<Mutex<Engine>>` — correct for single-writer (D08).
+//! All endpoints support `?debug=json` for human inspection.
+//! Engine access is serialized via `Arc<Mutex<Engine>>` — correct for single-writer.
 
 use std::sync::{Arc, Mutex};
-
-use serde::{Deserialize, Serialize};
 
 use edgestore::WatermarkResponse;
 use edgestore::EdgestoreError;
 use edgestore::Engine;
 
-/// MessagePack wire struct for GET /merkle response.
-#[derive(Serialize, Deserialize)]
-struct MerkleResponse {
-    root: Vec<u8>,
-}
+use serde::Serialize;
 
-/// MessagePack wire struct for one item in GET /segments response.
-#[derive(Serialize, Deserialize)]
-struct SegmentEntry {
-    segment_id: u64,
-    segment_hash: Vec<u8>,
-}
+use crate::wire::{MerkleResponse, SegmentEntry};
 
 /// HTTP replication server wrapping an `Arc<Mutex<Engine>>`.
+///
+/// # Security
+///
+/// **No authentication is performed.** All endpoints are open to any client
+/// that can reach the bound address. Bind to a loopback address (`127.0.0.1`)
+/// or a trusted private network interface — never to `0.0.0.0` in production
+/// unless protected by a network-layer firewall or mTLS proxy.
 ///
 /// Call `start(bind_addr)` to spawn the server loop in a background thread.
 pub struct HttpReplicationServer {
@@ -140,9 +136,9 @@ fn respond_error(request: tiny_http::Request, status: u16, msg: &str) {
 
 /// Dispatch a single HTTP request.
 fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) {
-    // Drain the request body to avoid blocking the client.
-    let mut _body = Vec::new();
-    let _ = request.as_reader().read_to_end(&mut _body);
+    // Drain up to 64 KiB to unblock the client; GET endpoints never use the body.
+    // A single bounded read prevents OOM from a maliciously large body.
+    let _ = request.as_reader().read(&mut [0u8; 65_536]);
 
     let method = request.method().clone();
     let url = request.url().to_string();
@@ -161,7 +157,8 @@ fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) 
                         respond_msgpack(request, &resp, debug_json);
                     }
                     Err(e) => {
-                        respond_error(request, 500, &format!("merkle root error: {}", e));
+                        eprintln!("[http_server] merkle root error: {e}");
+                        respond_error(request, 500, "internal server error");
                     }
                 },
                 Err(_) => {
@@ -185,7 +182,8 @@ fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) 
                         respond_msgpack(request, &entries, debug_json);
                     }
                     Err(e) => {
-                        respond_error(request, 500, &format!("export manifest error: {}", e));
+                        eprintln!("[http_server] export manifest error: {e}");
+                        respond_error(request, 500, "internal server error");
                     }
                 },
                 Err(_) => {
@@ -237,7 +235,8 @@ fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) 
                 let manifest = match eng_guard.export_manifest() {
                     Ok(m) => m,
                     Err(e) => {
-                        respond_error(request, 500, &format!("manifest error: {}", e));
+                        eprintln!("[http_server] manifest error: {e}");
+                        respond_error(request, 500, "internal server error");
                         return;
                     }
                 };
@@ -263,11 +262,8 @@ fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) 
                                 match std::fs::read(&fallback) {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        respond_error(
-                                            request,
-                                            404,
-                                            &format!("segment not found: {}", e),
-                                        );
+                                        eprintln!("[http_server] segment read error: {e}");
+                                        respond_error(request, 404, "segment not found");
                                         return;
                                     }
                                 }

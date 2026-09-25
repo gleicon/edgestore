@@ -93,6 +93,12 @@ pub enum ImportResult {
     Skipped,
     /// BLAKE3 of provided data does not match claimed hash — segment rejected.
     HashMismatch,
+    /// Segment data is permanently unprocessable (e.g. corrupt block that passes BLAKE3
+    /// but fails decompression or exceeds size caps). Do not retry.
+    Rejected {
+        /// Human-readable reason for permanent rejection.
+        reason: String,
+    },
 }
 
 /// Single-writer KV engine with WAL, segments, compaction, and optional vector/text indexes.
@@ -1387,10 +1393,10 @@ impl Engine {
         }
         // Retire WAL files whose data is now durably stored in the segment.
         // Keep only the current WAL file — it may hold entries written after this flush.
-        let current_wal = self.wal.path().to_path_buf();
+        let current_wal_name = self.wal.path().file_name().map(|n| n.to_os_string());
         if let Ok(wal_files) = crate::recovery::list_wal_files(&self.config.path) {
             for path in &wal_files {
-                if path != &current_wal {
+                if path.file_name().map(|n| n.to_os_string()) != current_wal_name {
                     let _ = std::fs::remove_file(path);
                 }
             }
@@ -1499,6 +1505,8 @@ impl Engine {
     /// Returns:
     /// - `Ok(ImportResult::Skipped)` if the segment is already present in the local manifest.
     /// - `Ok(ImportResult::HashMismatch)` if BLAKE3(data) != claimed hash — segment rejected.
+    /// - `Ok(ImportResult::Rejected { reason })` if the segment passes BLAKE3 but is permanently
+    ///   unprocessable (corrupt block, oversized decompressed payload). Do not retry.
     /// - `Ok(ImportResult::Applied { keys_written, keys_skipped })` on success.
     ///
     /// // LWW correctness requires NTP synchronization. Clock skew > segment flush interval
@@ -1545,7 +1553,15 @@ impl Engine {
         let mut min_lsn: Lsn = u64::MAX;
         let mut max_lsn: Lsn = 0;
 
-        for (encoded_key, incoming) in crate::segment::parse_dat_entries(data)? {
+        let parsed = match crate::segment::parse_dat_entries(data) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(ImportResult::Rejected {
+                    reason: e.to_string(),
+                });
+            }
+        };
+        for (encoded_key, incoming) in parsed {
             segment_keys.push(encoded_key.clone());
             min_key = Some(match min_key {
                 None => encoded_key.clone(),

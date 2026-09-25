@@ -726,6 +726,13 @@ impl TieredEngine {
                                 hex_hash(hash)
                             )));
                         }
+                        ImportResult::Rejected { reason } => {
+                            return Err(EdgestoreError::ReplicationError(format!(
+                                "segment {} permanently rejected: {}",
+                                hex_hash(hash),
+                                reason
+                            )));
+                        }
                     }
                     self.fetched.insert(*hash, ());
                     return Ok(());

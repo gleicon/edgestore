@@ -261,6 +261,9 @@ fn test_sc3_lww_higher_timestamp_wins() {
         ImportResult::HashMismatch => {
             panic!("SC3a: unexpected HashMismatch on import");
         }
+        ImportResult::Rejected { reason } => {
+            panic!("SC3a: unexpected Rejected: {}", reason);
+        }
     }
 
     // B's value must remain "from_b" — higher timestamp wins.
@@ -332,6 +335,7 @@ fn test_sc3_lww_collision_local_wins() {
         }
         ImportResult::Skipped => {} // acceptable — segment already present
         ImportResult::HashMismatch => panic!("SC3b: unexpected HashMismatch"),
+        ImportResult::Rejected { reason } => panic!("SC3b: unexpected Rejected: {}", reason),
     }
 
     // B's value must remain "from_beta" (local wins when local ts >= incoming ts).

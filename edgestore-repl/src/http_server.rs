@@ -137,8 +137,18 @@ fn respond_error(request: tiny_http::Request, status: u16, msg: &str) {
 /// Dispatch a single HTTP request.
 fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) {
     // Drain up to 64 KiB to unblock the client; GET endpoints never use the body.
-    // A single bounded read prevents OOM from a maliciously large body.
-    let _ = request.as_reader().read(&mut [0u8; 65_536]);
+    // Loop until 0 bytes returned (EOF/no body) or 64 KiB consumed.
+    {
+        let mut drain_buf = [0u8; 4096];
+        let mut drained = 0usize;
+        while drained < 65_536 {
+            let n = request.as_reader().read(&mut drain_buf).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            drained += n;
+        }
+    }
 
     let method = request.method().clone();
     let url = request.url().to_string();

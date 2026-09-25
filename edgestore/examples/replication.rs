@@ -69,6 +69,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             edgestore::ImportResult::HashMismatch => {
                 eprintln!("  ERROR: Segment {} hash mismatch!", seg_ref.segment_id);
             }
+            edgestore::ImportResult::Rejected { reason } => {
+                eprintln!("  ERROR: Segment {} permanently rejected: {}", seg_ref.segment_id, reason);
+            }
         }
     }
     println!("\nTransferred {} segment(s) to replica.\n", imported);

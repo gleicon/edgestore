@@ -281,6 +281,18 @@ fn run_once(
                     hash_to_hex(&hash)
                 );
             }
+            Ok(ImportResult::Rejected { reason }) => {
+                // Permanently unprocessable — remove from pending so we never retry.
+                eprintln!(
+                    "[anti_entropy] segment {} permanently rejected: {}",
+                    hash_to_hex(&hash),
+                    reason
+                );
+                cursor.segments_pending.retain(|h| h != hash_vec);
+                if let Err(e) = flush_cursor(&cursor, &cursor_path) {
+                    eprintln!("[anti_entropy] cursor flush (rejected) error: {}", e);
+                }
+            }
             Err(e) => {
                 eprintln!("[anti_entropy] import_segment error: {}", e);
                 // Leave in pending — will retry next cycle.

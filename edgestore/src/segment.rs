@@ -856,11 +856,6 @@ impl SegmentStore {
         Ok(())
     }
 
-    /// Return the cohort_window_secs for this segment store.
-    #[allow(dead_code)]
-    pub(crate) fn cohort_window_secs(&self) -> u64 {
-        self.cohort_window_secs
-    }
 
     pub(crate) fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
         for reader in self.readers.iter().rev() {

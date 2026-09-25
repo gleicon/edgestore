@@ -107,7 +107,6 @@ pub struct Engine {
     pub(crate) wal: WalWriter,
     pub(crate) memtable: Box<dyn MemTable>,
     pub(crate) lsn_counter: u64,
-    #[allow(dead_code)]
     pub(crate) txid_counter: u64,
     #[allow(dead_code)]
     lockfile: std::fs::File,

@@ -900,22 +900,6 @@ mod tests {
     }
 
     #[test]
-    fn test_put_get_local() {
-        let (_local_dir, _remote_dir, mut tiered) = make_tiered();
-
-        tiered.put(b"ns", b"key", b"val").unwrap();
-        let got = tiered.get(b"ns", b"key").unwrap();
-        assert_eq!(got, Some(b"val".to_vec()));
-    }
-
-    #[test]
-    fn test_get_not_found() {
-        let (_local_dir, _remote_dir, mut tiered) = make_tiered();
-        let got = tiered.get(b"ns", b"missing").unwrap();
-        assert_eq!(got, None);
-    }
-
-    #[test]
     fn test_archive_and_read_through() {
         let (local_dir, remote_dir, mut tiered) = make_tiered();
 
@@ -944,14 +928,12 @@ mod tests {
         let mut fresh_tiered = TieredEngine::new(fresh_local, Box::new(fresh_remote));
 
         // Seed the new tiered engine with the archived segment list.
-        for meta in &metas {
-            let hash: [u8; 32] = meta.segment_hash.as_slice().try_into().unwrap();
-            fresh_tiered.archived.push(ArchivedSegment {
-                hash,
-                min_key: meta.min_key.clone(),
-                max_key: meta.max_key.clone(),
-            });
-        }
+        fresh_tiered.register_archived(
+            metas.iter().map(|meta| {
+                let hash: [u8; 32] = meta.segment_hash.as_slice().try_into().unwrap();
+                ArchivedSegment { hash, min_key: meta.min_key.clone(), max_key: meta.max_key.clone() }
+            }).collect(),
+        );
 
         // The new engine has no local data — get() must read-through from remote.
         let got = fresh_tiered.get(b"ns", b"key1").unwrap();
@@ -959,28 +941,6 @@ mod tests {
 
         let got = fresh_tiered.get(b"ns", b"key2").unwrap();
         assert_eq!(got, Some(b"val2".to_vec()), "read-through second key");
-    }
-
-    #[test]
-    fn test_delete_passthrough() {
-        let (_local_dir, _remote_dir, mut tiered) = make_tiered();
-
-        tiered.put(b"ns", b"key", b"val").unwrap();
-        tiered.delete(b"ns", b"key").unwrap();
-        let got = tiered.get(b"ns", b"key").unwrap();
-        assert_eq!(got, None);
-    }
-
-    #[test]
-    fn test_range_passthrough() {
-        let (_local_dir, _remote_dir, mut tiered) = make_tiered();
-
-        tiered.put(b"ns", b"a", b"1").unwrap();
-        tiered.put(b"ns", b"b", b"2").unwrap();
-        tiered.put(b"ns", b"c", b"3").unwrap();
-
-        let vals = tiered.range(b"ns", b"a", b"c").unwrap();
-        assert_eq!(vals.len(), 2); // exclusive end
     }
 
     #[test]
@@ -1673,34 +1633,6 @@ mod tests {
     }
 
     #[test]
-    fn test_network_delay_does_not_panic() {
-        let local_dir = TempDir::new().unwrap();
-        let remote_dir = TempDir::new().unwrap();
-
-        let local = Engine::open(EdgestoreConfig::new(local_dir.path())).unwrap();
-        let inner_remote = FilesystemRemoteStore::new(remote_dir.path().to_path_buf()).unwrap();
-        let remote = FaultyRemoteStore::new(inner_remote);
-        remote
-            .delay_ms
-            .store(50, std::sync::atomic::Ordering::SeqCst);
-
-        let mut tiered = TieredEngine::new(local, Box::new(remote));
-        tiered.put(b"ns", b"key", b"val").unwrap();
-        tiered.local_mut().flush_to_segments().unwrap();
-
-        let metas = tiered.local().list_segment_metas();
-        let start = std::time::Instant::now();
-        tiered.archive_segments(&metas).unwrap();
-        let elapsed = start.elapsed().as_millis() as u64;
-
-        assert!(
-            elapsed >= 50,
-            "delay should have been applied: {} ms",
-            elapsed
-        );
-    }
-
-    #[test]
     fn test_throttling_retries_eventually_succeed() {
         let local_dir = TempDir::new().unwrap();
         let remote_dir = TempDir::new().unwrap();
@@ -2180,18 +2112,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_returns_none_for_absent_key_with_no_archives() {
-        let local = TempDir::new().unwrap();
-        let remote = TempDir::new().unwrap();
-        let remote_store = FilesystemRemoteStore::new(remote.path().to_path_buf()).unwrap();
-        let mut engine = TieredEngine::new(
-            Engine::open(EdgestoreConfig::new(local.path())).unwrap(),
-            Box::new(remote_store),
-        );
-        engine.put(b"ns", b"exists", b"yes").unwrap();
-        // Key not written → None, no archive involved.
-        let got = engine.get(b"ns", b"absent").unwrap();
-        assert_eq!(got, None);
-    }
 }

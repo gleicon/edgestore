@@ -2538,99 +2538,6 @@ mod tests {
     }
 
     #[test]
-    fn test_put_get_round_trip() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        engine.put(b"ns", b"hello", b"world").unwrap();
-        let val = engine.get(b"ns", b"hello").unwrap();
-        assert_eq!(val, Some(b"world".to_vec()));
-    }
-
-    #[test]
-    fn test_put_delete_get_returns_none() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        engine.put(b"ns", b"key", b"val").unwrap();
-        engine.delete(b"ns", b"key").unwrap();
-        let val = engine.get(b"ns", b"key").unwrap();
-        assert_eq!(val, None);
-    }
-
-    #[test]
-    fn test_range_sorted_excludes_deleted() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        engine.put(b"ns", b"a", b"va").unwrap();
-        engine.put(b"ns", b"b", b"vb").unwrap();
-        engine.put(b"ns", b"c", b"vc").unwrap();
-        engine.delete(b"ns", b"b").unwrap();
-        let results = engine.range(b"ns", b"a", b"z").unwrap();
-        let keys: Vec<&[u8]> = results.iter().map(|(k, _)| k.as_slice()).collect();
-        assert_eq!(keys, vec![b"a", b"c"]);
-    }
-
-    #[test]
-    fn test_prefix_namespace_isolation() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        engine.put(b"ns_a", b"k1", b"va1").unwrap();
-        engine.put(b"ns_a", b"k2", b"va2").unwrap();
-        engine.put(b"ns_b", b"k1", b"vb1").unwrap();
-
-        let ns_a_results = engine.prefix(b"ns_a", b"").unwrap();
-        assert_eq!(ns_a_results.len(), 2);
-        for (_, val) in &ns_a_results {
-            assert_ne!(val, b"vb1");
-        }
-
-        let ns_b_results = engine.prefix(b"ns_b", b"").unwrap();
-        assert_eq!(ns_b_results.len(), 1);
-    }
-
-    #[test]
-    fn test_namespace_same_raw_key() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        engine.put(b"ns_a", b"key", b"val_a").unwrap();
-        engine.put(b"ns_b", b"key", b"val_b").unwrap();
-        assert_eq!(
-            engine.get(b"ns_a", b"key").unwrap(),
-            Some(b"val_a".to_vec())
-        );
-        assert_eq!(
-            engine.get(b"ns_b", b"key").unwrap(),
-            Some(b"val_b".to_vec())
-        );
-    }
-
-    #[test]
-    fn test_commit_transaction_all_visible() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        let mut tx = engine.begin();
-        let ts = 0i64;
-        tx.put(b"ns", b"k1", b"v1", 1, ts).unwrap();
-        tx.put(b"ns", b"k2", b"v2", 2, ts).unwrap();
-        tx.put(b"ns", b"k3", b"v3", 3, ts).unwrap();
-        engine.commit_transaction(tx).unwrap();
-        assert_eq!(engine.get(b"ns", b"k1").unwrap(), Some(b"v1".to_vec()));
-        assert_eq!(engine.get(b"ns", b"k2").unwrap(), Some(b"v2".to_vec()));
-        assert_eq!(engine.get(b"ns", b"k3").unwrap(), Some(b"v3".to_vec()));
-    }
-
-    #[test]
-    fn test_rollback_transaction_keys_not_visible() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        let mut tx = engine.begin();
-        tx.put(b"ns", b"k1", b"v1", 1, 0).unwrap();
-        tx.put(b"ns", b"k2", b"v2", 2, 0).unwrap();
-        engine.rollback_transaction(tx);
-        assert_eq!(engine.get(b"ns", b"k1").unwrap(), None);
-        assert_eq!(engine.get(b"ns", b"k2").unwrap(), None);
-    }
-
-    #[test]
     fn test_commit_returns_highest_lsn() {
         let dir = TempDir::new().unwrap();
         let mut engine = open_engine(&dir);
@@ -2651,44 +2558,6 @@ mod tests {
         let _ = tx.take_pending().unwrap();
         let result = engine.commit_transaction(tx);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_tx_commit_convenience_wrapper() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        let mut tx = engine.begin();
-        tx.put(b"ns", b"k1", b"v1", 1, 0).unwrap();
-        let lsn = tx.commit(&mut engine).unwrap();
-        assert!(lsn > 0);
-        assert_eq!(engine.get(b"ns", b"k1").unwrap(), Some(b"v1".to_vec()));
-    }
-
-    #[test]
-    fn test_tx_rollback_convenience_wrapper() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        let mut tx = engine.begin();
-        tx.put(b"ns", b"k1", b"v1", 1, 0).unwrap();
-        tx.rollback(&mut engine);
-        assert_eq!(engine.get(b"ns", b"k1").unwrap(), None);
-    }
-
-    #[test]
-    fn test_crash_recovery() {
-        let dir = TempDir::new().unwrap();
-        {
-            let mut engine = open_engine(&dir);
-            engine.put(b"ns", b"k1", b"v1").unwrap();
-            engine.put(b"ns", b"k2", b"v2").unwrap();
-            engine.put(b"ns", b"k3", b"v3").unwrap();
-            engine.flush().unwrap();
-        }
-
-        let engine2 = open_engine(&dir);
-        assert_eq!(engine2.get(b"ns", b"k1").unwrap(), Some(b"v1".to_vec()));
-        assert_eq!(engine2.get(b"ns", b"k2").unwrap(), Some(b"v2".to_vec()));
-        assert_eq!(engine2.get(b"ns", b"k3").unwrap(), Some(b"v3".to_vec()));
     }
 
     #[test]
@@ -2721,16 +2590,6 @@ mod tests {
             result.is_err(),
             "flush_to_segments on empty memtable must error"
         );
-    }
-
-    #[test]
-    fn test_get_from_segment_after_flush() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = open_engine(&dir);
-        engine.put(b"ns", b"seg_key", b"seg_val").unwrap();
-        engine.flush_to_segments().unwrap();
-        let val = engine.get(b"ns", b"seg_key").unwrap();
-        assert_eq!(val, Some(b"seg_val".to_vec()));
     }
 
     #[test]

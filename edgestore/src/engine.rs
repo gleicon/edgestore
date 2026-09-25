@@ -1544,7 +1544,6 @@ impl Engine {
 
         std::fs::rename(&tmp_path, &dat_path)?;
 
-
         let mut keys_written: u64 = 0;
         let mut keys_skipped: u64 = 0;
         let mut segment_keys: Vec<Vec<u8>> = Vec::new();

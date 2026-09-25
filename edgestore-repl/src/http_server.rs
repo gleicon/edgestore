@@ -11,6 +11,9 @@
 
 use std::sync::{Arc, Mutex};
 
+const BODY_DRAIN_BUF: usize = 4096;
+const BODY_DRAIN_MAX: usize = 64 * 1024;
+
 use edgestore::WatermarkResponse;
 use edgestore::EdgestoreError;
 use edgestore::Engine;
@@ -136,12 +139,11 @@ fn respond_error(request: tiny_http::Request, status: u16, msg: &str) {
 
 /// Dispatch a single HTTP request.
 fn handle_request(mut request: tiny_http::Request, engine: &Arc<Mutex<Engine>>) {
-    // Drain up to 64 KiB to unblock the client; GET endpoints never use the body.
-    // Loop until 0 bytes returned (EOF/no body) or 64 KiB consumed.
+    // Drain up to BODY_DRAIN_MAX to unblock the client; GET endpoints never use the body.
     {
-        let mut drain_buf = [0u8; 4096];
+        let mut drain_buf = [0u8; BODY_DRAIN_BUF];
         let mut drained = 0usize;
-        while drained < 65_536 {
+        while drained < BODY_DRAIN_MAX {
             let n = request.as_reader().read(&mut drain_buf).unwrap_or(0);
             if n == 0 {
                 break;

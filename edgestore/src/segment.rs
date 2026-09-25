@@ -18,11 +18,14 @@ pub mod in_memory;
 pub(crate) const SEGMENT_BLOCK_MAGIC: u32 = 0x45445347; // "EDSG"
 pub(crate) const SEGMENT_FILE_MAGIC: u32 = 0x45445347;
 pub(crate) const SEGMENT_FORMAT_VERSION: u8 = 1;
-/// Target size for an uncompressed block before flushing
+/// 4-byte file magic + 1-byte version + 3-byte padding.
+pub(crate) const SEGMENT_HEADER_LEN: usize = 8;
+/// Target size for an uncompressed block before flushing.
 const BLOCK_TARGET_BYTES: usize = 3900;
-/// Block alignment boundary (4 KiB)
+/// Block alignment boundary (4 KiB).
 pub(crate) const SEGMENT_BLOCK_SIZE: usize = 4096;
-/// Sparse index entry every N keys
+/// Maximum allowed decompressed size for a single block (DoS protection).
+pub(crate) const MAX_BLOCK_DECOMPRESSED: usize = SEGMENT_BLOCK_SIZE * 512;
 /// How many records to skip between sparse-index entries.
 pub const SPARSE_INDEX_STRIDE: usize = 64;
 
@@ -252,8 +255,8 @@ impl SegmentWriter {
 
         let mut current_block: Vec<u8> = Vec::new();
         let mut sparse_index: Vec<(Vec<u8>, u64)> = Vec::new();
-        let mut block_start_offset: u64 = 8;
-        let mut file_offset: u64 = 8;
+        let mut block_start_offset: u64 = SEGMENT_HEADER_LEN as u64;
+        let mut file_offset: u64 = SEGMENT_HEADER_LEN as u64;
         let mut compressed_total: u64 = 0;
         let mut uncompressed_total: u64 = 0;
 
@@ -547,10 +550,9 @@ pub(crate) fn read_block_at_offset(
     } else {
         (payload_size / SEGMENT_BLOCK_SIZE + 1) * SEGMENT_BLOCK_SIZE
     };
-    const MAX_DECOMPRESSED: usize = SEGMENT_BLOCK_SIZE * 512;
     let decompressed = zstd::decode_all(compressed.as_slice())
         .map_err(|e| EdgestoreError::SegmentCorrupt(format!("zstd decode: {}", e)))?;
-    if decompressed.len() > MAX_DECOMPRESSED {
+    if decompressed.len() > MAX_BLOCK_DECOMPRESSED {
         return Err(EdgestoreError::SegmentCorrupt(
             "decompressed block too large".to_string(),
         ));
@@ -575,10 +577,8 @@ pub(crate) fn read_block_at_offset(
 pub(crate) fn parse_dat_entries(
     data: &[u8],
 ) -> Result<Vec<(Vec<u8>, MemEntry)>, EdgestoreError> {
-    const MAX_DECOMPRESSED: usize = SEGMENT_BLOCK_SIZE * 512;
     let mut entries = Vec::new();
-    // Skip 8-byte file header (magic 4 bytes + version 1 byte + padding 3 bytes).
-    let mut offset = 8usize;
+    let mut offset = SEGMENT_HEADER_LEN;
     while offset < data.len() {
         if offset + 8 > data.len() {
             break;
@@ -602,7 +602,7 @@ pub(crate) fn parse_dat_entries(
         let decompressed = zstd::decode_all(compressed).map_err(|e| {
             EdgestoreError::SegmentCorrupt(format!("parse_dat_entries zstd decode: {e}"))
         })?;
-        if decompressed.len() > MAX_DECOMPRESSED {
+        if decompressed.len() > MAX_BLOCK_DECOMPRESSED {
             return Err(EdgestoreError::SegmentCorrupt(
                 "decompressed block too large".to_string(),
             ));

@@ -853,8 +853,7 @@ impl Engine {
     /// Removes one local segment: deletes its `.dat`/`.idx`/`.xf`/`.meta` files and
     /// its manifest entry. Does **not** touch any remote/archived copy — for callers
     /// that have already confirmed the segment is durably archived elsewhere and
-    /// just want to reclaim local disk space (e.g. Pierre's local-retention pruning,
-    /// after a configurable grace period past a successful archive).
+    /// just want to reclaim local disk space after a successful archive.
     ///
     /// A no-op (returns `Ok`) if `segment_id` doesn't exist locally.
     pub fn prune_local_segment(

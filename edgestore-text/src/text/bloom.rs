@@ -1,6 +1,5 @@
 //! A small, hand-rolled Bloom filter — no new crate, consistent with this codebase's
-//! existing preference for hand-rolling simple approximate structures (see
-//! Space-Saving top-K in the Pierre-side rollup module for the same philosophy).
+//! existing preference for hand-rolling simple approximate structures.
 //!
 //! `InvertedIndex::add_document` needs to know whether a doc_id was already indexed
 //! before deciding to remove its old postings first; a full scan of every posting in
@@ -33,8 +32,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 const TARGET_FPR: f64 = 0.01;
 
 /// Starting capacity for a freshly-created index's filter — small, since most
-/// `InvertedIndex` instances (one per BM25 time-bucket, bounded by Pierre's FR-11
-/// bucket-duration config) never grow large; it doubles from here as needed.
+/// `InvertedIndex` instances never grow large; it doubles from here as needed.
 pub const INITIAL_CAPACITY: usize = 4096;
 
 /// Standard Kirsch–Mitzenmacher double hashing: derive `num_hashes` independent
@@ -44,8 +42,7 @@ pub const INITIAL_CAPACITY: usize = 4096;
 /// Hashed with a per-instance random seed (`RandomState`, the same mechanism every
 /// `HashMap` in this codebase already gets by default), not a fixed one — a fixed
 /// seed would let a caller who controls `doc_id`/key values (true for edgestore as a
-/// general-purpose library, even though Pierre's own key generation already
-/// includes a random suffix) craft keys that collide into the same bit positions,
+/// general-purpose library) craft keys that collide into the same bit positions,
 /// inflating the false-positive rate past its design target and forcing
 /// `remove_document`'s expensive scan far more often than intended.
 #[derive(Clone)]

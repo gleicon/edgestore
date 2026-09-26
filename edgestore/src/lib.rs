@@ -87,7 +87,7 @@ pub use text::engine::{
 };
 pub use text::facet::{filter_by_facets, FacetFilter};
 pub use text::index::{bm25_score, score_document, InvertedIndex, Posting};
-pub use text::tokenizer::{tokenize, Token};
+pub use text::tokenizer::{tokenize, Language, Token};
 pub use text::types::{decode_text_record, FacetValue};
 pub use text::typo::{is_one_edit_away, levenshtein};
 pub use transaction::Transaction;

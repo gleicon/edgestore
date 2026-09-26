@@ -480,7 +480,7 @@ mod tests {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .await
@@ -489,13 +489,13 @@ mod tests {
             .index_text(
                 b"ns",
                 b"doc2",
-                "goodbye world",
+                "database compaction",
                 std::collections::HashMap::new(),
             )
             .await
             .unwrap();
 
-        let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
+        let results = engine.search_text(b"ns", "segment", 10).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].doc_id, b"doc1");
     }
@@ -509,14 +509,14 @@ mod tests {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .await
             .unwrap();
         engine.delete_text(b"ns", b"doc1").await.unwrap();
 
-        let results = engine.search_text(b"ns", "hello", 10).await.unwrap();
+        let results = engine.search_text(b"ns", "segment", 10).await.unwrap();
         assert!(results.is_empty());
     }
 

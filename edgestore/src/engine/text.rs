@@ -55,7 +55,7 @@ impl Engine {
         use crate::text::engine::{Snippet, SnippetResult};
 
         let text_ns = text_namespace(ns);
-        let query_tokens = tokenize(query);
+        let query_tokens = tokenize(query, self.config.text_language);
         if query_tokens.is_empty() || k == 0 {
             return Ok(vec![]);
         }
@@ -152,7 +152,7 @@ impl TextEngine for Engine {
         text: &str,
         facets: HashMap<String, FacetValue>,
     ) -> Result<Lsn, EdgestoreError> {
-        let tokens = tokenize(text);
+        let tokens = tokenize(text, self.config.text_language);
         let doc_len = tokens.len() as u32;
         let text_ns = text_namespace(ns);
 
@@ -211,7 +211,7 @@ impl TextEngine for Engine {
             return Ok(vec![]);
         }
 
-        let query_tokens = tokenize(query);
+        let query_tokens = tokenize(query, self.config.text_language);
         if query_tokens.is_empty() {
             return Ok(vec![]);
         }

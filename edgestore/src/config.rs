@@ -1,4 +1,5 @@
 use crate::memtable::{BTreeMemTable, MemTable};
+use crate::text::tokenizer::Language;
 use crate::types::Compression;
 use std::path::PathBuf;
 
@@ -42,6 +43,12 @@ pub struct EdgestoreConfig {
     /// Set via `Engine::open_readonly`. Use for replica instances where writes
     /// must be rejected to prevent divergence from the primary.
     pub readonly: bool,
+    /// Language used for text indexing and search (stemming + stopwords).
+    ///
+    /// Defaults to `Language::English`. Set to `Language::PortugueseBrazilian` for pt-BR
+    /// content. The language must be consistent between `index_text` and `search_text`
+    /// calls — changing it after documents are indexed requires re-indexing.
+    pub text_language: Language,
     /// Factory function that returns a new empty memtable.
     pub memtable_factory: Box<dyn Fn() -> Box<dyn MemTable> + Send + Sync>,
 }
@@ -65,6 +72,7 @@ impl std::fmt::Debug for EdgestoreConfig {
             .field("fdp_enabled", &self.fdp_enabled)
             .field("hnsw_max_ram_bytes", &self.hnsw_max_ram_bytes)
             .field("readonly", &self.readonly)
+            .field("text_language", &self.text_language)
             .field("memtable_factory", &"<fn>")
             .finish()
     }
@@ -87,6 +95,7 @@ impl EdgestoreConfig {
             fdp_enabled: false,
             hnsw_max_ram_bytes: 512 * 1024 * 1024,
             readonly: false,
+            text_language: Language::English,
             memtable_factory: Box::new(|| Box::new(BTreeMemTable::new())),
         }
     }

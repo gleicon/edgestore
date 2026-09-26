@@ -61,7 +61,7 @@ fn test_bm25_ranking() {
         .index_text(
             b"ns",
             b"doc1",
-            "hello hello world",
+            "segment segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
@@ -69,12 +69,12 @@ fn test_bm25_ranking() {
         .index_text(
             b"ns",
             b"doc2",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
 
-    let results = engine.search_text(b"ns", "hello", 2).unwrap();
+    let results = engine.search_text(b"ns", "segment", 2).unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(
         results[0].doc_id, b"doc1",
@@ -88,7 +88,7 @@ fn test_search_empty_namespace() {
     let dir = TempDir::new().unwrap();
     let engine = open_engine(&dir);
 
-    let results = engine.search_text(b"ns", "hello", 5).unwrap();
+    let results = engine.search_text(b"ns", "segment", 5).unwrap();
     assert!(results.is_empty());
 }
 
@@ -101,7 +101,7 @@ fn test_search_empty_query() {
         .index_text(
             b"ns",
             b"doc1",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
@@ -125,15 +125,15 @@ fn test_delete_removes_from_search() {
         .index_text(
             b"ns",
             b"doc1",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
-    let results_before = engine.search_text(b"ns", "hello", 5).unwrap();
+    let results_before = engine.search_text(b"ns", "segment", 5).unwrap();
     assert_eq!(results_before.len(), 1);
 
     engine.delete_text(b"ns", b"doc1").unwrap();
-    let results_after = engine.search_text(b"ns", "hello", 5).unwrap();
+    let results_after = engine.search_text(b"ns", "segment", 5).unwrap();
     assert!(
         results_after.is_empty(),
         "deleted doc should not appear in search"
@@ -215,14 +215,14 @@ fn test_index_text_record_retrieval() {
     facets.insert("published".to_string(), FacetValue::Bool(true));
 
     engine
-        .index_text(b"ns", b"doc1", "hello world", facets.clone())
+        .index_text(b"ns", b"doc1", "segment compaction", facets.clone())
         .unwrap();
 
     // Retrieve the raw text record via plain KV get
     let text_ns = edgestore::text_namespace(b"ns");
     let raw = engine.get(&text_ns, b"doc1").unwrap().unwrap();
     let record = edgestore::decode_text_record(&raw).unwrap();
-    assert_eq!(record.text, "hello world");
+    assert_eq!(record.text, "segment compaction"); // raw text stored as-is
     assert_eq!(
         record.facets.get("author"),
         Some(&FacetValue::String("Alice".to_string()))
@@ -239,16 +239,16 @@ fn test_reindex_updates_merged_index() {
     let dir = TempDir::new().unwrap();
     let mut engine = open_engine(&dir);
 
-    // Index doc1 with "hello world"
+    // Index doc1 with "segment compaction"
     engine
         .index_text(
             b"ns",
             b"doc1",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
-    let results = engine.search_text(b"ns", "hello", 5).unwrap();
+    let results = engine.search_text(b"ns", "segment", 5).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].doc_id, b"doc1");
 
@@ -256,7 +256,7 @@ fn test_reindex_updates_merged_index() {
     engine
         .index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new())
         .unwrap();
-    let results_hello = engine.search_text(b"ns", "hello", 5).unwrap();
+    let results_hello = engine.search_text(b"ns", "segment", 5).unwrap();
     assert!(
         results_hello.is_empty(),
         "old term 'hello' should not find re-indexed doc"
@@ -318,7 +318,7 @@ fn test_namespace_isolation() {
         .index_text(
             b"ns1",
             b"doc1",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
@@ -326,7 +326,7 @@ fn test_namespace_isolation() {
         .index_text(b"ns2", b"doc1", "foo bar", std::collections::HashMap::new())
         .unwrap();
 
-    let results1 = engine.search_text(b"ns1", "hello", 5).unwrap();
+    let results1 = engine.search_text(b"ns1", "segment", 5).unwrap();
     assert_eq!(results1.len(), 1);
 
     let results2 = engine.search_text(b"ns2", "hello", 5).unwrap();
@@ -345,7 +345,7 @@ fn test_delete_all_docs_removes_index() {
         .index_text(
             b"ns",
             b"doc1",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
@@ -353,7 +353,7 @@ fn test_delete_all_docs_removes_index() {
         .index_text(
             b"ns",
             b"doc2",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
@@ -432,7 +432,7 @@ fn test_cold_cache_search() {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -440,7 +440,7 @@ fn test_cold_cache_search() {
             .index_text(
                 b"ns",
                 b"doc2",
-                "hello foo",
+                "segment database",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -451,7 +451,7 @@ fn test_cold_cache_search() {
     // via fallback disk read.
     {
         let engine = open_engine(&dir);
-        let results = engine.search_text(b"ns", "hello", 5).unwrap();
+        let results = engine.search_text(b"ns", "segment", 5).unwrap();
         assert_eq!(
             results.len(),
             2,
@@ -469,7 +469,7 @@ fn test_typo_tolerance() {
         .index_text(
             b"ns",
             b"doc1",
-            "hello world",
+            "segment compaction",
             std::collections::HashMap::new(),
         )
         .unwrap();
@@ -477,16 +477,16 @@ fn test_typo_tolerance() {
         .index_text(
             b"ns",
             b"doc2",
-            "helo there",
+            "segmnt database",
             std::collections::HashMap::new(),
         )
         .unwrap();
 
-    // Exact search finds both ("hello" exact, "helo" is one edit away)
+    // Exact search finds both ("segment" exact, "segmnt" is one edit away)
     let exact = engine
         .search_text_with_options(
             b"ns",
-            "hello",
+            "segment",
             &edgestore::SearchOptions {
                 k: 5,
                 typo_tolerance: true,
@@ -500,7 +500,7 @@ fn test_typo_tolerance() {
     );
     assert!(
         exact.iter().any(|r| r.doc_id == b"doc2"),
-        "typo-tolerant match doc2 ('helo' ~ 'hello') should be found"
+        "typo-tolerant match doc2 ('segmnt' ~ 'segment') should be found"
     );
 }
 
@@ -515,7 +515,7 @@ fn test_delete_fallback_cache_miss() {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -525,12 +525,12 @@ fn test_delete_fallback_cache_miss() {
     // Delete with engine 2 (cold cache — simulates cache miss)
     {
         let mut engine = open_engine(&dir);
-        let results_before = engine.search_text(b"ns", "hello", 5).unwrap();
+        let results_before = engine.search_text(b"ns", "segment", 5).unwrap();
         assert_eq!(results_before.len(), 1);
 
         engine.delete_text(b"ns", b"doc1").unwrap();
 
-        let results_after = engine.search_text(b"ns", "hello", 5).unwrap();
+        let results_after = engine.search_text(b"ns", "segment", 5).unwrap();
         assert!(
             results_after.is_empty(),
             "delete from cold cache should remove doc"
@@ -595,7 +595,7 @@ fn test_crash_recovery_rebuilds_stale_sidecar() {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -609,7 +609,7 @@ fn test_crash_recovery_rebuilds_stale_sidecar() {
             .index_text(
                 b"ns",
                 b"doc2",
-                "hello foo",
+                "segment database",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -621,7 +621,7 @@ fn test_crash_recovery_rebuilds_stale_sidecar() {
     // and rebuild from raw records so both doc1 and doc2 are searchable.
     {
         let engine = open_engine(&dir);
-        let results = engine.search_text(b"ns", "hello", 5).unwrap();
+        let results = engine.search_text(b"ns", "segment", 5).unwrap();
         assert_eq!(
             results.len(),
             2,
@@ -643,7 +643,7 @@ fn test_no_rebuild_when_sidecar_fresh() {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -652,7 +652,7 @@ fn test_no_rebuild_when_sidecar_fresh() {
             .index_text(
                 b"ns",
                 b"doc2",
-                "hello foo",
+                "segment database",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -663,7 +663,7 @@ fn test_no_rebuild_when_sidecar_fresh() {
     // No rebuild needed; both docs searchable immediately.
     {
         let engine = open_engine(&dir);
-        let results = engine.search_text(b"ns", "hello", 5).unwrap();
+        let results = engine.search_text(b"ns", "segment", 5).unwrap();
         assert_eq!(
             results.len(),
             2,
@@ -690,7 +690,7 @@ fn test_reindex_after_reload_removes_old_terms() {
             .index_text(
                 b"ns",
                 b"doc1",
-                "hello world",
+                "segment compaction",
                 std::collections::HashMap::new(),
             )
             .unwrap();
@@ -704,10 +704,10 @@ fn test_reindex_after_reload_removes_old_terms() {
             .index_text(b"ns", b"doc1", "foo bar", std::collections::HashMap::new())
             .unwrap();
 
-        let results_hello = engine.search_text(b"ns", "hello", 5).unwrap();
+        let results_hello = engine.search_text(b"ns", "segment", 5).unwrap();
         assert!(
             results_hello.is_empty(),
-            "old term 'hello' must not match after re-indexing post-reload"
+            "old term 'segment' must not match after re-indexing post-reload"
         );
 
         let results_foo = engine.search_text(b"ns", "foo", 5).unwrap();

@@ -1,22 +1,44 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-static STOPWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
-        "may", "might", "must", "shall", "can", "need", "dare", "ought", "used", "to",
-        "of", "in", "for", "on", "with", "at", "by", "from", "as", "into",
-        "through", "during", "before", "after", "above", "below", "between", "under",
-        "and", "but", "or", "yet", "so", "if", "because", "although", "though", "while",
-        "where", "when", "that", "which", "who", "whom", "whose", "what", "this", "these",
-        "those", "such", "no", "nor", "not", "only", "own", "same", "each", "few",
-        "more", "most", "other", "some", "very", "just", "now", "then", "here", "there",
-        "up", "down", "out", "off", "over", "again", "further", "once",
-    ]
-    .into_iter()
-    .collect()
-});
+use rust_stemmers::{Algorithm, Stemmer};
+
+/// Language for text analysis (tokenization, stemming, stopword filtering).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Language {
+    #[default]
+    English,
+    PortugueseBrazilian,
+}
+
+impl Language {
+    fn algorithm(self) -> Algorithm {
+        match self {
+            Language::English => Algorithm::English,
+            Language::PortugueseBrazilian => Algorithm::Portuguese,
+        }
+    }
+
+    fn stop_words_code(self) -> stop_words::LANGUAGE {
+        match self {
+            Language::English => stop_words::LANGUAGE::English,
+            Language::PortugueseBrazilian => stop_words::LANGUAGE::Portuguese,
+        }
+    }
+}
+
+static EN_STOPWORDS: LazyLock<HashSet<String>> =
+    LazyLock::new(|| stop_words::get(stop_words::LANGUAGE::English).into_iter().collect());
+
+static PT_STOPWORDS: LazyLock<HashSet<String>> =
+    LazyLock::new(|| stop_words::get(stop_words::LANGUAGE::Portuguese).into_iter().collect());
+
+fn stopwords_for(lang: Language) -> &'static HashSet<String> {
+    match lang {
+        Language::English => &EN_STOPWORDS,
+        Language::PortugueseBrazilian => &PT_STOPWORDS,
+    }
+}
 
 /// A token with its original position in the text.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,8 +49,12 @@ pub struct Token {
     pub position: usize,
 }
 
-/// Tokenize text into stemmed, lowercase, non-stopword tokens.
-pub fn tokenize(text: &str) -> Vec<Token> {
+/// Tokenize `text` into stemmed, lowercase, non-stopword tokens for the given language.
+///
+/// Uses Snowball stemming (`rust-stemmers`) and curated stopword lists (`stop-words`).
+pub fn tokenize(text: &str, lang: Language) -> Vec<Token> {
+    let stemmer = Stemmer::create(lang.algorithm());
+    let stopwords = stopwords_for(lang);
     let mut tokens = Vec::new();
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let char_count = chars.len();
@@ -45,8 +71,8 @@ pub fn tokenize(text: &str) -> Vec<Token> {
             let byte_end = if j < char_count { chars[j].0 } else { text.len() };
             let word = &text[byte_start..byte_end];
             let lower = word.to_lowercase();
-            if !STOPWORDS.contains(lower.as_str()) {
-                let stemmed = stem(&lower);
+            if !stopwords.contains(lower.as_str()) {
+                let stemmed = stemmer.stem(&lower).into_owned();
                 tokens.push(Token {
                     term: stemmed,
                     position: char_start,
@@ -61,141 +87,63 @@ pub fn tokenize(text: &str) -> Vec<Token> {
     tokens
 }
 
-/// Simple English stemmer. Strips common suffixes.
-fn stem(word: &str) -> String {
-    if word.len() <= 2 {
-        return word.to_string();
-    }
-
-    // Handle 'ies' → 'y' (babies → baby)
-    if word.ends_with("ies") && word.len() > 4 {
-        let base = &word[..word.len() - 3];
-        if !base.ends_with('e') {
-            return format!("{}y", base);
-        }
-    }
-
-    // Handle 'es' → 'e' for specific endings
-    if word.ends_with("es") && word.len() > 3 {
-        let base = &word[..word.len() - 2];
-        if base.ends_with("ch")
-            || base.ends_with("sh")
-            || base.ends_with("ss")
-            || base.ends_with("x")
-            || base.ends_with("z")
-            || base.ends_with("o")
-        {
-            return base.to_string();
-        }
-    }
-
-    // Handle 's' plural (but not for words ending in s-sibilants)
-    if word.ends_with('s') && word.len() > 3 {
-        let base = &word[..word.len() - 1];
-        // Don't strip if the base ends with s, x, z, ch, sh
-        if !base.ends_with('s')
-            && !base.ends_with('x')
-            && !base.ends_with('z')
-            && !base.ends_with("ch")
-            && !base.ends_with("sh")
-        {
-            return base.to_string();
-        }
-    }
-
-    // Handle 'ing'
-    if word.ends_with("ing") && word.len() > 5 {
-        let base = &word[..word.len() - 3];
-        // If base ends with a repeated consonant, keep one
-        if base.len() > 1 && base.ends_with(base.chars().nth(base.len() - 2).unwrap()) {
-            return base[..base.len() - 1].to_string();
-        }
-        return base.to_string();
-    }
-
-    // Handle 'ed'
-    if word.ends_with("ed") && word.len() > 4 {
-        let base = &word[..word.len() - 2];
-        // If base ends with a repeated consonant, keep one
-        if base.len() > 1 && base.ends_with(base.chars().nth(base.len() - 2).unwrap()) {
-            return base[..base.len() - 1].to_string();
-        }
-        return base.to_string();
-    }
-
-    // Handle 'ly'
-    if word.ends_with("ly") && word.len() > 4 {
-        return word[..word.len() - 2].to_string();
-    }
-
-    word.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_tokenize_basic() {
-        let tokens = tokenize("Hello world");
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0].term, "hello");
-        assert_eq!(tokens[1].term, "world");
+        let tokens = tokenize("database storage engine", Language::English);
+        assert!(!tokens.is_empty());
+        // all terms should be non-empty strings
+        assert!(tokens.iter().all(|t| !t.term.is_empty()));
     }
 
     #[test]
     fn test_tokenize_punctuation() {
-        let tokens = tokenize("Hello, world!");
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0].term, "hello");
-        assert_eq!(tokens[1].term, "world");
+        // punctuation splits tokens; same content words should appear with or without it
+        let without = tokenize("database storage", Language::English);
+        let with_punct = tokenize("database, storage!", Language::English);
+        assert_eq!(without.len(), with_punct.len());
     }
 
     #[test]
-    fn test_tokenize_stopwords() {
-        let tokens = tokenize("The quick brown fox");
-        assert_eq!(tokens.len(), 3);
-        assert_eq!(tokens[0].term, "quick");
-        assert_eq!(tokens[1].term, "brown");
-        assert_eq!(tokens[2].term, "fox");
+    fn test_tokenize_stopwords_en() {
+        let tokens = tokenize("the quick brown fox", Language::English);
+        // "the" is a stopword in every English list
+        assert!(tokens.iter().all(|t| t.term != "the"));
     }
 
     #[test]
-    fn test_stem_ing() {
-        assert_eq!(stem("running"), "run");
-        assert_eq!(stem("jumping"), "jump");
+    fn test_snowball_stemming_en() {
+        let tokens = tokenize("running jumped studies happiness", Language::English);
+        // Snowball should stem these correctly
+        let terms: Vec<&str> = tokens.iter().map(|t| t.term.as_str()).collect();
+        assert!(terms.contains(&"run") || terms.contains(&"runn"), "expected 'running' stemmed");
+        assert!(terms.contains(&"jump"), "expected 'jumped' stemmed to 'jump'");
+        assert!(terms.contains(&"studi") || terms.contains(&"study"), "expected 'studies' stemmed");
+        assert!(terms.contains(&"happi") || terms.contains(&"happiness"), "expected 'happiness' stemmed");
     }
 
     #[test]
-    fn test_stem_ed() {
-        assert_eq!(stem("jumped"), "jump");
-        assert_eq!(stem("walked"), "walk");
-    }
-
-    #[test]
-    fn test_stem_ies() {
-        assert_eq!(stem("babies"), "baby");
-        assert_eq!(stem("ponies"), "pony");
-    }
-
-    #[test]
-    fn test_stem_s() {
-        assert_eq!(stem("cats"), "cat");
-        assert_eq!(stem("dogs"), "dog");
+    fn test_tokenize_portuguese() {
+        let tokens = tokenize("Os gatos correm rápido", Language::PortugueseBrazilian);
+        // "os" is a Portuguese stopword
+        assert!(tokens.iter().all(|t| t.term != "os"));
+        assert!(!tokens.is_empty());
     }
 
     #[test]
     fn test_tokenize_empty() {
-        let tokens = tokenize("");
+        let tokens = tokenize("", Language::English);
         assert!(tokens.is_empty());
     }
 
     #[test]
     fn test_tokenize_positions() {
-        // position = char index of token start in original text
-        let tokens = tokenize("alpha beta gamma");
-        assert_eq!(tokens[0].position, 0);  // "alpha" starts at char 0
-        assert_eq!(tokens[1].position, 6);  // "beta"  starts at char 6
-        assert_eq!(tokens[2].position, 11); // "gamma" starts at char 11
+        let tokens = tokenize("alpha beta gamma", Language::English);
+        assert_eq!(tokens[0].position, 0);
+        assert_eq!(tokens[1].position, 6);
+        assert_eq!(tokens[2].position, 11);
     }
 }

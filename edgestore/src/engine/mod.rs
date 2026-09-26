@@ -350,7 +350,7 @@ impl Engine {
                     continue; // skip the merged index entry itself
                 }
                 if let Some(record) = crate::text::types::decode_text_record(&val_bytes) {
-                    let tokens = tokenize(&record.text);
+                    let tokens = tokenize(&record.text, self.config.text_language);
                     let doc_len = tokens.len() as u32;
                     index.add_document(key, &tokens, doc_len, record.facets);
                 }

@@ -1,26 +1,22 @@
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
-lazy_static::lazy_static! {
-    static ref STOPWORDS: HashSet<String> = {
-        let mut set = HashSet::new();
-        let words = [
-            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
-            "may", "might", "must", "shall", "can", "need", "dare", "ought", "used", "to",
-            "of", "in", "for", "on", "with", "at", "by", "from", "as", "into",
-            "through", "during", "before", "after", "above", "below", "between", "under",
-            "and", "but", "or", "yet", "so", "if", "because", "although", "though", "while",
-            "where", "when", "that", "which", "who", "whom", "whose", "what", "this", "these",
-            "those", "such", "no", "nor", "not", "only", "own", "same", "each", "few",
-            "more", "most", "other", "some", "very", "just", "now", "then", "here", "there",
-            "up", "down", "out", "off", "over", "again", "further", "once",
-        ];
-        for w in words {
-            set.insert(w.to_string());
-        }
-        set
-    };
-}
+static STOPWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
+        "may", "might", "must", "shall", "can", "need", "dare", "ought", "used", "to",
+        "of", "in", "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below", "between", "under",
+        "and", "but", "or", "yet", "so", "if", "because", "although", "though", "while",
+        "where", "when", "that", "which", "who", "whom", "whose", "what", "this", "these",
+        "those", "such", "no", "nor", "not", "only", "own", "same", "each", "few",
+        "more", "most", "other", "some", "very", "just", "now", "then", "here", "there",
+        "up", "down", "out", "off", "over", "again", "further", "once",
+    ]
+    .into_iter()
+    .collect()
+});
 
 /// A token with its original position in the text.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +45,7 @@ pub fn tokenize(text: &str) -> Vec<Token> {
             let byte_end = if j < char_count { chars[j].0 } else { text.len() };
             let word = &text[byte_start..byte_end];
             let lower = word.to_lowercase();
-            if !STOPWORDS.contains(&lower) {
+            if !STOPWORDS.contains(lower.as_str()) {
                 let stemmed = stem(&lower);
                 tokens.push(Token {
                     term: stemmed,

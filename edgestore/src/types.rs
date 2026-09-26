@@ -1,5 +1,4 @@
 use crate::error::EdgestoreError;
-use byteorder::{BigEndian, WriteBytesExt};
 use serde::{Deserialize, Serialize};
 
 /// Log sequence number (monotonically increasing per database).
@@ -139,7 +138,7 @@ pub(crate) fn death_time_for(write_time_nanos: i64, ttl: u32, cohort_window_secs
 pub fn encode_key(ns: &[u8], key: &[u8]) -> Vec<u8> {
     assert!(ns.len() <= u16::MAX as usize, "namespace too long");
     let mut buf = Vec::with_capacity(2 + ns.len() + key.len());
-    buf.write_u16::<BigEndian>(ns.len() as u16).unwrap();
+    buf.extend_from_slice(&(ns.len() as u16).to_be_bytes());
     buf.extend_from_slice(ns);
     buf.extend_from_slice(key);
     buf

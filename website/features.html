@@ -203,19 +203,20 @@ db.build_vector_index(<span class="string">b"embeddings"</span>, <span class="nu
           </ul>
         </div>
         <div class="code-block p-4">
-          <pre><code><span class="comment">// Index a document</span>
-db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is fast and reliable"</span>)?;
+          <pre><code><span class="keyword">use</span> edgestore_text::TextIndex;
+<span class="keyword">use</span> std::collections::HashMap;
+
+<span class="keyword">let mut</span> text = TextIndex::new();
+
+<span class="comment">// Index a document</span>
+text.index_document(&<span class="keyword">mut</span> db, <span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is fast and reliable"</span>, HashMap::new())?;
+text.persist(&<span class="keyword">mut</span> db)?;
 
 <span class="comment">// Search with BM25 ranking</span>
-<span class="keyword">let</span> results = db.search_text(<span class="string">b"docs"</span>, <span class="string">"fast database"</span>, <span class="number">5</span>)?;
+<span class="keyword">let</span> results = text.search(&db, <span class="string">b"docs"</span>, <span class="string">"fast database"</span>, <span class="number">5</span>)?;
 <span class="keyword">for</span> hit <span class="keyword">in</span> results {
-    println!(<span class="string">"{} score={:.3}"</span>, hit.key, hit.score);
-}
-
-<span class="comment">// With facet filtering</span>
-<span class="keyword">let</span> opts = SearchOptions::new()
-    .with_facet(<span class="string">"category"</span>, <span class="string">"database"</span>);
-<span class="keyword">let</span> filtered = db.search_text(<span class="string">b"docs"</span>, <span class="string">"fast"</span>, <span class="number">5</span>)?;</code></pre>
+    println!(<span class="string">"{} score={:.3}"</span>, hit.doc_id, hit.score);
+}</code></pre>
         </div>
       </div>
     </section>
@@ -277,11 +278,16 @@ println!(<span class="string">"{} items, truncated={}"</span>, result.items.len(
           </ul>
         </div>
         <div class="code-block p-4">
-          <pre><code>db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>,
-    <span class="string">"The quick brown fox jumps over the lazy dog"</span>)?;
+          <pre><code><span class="keyword">use</span> edgestore_text::TextIndex;
+<span class="keyword">use</span> std::collections::HashMap;
 
-<span class="keyword">let</span> results = db.search_text_with_snippets(
-    <span class="string">b"docs"</span>, <span class="string">"fox"</span>, <span class="number">5</span>
+<span class="keyword">let mut</span> text = TextIndex::new();
+text.index_document(&<span class="keyword">mut</span> db, <span class="string">b"docs"</span>, <span class="string">b"doc1"</span>,
+    <span class="string">"The quick brown fox jumps over the lazy dog"</span>, HashMap::new())?;
+text.persist(&<span class="keyword">mut</span> db)?;
+
+<span class="keyword">let</span> results = text.search_with_snippets(
+    &db, <span class="string">b"docs"</span>, <span class="string">"fox"</span>, <span class="number">5</span>
 )?;
 
 <span class="keyword">for</span> r <span class="keyword">in</span> results {

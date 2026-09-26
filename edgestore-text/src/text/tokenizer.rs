@@ -19,12 +19,6 @@ impl Language {
         }
     }
 
-    fn stop_words_code(self) -> stop_words::LANGUAGE {
-        match self {
-            Language::English => stop_words::LANGUAGE::English,
-            Language::PortugueseBrazilian => stop_words::LANGUAGE::Portuguese,
-        }
-    }
 }
 
 static EN_STOPWORDS: LazyLock<HashSet<String>> =

@@ -35,11 +35,13 @@ EXTENDS Naturals, Sequences, FiniteSets, TLC
 CONSTANTS
     Keys,       \* the set of all possible keys (finite for model checking)
     Values,     \* the set of all possible values
-    MaxLsn      \* upper bound for model checking (prevents infinite state)
+    MaxLsn,     \* upper bound for model checking (prevents infinite state)
+    ABSENT      \* model value sentinel for missing entries (declared here so TLC
+                \* treats it as an uninterpreted atom, allowing type-safe = comparisons)
 
 VARIABLES
     wal,        \* sequence of [key, value, lsn, op] records
-    memtable,   \* function Key -> [value, lsn, op] | "absent"
+    memtable,   \* function Key -> [value, lsn, op] | ABSENT
     segments,   \* set of [entries: (Key -> [value, lsn, op]), min_lsn, max_lsn]
     flushed,    \* highest LSN confirmed durable in a segment (0 = none)
     lsn         \* current LSN counter
@@ -48,9 +50,9 @@ TypeOK ==
     /\ wal \in Seq([key: Keys, value: Values \cup {"tombstone"},
                     lsn: 1..MaxLsn, op: {"Put", "Delete"}])
     /\ \A k \in Keys :
-           memtable[k] \in [value: Values \cup {"tombstone"},
-                            lsn: 1..MaxLsn, op: {"Put", "Delete"}]
-           \/ memtable[k] = "absent"
+           memtable[k] = ABSENT
+           \/ memtable[k] \in [value: Values \cup {"tombstone"},
+                                lsn: 1..MaxLsn, op: {"Put", "Delete"}]
     /\ \A seg \in segments :
            /\ seg.min_lsn \in 0..MaxLsn
            /\ seg.max_lsn \in 0..MaxLsn
@@ -66,18 +68,18 @@ vars == <<wal, memtable, segments, flushed, lsn>>
 SegmentGet(k) ==
     \* Latest value across all segments (highest lsn wins)
     LET matching == {seg \in segments :
-                        seg.entries[k] /= "absent" /\
+                        seg.entries[k] /= ABSENT /\
                         seg.entries[k].op = "Put"}
     IN  IF matching = {}
-        THEN "absent"
+        THEN ABSENT
         ELSE LET best == CHOOSE seg \in matching :
                              \A other \in matching :
                                  seg.entries[k].lsn >= other.entries[k].lsn
              IN  best.entries[k].value
 
 LiveGet(k) ==
-    IF memtable[k] /= "absent"
-    THEN IF memtable[k].op = "Put" THEN memtable[k].value ELSE "absent"
+    IF memtable[k] /= ABSENT
+    THEN IF memtable[k].op = "Put" THEN memtable[k].value ELSE ABSENT
     ELSE SegmentGet(k)
 
 -----------------------------------------------------------------------------
@@ -85,7 +87,7 @@ LiveGet(k) ==
 
 Init ==
     /\ wal       = <<>>
-    /\ memtable  = [k \in Keys |-> "absent"]
+    /\ memtable  = [k \in Keys |-> ABSENT]
     /\ segments  = {}
     /\ flushed   = 0
     /\ lsn       = 0
@@ -114,20 +116,23 @@ Delete(k) ==
 (* Action: Flush — atomically write memtable to a new segment, then retire WAL *)
 
 \* A flush is safe only when:
-\*   (a) there is something to flush (memtable has at least one entry), AND
+\*   (a) there are unflushed writes (flushed < lsn), AND
 \*   (b) the segment write is atomic (modeled as an atomic TLA+ step)
-\* After the step succeeds, flushed advances to lsn and wal is cleared.
+\* After the step succeeds, flushed advances to lsn, wal is cleared, and the
+\* memtable is cleared (data now lives in the segment — mirrors flush_to_segments_inner
+\* calling self.memtable.clear() in the Rust implementation).
 
 Flush ==
-    /\ \E k \in Keys : memtable[k] /= "absent"     \* non-empty memtable
+    /\ flushed < lsn              \* unflushed writes exist; guarantees min_lsn <= max_lsn
     /\ LET new_seg == [entries  |-> memtable,
                         min_lsn |-> flushed + 1,
                         max_lsn |-> lsn]
        IN
        /\ segments' = segments \cup {new_seg}
        /\ flushed'  = lsn
-       /\ wal'      = <<>>                           \* WAL retired after segment durable
-       /\ UNCHANGED <<memtable, lsn>>
+       /\ wal'      = <<>>
+       /\ memtable' = [k \in Keys |-> ABSENT]       \* data moved to segment
+       /\ UNCHANGED lsn
 
 (*
   FlushSafety invariant (checked separately below):
@@ -149,9 +154,9 @@ Compact ==
            merged == [k \in Keys |->
                LET e1 == seg1.entries[k]
                    e2 == seg2.entries[k]
-               IN  IF e1 = "absent" /\ e2 = "absent" THEN "absent"
-                   ELSE IF e1 = "absent" THEN e2
-                   ELSE IF e2 = "absent" THEN e1
+               IN  IF e1 = ABSENT /\ e2 = ABSENT THEN ABSENT
+                   ELSE IF e1 = ABSENT THEN e2
+                   ELSE IF e2 = ABSENT THEN e1
                    ELSE IF e1.lsn >= e2.lsn THEN e1 ELSE e2]
            new_seg == [entries  |-> merged,
                         min_lsn |-> IF seg1.min_lsn < seg2.min_lsn
@@ -162,26 +167,19 @@ Compact ==
        /\ segments' = (segments \ {seg1, seg2}) \cup {new_seg}
        /\ UNCHANGED <<wal, memtable, flushed, lsn>>
 
-(* Action: Recover — replay WAL to rebuild memtable (simulates crash+restart) *)
+(* Action: Restart — combined crash+recovery cycle.
+   Models Engine::open: WAL is durable across crashes; recovery replays it
+   atomically. The intermediate "memtable wiped, not yet recovered" state is
+   never observable in the implementation — Engine::open either succeeds or
+   the engine is not running. Crash is not a standalone action here. *)
 
-\* On crash, memtable is lost but WAL is durable.
-\* Recovery replays every WAL record in order, rebuilding memtable.
-\* After recovery, memtable reflects exactly the WAL entries.
-
-Crash ==
-    \* Non-deterministically lose the memtable (simulates crash before flush)
-    /\ wal /= <<>>         \* there is a WAL to replay
-    /\ memtable' = [k \in Keys |-> "absent"]  \* memtable lost
-    /\ UNCHANGED <<wal, segments, flushed, lsn>>
-
-Recover ==
-    \* Replay WAL into fresh memtable (LWW: later records overwrite earlier)
+Restart ==
     /\ wal /= <<>>
     /\ LET replayed ==
                [k \in Keys |->
                    LET relevant == {i \in 1..Len(wal) : wal[i].key = k}
                    IN  IF relevant = {}
-                       THEN "absent"
+                       THEN ABSENT
                        ELSE LET best_i == CHOOSE i \in relevant :
                                     \A j \in relevant : wal[i].lsn >= wal[j].lsn
                             IN  [value |-> wal[best_i].value,
@@ -199,8 +197,7 @@ Next ==
     \/ \E k \in Keys : Delete(k)
     \/ Flush
     \/ Compact
-    \/ Crash
-    \/ Recover
+    \/ Restart
 
 Spec == Init /\ [][Next]_vars
 
@@ -216,25 +213,21 @@ NoDataLoss ==
         \* If the last WAL record for k is a Put, LiveGet must return its value.
         LET wal_records == {i \in 1..Len(wal) : wal[i].key = k}
             last_wal    == IF wal_records = {}
-                           THEN "absent"
+                           THEN ABSENT
                            ELSE LET i == CHOOSE j \in wal_records :
                                              \A m \in wal_records : wal[j].lsn >= wal[m].lsn
                                 IN  wal[i]
-        IN  last_wal /= "absent" /\ last_wal.op = "Put"
+        IN  last_wal /= ABSENT /\ last_wal.op = "Put"
             => LiveGet(k) = last_wal.value
 
 (*
-  2. FlushSafety: WAL is empty only when every LSN <= flushed is in a segment.
-     (Equivalently: we never lose data in the WAL→segment transition.)
+  2. FlushSafety: every WAL entry has LSN strictly greater than flushed.
+     Equivalently: WAL is only cleared AFTER the segment is durable and
+     flushed advances past the highest WAL LSN.
 *)
 FlushSafety ==
-    wal = <<>>
-    =>
-    \A k \in Keys :
-        memtable[k] /= "absent"
-        \/ \E seg \in segments : seg.entries[k] /= "absent"
-        \/ \* key was never written
-           ~\E seg \in segments : TRUE   \* vacuously true for never-written keys
+    \A i \in 1..Len(wal) :
+        wal[i].lsn > flushed
 
 (*
   3. LsnMonotonic: the LSN counter only increases.
@@ -251,7 +244,7 @@ LsnMonotonic ==
 SegmentLsnOrder ==
     \A seg \in segments :
         \A k \in Keys :
-            seg.entries[k] /= "absent"
+            seg.entries[k] /= ABSENT
             => /\ seg.entries[k].lsn >= seg.min_lsn
                /\ seg.entries[k].lsn <= seg.max_lsn
 

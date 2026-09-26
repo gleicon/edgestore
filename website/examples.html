@@ -213,25 +213,27 @@ std::thread::scope(|s| {
         <h3 class="text-lg font-semibold text-slate-900 mb-2">Full-Text Search</h3>
         <p class="text-slate-600 text-sm mb-4">Index documents, search with BM25 relevance, and filter by facets.</p>
         <div class="code-block p-4">
-          <pre><code><span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/text_demo"</span>))?;
+          <pre><code><span class="keyword">use</span> edgestore::{EdgestoreConfig, Engine};
+<span class="keyword">use</span> edgestore_text::TextIndex;
+<span class="keyword">use</span> std::collections::HashMap;
+
+<span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/text_demo"</span>))?;
+<span class="keyword">let mut</span> text = TextIndex::new();
 <span class="keyword">let</span> ns = <span class="string">b"articles"</span>;
 
 <span class="comment">// Index some documents</span>
-db.index_text(ns, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is a fast embedded database"</span>)?;
-db.index_text(ns, <span class="string">b"doc2"</span>, <span class="string">"RocksDB is an LSM tree database"</span>)?;
-db.index_text(ns, <span class="string">b"doc3"</span>, <span class="string">"SQLite is a lightweight SQL database"</span>)?;
+text.index_document(&<span class="keyword">mut</span> db, ns, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is a fast embedded database"</span>, HashMap::new())?;
+text.index_document(&<span class="keyword">mut</span> db, ns, <span class="string">b"doc2"</span>, <span class="string">"RocksDB is an LSM tree database"</span>, HashMap::new())?;
+text.index_document(&<span class="keyword">mut</span> db, ns, <span class="string">b"doc3"</span>, <span class="string">"SQLite is a lightweight SQL database"</span>, HashMap::new())?;
+text.persist(&<span class="keyword">mut</span> db)?;
 
 <span class="comment">// Search for "fast database"</span>
-<span class="keyword">let</span> hits = db.search_text(ns, <span class="string">"fast database"</span>, <span class="number">5</span>)?;
+<span class="keyword">let</span> hits = text.search(&db, ns, <span class="string">"fast database"</span>, <span class="number">5</span>)?;
 <span class="keyword">for</span> hit <span class="keyword">in</span> hits {
     println!(<span class="string">"{}  score={:.3}"</span>,
-        std::str::from_utf8(&hit.key)?, hit.score);
+        std::str::from_utf8(&hit.doc_id)?, hit.score);
 }
-<span class="comment">// Output: doc1 score=2.341  (matches both "fast" and "database")</span>
-
-<span class="comment">// Typo-tolerant search</span>
-<span class="keyword">let</span> hits = db.search_text(ns, <span class="string">"databse"</span>, <span class="number">5</span>)?;
-<span class="comment">// Still finds "database" documents via Levenshtein ≤ 1</span></code></pre>
+<span class="comment">// Output: doc1 score=2.341  (matches both "fast" and "database")</span></code></pre>
         </div>
       </div>
     </div>
@@ -461,15 +463,20 @@ println!(<span class="string">"got {} items, truncated={}"</span>, result.items.
         <h3 class="text-lg font-semibold text-slate-900 mb-2">Search Snippets for RAG</h3>
         <p class="text-slate-600 text-sm mb-4">Return context windows around matched terms. Pass snippets to an LLM as evidence without sending the full document.</p>
         <div class="code-block p-4">
-          <pre><code><span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/snippets_demo"</span>))?;
+          <pre><code><span class="keyword">use</span> edgestore_text::TextIndex;
+<span class="keyword">use</span> std::collections::HashMap;
+
+<span class="keyword">let mut</span> db = Engine::open(EdgestoreConfig::new(<span class="string">"/tmp/snippets_demo"</span>))?;
+<span class="keyword">let mut</span> text = TextIndex::new();
 <span class="keyword">let</span> ns = <span class="string">b"articles"</span>;
 
-db.index_text(ns, <span class="string">b"doc1"</span>,
-    <span class="string">"The quick brown fox jumps over the lazy dog near the river bank"</span>)?;
-db.index_text(ns, <span class="string">b"doc2"</span>,
-    <span class="string">"A fox and a hound became unlikely friends in the forest"</span>)?;
+text.index_document(&<span class="keyword">mut</span> db, ns, <span class="string">b"doc1"</span>,
+    <span class="string">"The quick brown fox jumps over the lazy dog near the river bank"</span>, HashMap::new())?;
+text.index_document(&<span class="keyword">mut</span> db, ns, <span class="string">b"doc2"</span>,
+    <span class="string">"A fox and a hound became unlikely friends in the forest"</span>, HashMap::new())?;
+text.persist(&<span class="keyword">mut</span> db)?;
 
-<span class="keyword">let</span> results = db.search_text_with_snippets(ns, <span class="string">"fox"</span>, <span class="number">5</span>)?;
+<span class="keyword">let</span> results = text.search_with_snippets(&db, ns, <span class="string">"fox"</span>, <span class="number">5</span>)?;
 
 <span class="keyword">for</span> r <span class="keyword">in</span> &results {
     println!(<span class="string">"doc={} score={:.3}"</span>, r.doc_id, r.score);

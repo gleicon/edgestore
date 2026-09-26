@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::error::EdgestoreError;
+use edgestore::EdgestoreError;
 use crate::text::bloom::BloomFilter;
 use crate::text::types::FacetValue;
 

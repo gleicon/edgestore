@@ -1,9 +1,9 @@
 [workspace]
-members = ["edgestore", "edgestore-cli", "edgestore-repl", "edgestore-tokio", "edgestore-tier"]
+members = ["edgestore", "edgestore-text", "edgestore-cli", "edgestore-repl", "edgestore-tokio", "edgestore-tier"]
 resolver = "2"
 
 [workspace.package]
-version = "1.9.0"
+version = "2.0.0"
 rust-version = "1.95.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"

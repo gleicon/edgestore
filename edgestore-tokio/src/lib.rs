@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use std::collections::HashMap;
-
 #[cfg(feature = "tier")]
 mod tiered;
 #[cfg(feature = "tier")]
@@ -14,8 +12,8 @@ use edgestore::{
     vector::distance::{distance, Metric},
     vector::search::VectorSearchResult,
     vector::types::{Dtype, VectorRecord},
-    EdgestoreConfig, EdgestoreError, Engine, FacetValue, ImportResult, MetricsSnapshot,
-    SearchOptions, SegmentRef, TextEngine, TextSearchResult, VectorEngine,
+    EdgestoreConfig, EdgestoreError, Engine, ImportResult, MetricsSnapshot,
+    SegmentRef, VectorEngine,
 };
 
 pub use edgestore::RangePage;
@@ -352,51 +350,6 @@ impl AsyncEngine {
         self.run_read(|e| e.export_manifest()).await
     }
 
-    /// Index a document for BM25 full-text search — lightweight write.
-    pub async fn index_text(
-        &self,
-        ns: &[u8],
-        key: &[u8],
-        text: &str,
-        facets: HashMap<String, FacetValue>,
-    ) -> Result<u64, EdgestoreError> {
-        let ns = ns.to_vec();
-        let key = key.to_vec();
-        let text = text.to_string();
-        self.run_write(move |e| e.index_text(&ns, &key, &text, facets)).await
-    }
-
-    /// BM25 search — heavy operation (scoring), runs on spawn_blocking.
-    pub async fn search_text(
-        &self,
-        ns: &[u8],
-        query: &str,
-        k: usize,
-    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        let ns = ns.to_vec();
-        let query = query.to_string();
-        self.run_read(move |e| e.search_text(&ns, &query, k)).await
-    }
-
-    /// BM25 search with facet filters / typo tolerance — heavy, runs on spawn_blocking.
-    pub async fn search_text_with_options(
-        &self,
-        ns: &[u8],
-        query: &str,
-        options: SearchOptions,
-    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        let ns = ns.to_vec();
-        let query = query.to_string();
-        self.run_read(move |e| e.search_text_with_options(&ns, &query, &options)).await
-    }
-
-    /// Remove a document from the text index — lightweight write.
-    pub async fn delete_text(&self, ns: &[u8], key: &[u8]) -> Result<u64, EdgestoreError> {
-        let ns = ns.to_vec();
-        let key = key.to_vec();
-        self.run_write(move |e| e.delete_text(&ns, &key)).await
-    }
-
     /// Get metrics snapshot.
     pub async fn metrics(&self) -> MetricsSnapshot {
         let inner = self.inner.clone();
@@ -469,55 +422,6 @@ mod tests {
         let manifest = engine.export_manifest().await.unwrap();
         assert_eq!(manifest.len(), 1);
         assert_eq!(manifest[0].segment_hash.to_vec(), meta.segment_hash);
-    }
-
-    #[tokio::test]
-    async fn test_async_index_and_search_text() {
-        let dir = TempDir::new().unwrap();
-        let engine = open_async_engine(&dir).await;
-
-        engine
-            .index_text(
-                b"ns",
-                b"doc1",
-                "segment compaction",
-                std::collections::HashMap::new(),
-            )
-            .await
-            .unwrap();
-        engine
-            .index_text(
-                b"ns",
-                b"doc2",
-                "database compaction",
-                std::collections::HashMap::new(),
-            )
-            .await
-            .unwrap();
-
-        let results = engine.search_text(b"ns", "segment", 10).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].doc_id, b"doc1");
-    }
-
-    #[tokio::test]
-    async fn test_async_delete_text_removes_from_search() {
-        let dir = TempDir::new().unwrap();
-        let engine = open_async_engine(&dir).await;
-
-        engine
-            .index_text(
-                b"ns",
-                b"doc1",
-                "segment compaction",
-                std::collections::HashMap::new(),
-            )
-            .await
-            .unwrap();
-        engine.delete_text(b"ns", b"doc1").await.unwrap();
-
-        let results = engine.search_text(b"ns", "segment", 10).await.unwrap();
-        assert!(results.is_empty());
     }
 
     #[tokio::test]

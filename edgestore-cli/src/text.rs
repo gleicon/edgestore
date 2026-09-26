@@ -1,5 +1,6 @@
 use clap::Parser;
 use edgestore::{EdgestoreConfig, Engine};
+use edgestore_text::TextIndex;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -19,15 +20,14 @@ pub struct TextSearch {
 }
 
 pub fn handle_text_search(cmd: TextSearch) -> Result<(), Box<dyn std::error::Error>> {
-    use edgestore::TextEngine;
-
     if !cmd.path.exists() {
         return Err(format!("Database path does not exist: {}", cmd.path.display()).into());
     }
     let config = EdgestoreConfig::new(&cmd.path);
     let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
-    let results = engine
-        .search_text(cmd.namespace.as_bytes(), &cmd.query, cmd.k)
+    let text = TextIndex::new();
+    let results = text
+        .search(&engine, cmd.namespace.as_bytes(), &cmd.query, cmd.k)
         .map_err(|e| format!("Search failed: {}", e))?;
     if results.is_empty() {
         println!("No matching documents found for query: '{}'", cmd.query);

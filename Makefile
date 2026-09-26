@@ -5,6 +5,7 @@
 .PHONY: tag tag-force tags-push publish publish-dryrun release
 .PHONY: bump-patch bump-minor bump-major
 .PHONY: s3-test s3-up s3-down
+.PHONY: tla tla-full tla-setup
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
@@ -15,7 +16,7 @@ VERSION ?= $(shell grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
 GIT_TAG := v$(VERSION)
 
 # Crates in dependency order (publish from root to leaves)
-CRATES := edgestore edgestore-repl edgestore-tier edgestore-tokio edgestore-cli
+CRATES := edgestore edgestore-text edgestore-repl edgestore-tier edgestore-tokio edgestore-cli
 
 # ── Default ─────────────────────────────────────────────────────────────────
 
@@ -251,3 +252,36 @@ release: test tag publish
 	@echo "EdgeStore $(VERSION) released!"
 	@echo "Tag: $(GIT_TAG)"
 	@echo "Crates: $(CRATES)"
+
+# ── TLA+ model checking ───────────────────────────────────────────────────────
+
+TLA_JAR := tla2tools.jar
+TLA_URL := https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+TLA_SPEC := edgestore.tla
+TLA_CFG  := edgestore.cfg
+
+tla-setup:
+	@if [ -f $(TLA_JAR) ]; then \
+		echo "$(TLA_JAR) already present — skipping download."; \
+	else \
+		echo "TLA+ Tools jar not found at $(TLA_JAR)."; \
+		printf "Download it now from GitHub? [y/N] "; \
+		read ans; \
+		case "$$ans" in \
+			[yY]*) \
+				echo "Downloading $(TLA_JAR)..."; \
+				curl -fsSL -o $(TLA_JAR) $(TLA_URL) && echo "Done." || \
+					{ echo "Download failed. Get it manually from:"; echo "  $(TLA_URL)"; exit 1; } ;; \
+			*) \
+				echo "Skipped. Place $(TLA_JAR) in this directory to use 'make tla'."; \
+				exit 1 ;; \
+		esac; \
+	fi
+
+tla: tla-setup
+	@echo "Running TLC smoke check (2 keys, MaxLsn=4 — completes in seconds)..."
+	java -jar $(TLA_JAR) -workers auto -deadlock -config edgestore_quick.cfg $(TLA_SPEC)
+
+tla-full: tla-setup
+	@echo "Running TLC exhaustive check (3 keys, MaxLsn=8 — may take hours)..."
+	java -jar $(TLA_JAR) -workers auto -deadlock -config $(TLA_CFG) $(TLA_SPEC)

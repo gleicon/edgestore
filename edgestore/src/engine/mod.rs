@@ -13,14 +13,8 @@ use crate::types::{
 use crate::vector::hnsw::HnswIndex;
 use crate::wal::WalWriter;
 
-use crate::text::index::InvertedIndex;
-use crate::text::tokenizer::tokenize;
-
-pub(crate) const TEXT_INDEX_KEY: &[u8] = b"__index__";
-
 pub(crate) mod replication;
 pub(crate) mod vector;
-pub(crate) mod text;
 
 fn next_wal_path(db_path: &Path, lsn: Lsn) -> PathBuf {
     db_path.join(format!("wal-{:016x}.log", lsn))
@@ -124,10 +118,6 @@ pub struct Engine {
     write_token: u64,
     pub(crate) metrics: EngineMetrics,
     pub(crate) vector_indices: std::sync::RwLock<HashMap<Vec<u8>, std::sync::Arc<HnswIndex>>>,
-    /// In-memory cache of deserialized text indexes per namespace.
-    /// Warmed on write (index_text / delete_text); read-only searches fall back to disk
-    /// because TextEngine::search takes &self. Still O(1) single-record deserialize.
-    pub(crate) text_indices: HashMap<Vec<u8>, crate::text::index::InvertedIndex>,
     /// Optional callback fired after every successful segment flush (both explicit
     /// and auto-triggered). Receives the new segment's metadata. Use to wake a
     /// replication loop, update metrics, or trigger downstream processing.
@@ -190,7 +180,7 @@ impl Engine {
 
         let write_token = Self::load_write_token_from_path(&config.path)?;
 
-        let mut engine = Engine {
+        let engine = Engine {
             config,
             wal,
             memtable,
@@ -201,17 +191,9 @@ impl Engine {
             snapshot_registry: crate::snapshot::SnapshotRegistry::new(),
             metrics: EngineMetrics::new(),
             vector_indices: std::sync::RwLock::new(HashMap::new()),
-            text_indices: HashMap::new(),
             on_segment_flushed: None,
             write_token,
         };
-
-        // Rebuild any text indices that are missing their merged index sidecar.
-        // Raw text records are durable (WAL-backed), but the merged inverted index
-        // is only persisted on flush() / drop. After a crash, rebuild from raw records.
-        if let Err(e) = engine.rebuild_text_indices() {
-            log::warn!("Failed to rebuild text indices on open: {}", e);
-        }
 
         Ok(engine)
     }
@@ -262,6 +244,14 @@ impl Engine {
             .unwrap_or(0)
     }
 
+    /// Current LSN counter — the LSN that will be assigned to the next write.
+    ///
+    /// Monotonically increasing. Corresponds to `lsn` in `edgestore.tla`. Use
+    /// `confirmed_lsn` for the highest LSN durably stored in a segment.
+    pub fn current_lsn(&self) -> u64 {
+        self.lsn_counter
+    }
+
     /// Current write token.
     ///
     /// A monotonically increasing u64 that survives restarts.  When a replica is
@@ -310,84 +300,6 @@ impl Engine {
             .unwrap()
             .get(ns)
             .map(|idx| idx.nodes.len() as u64)
-    }
-
-    /// Scan all text namespaces and rebuild merged indices from raw records
-    /// when the merged index sidecar (`__index__`) is missing.
-    fn rebuild_text_indices(&mut self) -> Result<(), EdgestoreError> {
-        // Collect all text namespaces by scanning for the synthetic prefix.
-        // A text namespace key looks like: __text__{user_ns} / {doc_key}
-        let all = self.prefix_inner(b"", b"__text__")?;
-
-        type KeyValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
-        let mut namespaces: HashMap<Vec<u8>, KeyValuePairs> = HashMap::new();
-        for (full_key, value) in all {
-            // Decode the namespace from the full key
-            if let Ok((ns, key)) = decode_key(&full_key) {
-                if ns.starts_with(b"__text__") {
-                    namespaces.entry(ns).or_default().push((key, value));
-                }
-            }
-        }
-
-        for (text_ns, entries) in namespaces {
-            // Check if merged index exists and is fresh (sidecar_lsn >= current max lsn).
-            // sidecar_lsn == 0 means "unknown / v1 sidecar" — treat as stale and rebuild.
-            if let Some(bytes) = self.get(&text_ns, TEXT_INDEX_KEY)? {
-                if let Ok(index) = InvertedIndex::deserialize(&bytes) {
-                    if index.sidecar_lsn >= self.lsn_counter {
-                        self.text_indices.insert(text_ns, index);
-                        continue;
-                    }
-                    // sidecar is stale — fall through to rebuild
-                }
-            }
-
-            // Rebuild merged index from raw records
-            let mut index = InvertedIndex::new();
-            for (key, val_bytes) in entries {
-                if key == TEXT_INDEX_KEY {
-                    continue; // skip the merged index entry itself
-                }
-                if let Some(record) = crate::text::types::decode_text_record(&val_bytes) {
-                    let tokens = tokenize(&record.text, self.config.text_language);
-                    let doc_len = tokens.len() as u32;
-                    index.add_document(key, &tokens, doc_len, record.facets);
-                }
-            }
-
-            if index.total_docs > 0 {
-                let index_bytes = index.serialize();
-                let lsn = self.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
-                index.sidecar_lsn = lsn;
-                self.text_indices.insert(text_ns, index);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Persist all in-memory text indices to disk.
-    pub(crate) fn persist_text_indices(&mut self) -> Result<(), EdgestoreError> {
-        // Serialise first (immutable borrow of text_indices), then write
-        // (which borrows self mutably via put), then update sidecar_lsn —
-        // three phases to satisfy the borrow checker.
-        let to_persist: Vec<(Vec<u8>, Vec<u8>)> = self
-            .text_indices
-            .iter()
-            .map(|(ns, index)| (ns.clone(), index.serialize()))
-            .collect();
-        let mut lsns: Vec<(Vec<u8>, u64)> = Vec::with_capacity(to_persist.len());
-        for (ns, bytes) in to_persist {
-            let lsn = self.put(&ns, TEXT_INDEX_KEY, &bytes)?;
-            lsns.push((ns, lsn));
-        }
-        for (ns, lsn) in lsns {
-            if let Some(index) = self.text_indices.get_mut(&ns) {
-                index.sidecar_lsn = lsn;
-            }
-        }
-        Ok(())
     }
 
     pub(crate) fn now_nanos() -> i64 {
@@ -754,13 +666,8 @@ impl Engine {
         r
     }
 
-    /// fsync the current WAL file and persist text indices.
-    ///
-    /// Text indices are kept in memory and only written to disk on flush
-    /// or when the engine is dropped. Call flush() before closing to ensure
-    /// text search indexes are durable.
+    /// fsync the current WAL file.
     pub fn flush(&mut self) -> Result<(), EdgestoreError> {
-        self.persist_text_indices()?;
         self.wal.fsync()
     }
 
@@ -1489,11 +1396,6 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        if let Err(e) = self.persist_text_indices() {
-            log::warn!("Failed to persist text indices on drop: {}", e);
-        }
-        // fsync WAL so in-flight writes are durable on clean shutdown.
-        // Errors are not propagable from Drop; log and continue.
         if let Err(e) = self.wal.fsync() {
             log::warn!("Failed to fsync WAL on drop: {}", e);
         }

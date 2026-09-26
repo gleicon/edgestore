@@ -41,12 +41,14 @@ For a rich documentation site with feature guides and paper references, open [`w
 **Use a single `Engine` instance per process.** KV, vector, and text search share one WAL, one lock file, one flush timer, and one replication target. Namespaces provide zero-overhead isolation.
 
 ```rust
-use edgestore::{EdgestoreConfig, Engine, VectorEngine, TextEngine};
+use edgestore::{EdgestoreConfig, Engine, VectorEngine};
 use edgestore::vector::types::Dtype;
 use edgestore::vector::distance::Metric;
+use edgestore_text::TextIndex;
 use std::collections::HashMap;
 
 let mut engine = Engine::open(EdgestoreConfig::new("/var/db"))?;
+let mut text = TextIndex::new();
 
 // KV — namespace: b"products"
 engine.put(b"products", b"p1", b"{\"name\":\"Widget A\"}")?;
@@ -54,8 +56,9 @@ engine.put(b"products", b"p1", b"{\"name\":\"Widget A\"}")?;
 // Vectors — same user namespace, isolated internally under __vec__products
 engine.vector_put(b"products", b"p1", 4, Dtype::F32, &embed_bytes)?;
 
-// Text — same user namespace, isolated internally under __text__products
-engine.index_text(b"products", b"p1", "compact widget a", HashMap::new())?;
+// Full-text — via edgestore-text (BM25, multilingual stemming)
+text.index_document(&mut engine, b"products", b"p1", "compact widget a", HashMap::new())?;
+text.persist(&mut engine)?; // write inverted index sidecar to WAL
 
 // One flush, one segment, one replication target.
 engine.flush_to_segments()?;
@@ -100,10 +103,11 @@ EdgeStore is a Cargo workspace. Most users need only the first crate.
 
 | I want... | Crate | Add to `Cargo.toml` |
 |-----------|-------|---------------------|
-| A local embedded database (sync, no network deps) | `edgestore` | `edgestore = "1.0"` |
-| The same, but async in a Tokio app | `edgestore` + `edgestore-tokio` | `edgestore-tokio = "1.0"` |
-| Replication between nodes via HTTP or S3 | `edgestore-repl` | `edgestore-repl = "1.0"` |
-| Dataset exceeds local disk, need S3 read-through | `edgestore-tier` | `edgestore-tier = "1.0"` |
+| A local embedded database (sync, no network deps) | `edgestore` | `edgestore = "2.0"` |
+| Full-text search (BM25, multilingual) | `edgestore-text` | `edgestore-text = "2.0"` |
+| The same, but async in a Tokio app | `edgestore` + `edgestore-tokio` | `edgestore-tokio = "2.0"` |
+| Replication between nodes via HTTP or S3 | `edgestore-repl` | `edgestore-repl = "2.0"` |
+| Dataset exceeds local disk, need S3 read-through | `edgestore-tier` | `edgestore-tier = "2.0"` |
 | An admin command-line tool | `edgestore-cli` | `cargo install edgestore-cli` |
 
 **`edgestore-repl` is optional.** The core `edgestore` crate has zero network
@@ -114,7 +118,8 @@ and call directly — no daemon, no port binding, no server process.
 
 | Crate | Scope |
 |-------|-------|
-| **`edgestore`** | Core engine: `Engine`, WAL, `SegmentStore`, `Compactor`, vector search, full-text search. Pure sync. |
+| **`edgestore`** | Core engine: `Engine`, WAL, `SegmentStore`, `Compactor`, vector search. Pure sync. Zero NLP deps. |
+| **`edgestore-text`** | Full-text search: `TextIndex` with BM25 ranking, multilingual Snowball stemming, stopwords, facets. |
 | **`edgestore-tokio`** | Thin async wrapper. Every call runs inside `tokio::task::spawn_blocking`. No storage logic duplicated. |
 | **`edgestore-repl`** | Replication transport: HTTP client/server, anti-entropy loop, `RemoteStore` implementations (filesystem, S3). |
 | **`edgestore-tier`** | Tiered storage: local hot cache + transparent read-through to S3 cold archive. Optional — only if your data exceeds local disk. |
@@ -132,7 +137,7 @@ and call directly — no daemon, no port binding, no server process.
 | **Snapshots** | `edgestore` | ✅ v1.0 | RAII point-in-time reads |
 | **Vector search** (flat SIMD) | `edgestore` | ✅ v1.0 | Cosine, dot, euclidean; f32/f16/i8 |
 | **HNSW index** | `edgestore` | ✅ v1.0 | Approximate search for large collections |
-| **Full-text search** (BM25) | `edgestore` | ✅ v1.0 | Tokenization, faceting, typo tolerance |
+| **Full-text search** (BM25) | `edgestore-text` | ✅ v2.0 | `TextIndex`: multilingual Snowball + stopwords, facets, snippets |
 | **Replication** (Merkle delta sync) | `edgestore-repl` | ✅ v1.0 | Transport-agnostic; HTTP + S3 backends |
 | **S3 cold storage** | `edgestore-repl` | ✅ v1.0 | Archive + replication mailbox (`s3` feature) |
 | **Tiered storage** (local + S3 read-through) | `edgestore-tier` | ✅ v1.1 | Transparent fallback to S3 on cache miss |

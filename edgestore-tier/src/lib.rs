@@ -883,7 +883,6 @@ fn merge_local_wins(local: KvPairs, archived: KvPairs) -> KvPairs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgestore::TextEngine;
     use edgestore_repl::FilesystemRemoteStore;
     use tempfile::TempDir;
 
@@ -1814,17 +1813,10 @@ mod tests {
     fn test_strip_text_index_removes_text_records() {
         let (local_dir, _remote_dir, mut tiered) = make_tiered();
 
-        // Index a text document and a regular KV record in the same segment.
+        // Write a KV record and a raw text record (under the __text__ namespace)
+        // to the same segment, so strip_text_index has something to strip.
         tiered.put(b"ns", b"kv-key", b"kv-value").unwrap();
-        tiered
-            .local_mut()
-            .index_text(
-                b"docs",
-                b"doc1",
-                "hello world",
-                std::collections::HashMap::new(),
-            )
-            .unwrap();
+        tiered.local_mut().put(b"__text__docs", b"doc1", b"raw text record").unwrap();
         tiered.local_mut().flush_to_segments().unwrap();
 
         let metas = tiered.local().list_segment_metas();
@@ -1853,15 +1845,7 @@ mod tests {
         let mut tiered = TieredEngine::new(tiered.local, tiered.remote).with_text_stripping(true);
 
         tiered.put(b"ns", b"kv", b"value").unwrap();
-        tiered
-            .local_mut()
-            .index_text(
-                b"docs",
-                b"doc1",
-                "some text",
-                std::collections::HashMap::new(),
-            )
-            .unwrap();
+        tiered.local_mut().put(b"__text__docs", b"doc1", b"raw text record").unwrap();
         tiered.local_mut().flush_to_segments().unwrap();
 
         let metas = tiered.local().list_segment_metas();

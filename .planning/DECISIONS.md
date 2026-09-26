@@ -259,7 +259,7 @@ pub trait RemoteStore: Send + Sync {
 
 **Rationale:** Text index entries commingle with user records in ordinary segments. Once a segment is archived, there is no mechanism to GC the index weight from local storage without a rewrite. Auto-stripping after archive is the lifecycle hook tiered deployments need.
 
-**Implication:** Stripped segments cannot contribute to `rebuild_text_indices()` after a crash-recovery cycle. Tiered deployments that need crash-safe text index reconstruction should NOT enable text stripping, or must re-index from source data after recovery.
+**Implication:** Stripped segments cannot contribute to `TextIndex` recovery in `edgestore-text`. Tiered deployments that need crash-safe text index reconstruction should NOT enable text stripping, or must re-index from source data via `TextIndex::index_document` after recovery.
 
 ---
 
@@ -275,7 +275,7 @@ pub trait RemoteStore: Send + Sync {
 
 ## D26 — Drop impl: WAL fsync only, no flush_to_segments
 
-**Decision:** `Engine::Drop` calls `persist_text_indices()` then `wal.fsync()` only. No `flush_to_segments()` on drop.
+**Decision:** `Engine::Drop` calls `wal.fsync()` only. No `flush_to_segments()` on drop.
 
 **Rationale:** `flush_to_segments` can fail silently on drop and may discard partial data. WAL replay covers recovery on next open. Caller decides when to segment-flush.
 

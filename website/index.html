@@ -123,9 +123,9 @@ db.put(<span class="string">b"default"</span>, <span class="string">b"hello"</sp
 db.vector_put(<span class="string">b"vec"</span>, <span class="string">b"doc1"</span>, <span class="number">128</span>, <span class="type">Dtype::F32</span>, &vector_data)?;
 <span class="keyword">let</span> results = db.vector_search(<span class="string">b"vec"</span>, &query, <span class="number">10</span>, <span class="type">Metric::Cosine</span>)?;
 
-<span class="comment">// Full-text search</span>
-db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is fast"</span>)?;
-<span class="keyword">let</span> hits = db.search_text(<span class="string">b"docs"</span>, <span class="string">"fast database"</span>, <span class="number">5</span>)?;</code></pre>
+<span class="comment">// Full-text search (edgestore-text)</span>
+text.index_document(&<span class="keyword">mut</span> db, <span class="string">b"docs"</span>, <span class="string">b"doc1"</span>, <span class="string">"EdgeStore is fast"</span>, HashMap::new())?;
+<span class="keyword">let</span> hits = text.search(&db, <span class="string">b"docs"</span>, <span class="string">"fast database"</span>, <span class="number">5</span>)?;</code></pre>
           </div>
         </div>
       </div>
@@ -138,15 +138,14 @@ db.index_text(<span class="string">b"docs"</span>, <span class="string">b"doc1"<
       <div class="bg-edge-50 rounded-xl border border-edge-200 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center space-x-2 mb-2">
-            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v1.6.0</span>
-            <span class="text-sm text-slate-600 font-medium">2026-07-25</span>
+            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v2.0.0</span>
+            <span class="text-sm text-slate-600 font-medium">2026-09-26</span>
           </div>
-          <h3 class="font-semibold text-slate-900">Cost accounting, bounded scans, search snippets, vector index stripping</h3>
+          <h3 class="font-semibold text-slate-900">Breaking: full-text search extracted to <code>edgestore-text</code>, TLA+ formal spec, paged vector scans</h3>
           <p class="text-sm text-slate-600 mt-1">
-            New <code>_with_stats</code> variants on every read API return a <code>QueryStats</code> struct (segments scanned, bytes scanned, items examined) — ideal for agent loops and quota enforcement.
-            <code>range_budgeted</code> / <code>prefix_budgeted</code> accept a <code>ScanBudget</code> and stop early, returning a <code>BudgetedScan</code> with a continuation token.
-            <code>search_text_with_snippets</code> returns context windows around matched terms for RAG / highlight display.
-            <code>strip_vector_index</code> and <code>with_vector_stripping</code> in <code>edgestore-tier</code> reclaim local disk when vector data is archived to S3.
+            <code>TextEngine</code> has been removed from the core crate and replaced by <code>TextIndex</code> in the new <code>edgestore-text</code> crate — BM25 and all NLP dependencies are now opt-in.
+            <code>VectorPage</code> enables cooperative async paged flat scans for large vector collections.
+            A TLA+ formal spec (<code>edgestore.tla</code>) validates WAL, memtable, flush, and crash-recovery invariants with TLC model checking.
           </p>
         </div>
         <a href="https://github.com/gleicon/edgestore/blob/main/CHANGELOG.md" class="px-4 py-2 bg-white border border-edge-300 text-edge-700 rounded-lg font-medium hover:bg-edge-50 transition text-sm whitespace-nowrap">Read Changelog</a>

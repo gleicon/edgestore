@@ -45,8 +45,6 @@ pub mod replication;
 pub mod snapshot;
 /// Pluggable storage backend trait.
 pub mod storage_backend;
-/// Full-text search index and engine.
-pub mod text;
 /// Core types (Lsn, SegmentMeta, Compression, etc.).
 pub mod types;
 
@@ -82,14 +80,6 @@ pub use snapshot::{Snapshot, SnapshotRegistry};
 pub use storage_backend::{
     DefaultStorageBackend, MemoryStorageBackend, PlacementHint, StorageBackend,
 };
-pub use text::engine::{
-    text_namespace, SearchOptions, Snippet, SnippetResult, TextEngine, TextSearchResult,
-};
-pub use text::facet::{filter_by_facets, FacetFilter};
-pub use text::index::{bm25_score, score_document, InvertedIndex, Posting};
-pub use text::tokenizer::{tokenize, Language, Token};
-pub use text::types::{decode_text_record, FacetValue};
-pub use text::typo::{is_one_edit_away, levenshtein};
 pub use transaction::Transaction;
 pub use vector::api::{vector_namespace, VectorEngine};
 pub use vector::distance::{distance, distance_scalar, total_cmp_f32, Metric};

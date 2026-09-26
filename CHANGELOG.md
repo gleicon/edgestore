@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-09-26
+
+### Breaking
+
+- **`TextEngine` trait removed from `edgestore` core.** Full-text search lives in the new `edgestore-text` crate as `TextIndex`. Replace `use edgestore::TextEngine` with `use edgestore_text::TextIndex` and call `TextIndex::new()` / `text.index_document(&mut engine, ...)` / `text.search(&engine, ...)`. The core `edgestore` crate no longer depends on `rust-stemmers` or `stop-words`.
+- **`EdgestoreConfig::text_language` removed.** Pass `TextIndex::with_language(Language::PortugueseBrazilian)` instead.
+- **`Engine::flush()` docstring corrected.** No behavioral change.
+
+### Added
+
+- **`edgestore-text` crate** — `TextIndex` struct with BM25 ranking, multilingual Snowball stemming (English default, Portuguese/Brazilian), stopword filtering, facet search, snippet extraction. Takes `&mut Engine` / `&Engine` per call — does not own the engine.
+- **`Engine::current_lsn() -> u64`** — exposes the write LSN counter publicly (complements `confirmed_lsn`).
+- **TLA+ model checking** — `edgestore.tla` spec updated and validated. `make tla` runs a smoke check (14k states, <1s). `make tla-full` runs the exhaustive check. Config files: `edgestore.cfg`, `edgestore_quick.cfg`.
+- **`edgestore/tests/spec_invariants.rs`** — proptest-based tests encoding the four TLA+ invariants (`NoDataLoss`, `FlushSafety`, `LsnMonotonic`, `SegmentLsnOrder`) as property-based Rust tests.
+
+### Removed
+
+- `Engine::index_text`, `Engine::search_text`, `Engine::search_text_with_stats`, `Engine::search_text_with_snippets`, `Engine::delete_text`, `Engine::rebuild_text_indices`, `Engine::persist_text_indices` — all moved to `edgestore-text::TextIndex`.
+- `TextEngine` trait, `InvertedIndex`, `Posting`, `Token`, `tokenize`, `Language`, `FacetFilter`, `FacetValue`, `SearchOptions`, `Snippet`, `SnippetResult` — re-exported from `edgestore-text` instead of `edgestore`.
+- `edgestore/src/text/` directory — entire module tree moved to `edgestore-text/src/text/`.
+- `edgestore/tests/phase7_integration.rs` — superseded by `edgestore-text/tests/integration.rs`.
+
 ## [1.5.0] - 2026-07-25
 
 ## [1.6.0] - 2026-07-26

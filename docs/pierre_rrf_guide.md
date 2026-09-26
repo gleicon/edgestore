@@ -18,9 +18,10 @@ into the engine.
 ## Implementing RRF
 
 ```rust
-use edgestore::{Engine, EdgestoreConfig, TextEngine, VectorEngine};
+use edgestore::{Engine, EdgestoreConfig, VectorEngine};
 use edgestore::vector::distance::Metric;
 use edgestore::vector::types::{Dtype, VectorRecord};
+use edgestore_text::TextIndex;
 use std::collections::HashMap;
 
 /// Standard RRF constant. 60 is the conventional default from the original paper.
@@ -77,6 +78,7 @@ pub fn rrf_merge(
 ```rust
 fn hybrid_search(
     engine: &mut Engine,
+    text: &TextIndex,
     ns: &[u8],
     text_query: &str,
     vector_query: &VectorRecord,
@@ -85,8 +87,8 @@ fn hybrid_search(
     // Retrieve more than k from each index so fusion has room to rerank.
     let fetch_n = k * 3;
 
-    let text_hits = engine
-        .search_text(ns, text_query, fetch_n)
+    let text_hits = text
+        .search(engine, ns, text_query, fetch_n)
         .unwrap_or_default();
     let vec_hits = engine
         .vector_search(ns, vector_query, fetch_n, Metric::Cosine)
@@ -104,6 +106,7 @@ fn hybrid_search(
 ```rust
 fn hybrid_search_with_stats(
     engine: &mut Engine,
+    text: &TextIndex,
     ns: &[u8],
     text_query: &str,
     vector_query: &VectorRecord,
@@ -111,9 +114,11 @@ fn hybrid_search_with_stats(
 ) -> (Vec<HybridResult>, u64) { // (results, total_bytes_scanned)
     let fetch_n = k * 3;
 
-    let (text_hits, text_stats) = engine
-        .search_text_with_stats(ns, text_query, fetch_n)
-        .unwrap_or_default();
+    let (text_hits, text_stats) = {
+        let hits = text.search(engine, ns, text_query, fetch_n).unwrap_or_default();
+        // TextIndex::search does not yet expose stats; use zero as placeholder.
+        (hits, Default::default())
+    };
     let (vec_hits, vec_stats) = engine
         .vector_search_with_stats(ns, vector_query, fetch_n, Metric::Cosine)
         .unwrap_or_default();

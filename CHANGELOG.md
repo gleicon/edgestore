@@ -55,7 +55,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`search_text_with_snippets(ns, query, k, context_chars)` (ENG-11):** Returns `Vec<SnippetResult>` where each result carries the BM25 score and context windows around each matched term. Requires InvertedIndex v3 format (re-index after upgrading). Documents indexed under v1/v2 still appear in results with empty `snippets`. (`edgestore/src/engine.rs`, `edgestore/src/text/engine.rs`)
 
-- **Pierre guides (ENG-8/ENG-10):** `docs/pierre_rrf_guide.md` — caller-side Reciprocal Rank Fusion with edgestore's text and vector APIs, including a `hybrid_search_with_stats` example. `docs/pierre_template_guide.md` — log template extraction using `log:/tpl:/bind:` key namespaces, agent-compact output pattern, and compaction-time variant.
 
 ### Changed
 

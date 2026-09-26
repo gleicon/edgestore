@@ -203,8 +203,8 @@
           <p class="text-slate-600 text-sm mt-1">ANN / flat-scan search with byte and segment accounting.</p>
         </div>
         <div class="api-item p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">engine.search_text_with_stats(ns, query, k) -> Result&lt;(Vec&lt;TextSearchResult&gt;, QueryStats), EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">BM25 text search with cost reporting. Counts posting-list bytes read.</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">text.search(&amp;engine, ns, query, k) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">BM25 text search via <code>edgestore-text::TextIndex</code>. For cost accounting on the text path, combine with engine-level stats (segments scanned, bytes read) from surrounding KV operations.</p>
         </div>
       </div>
     </section>

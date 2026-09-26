@@ -396,13 +396,18 @@ db.vector_search(namespace, query: &[f32], k: usize, metric: Metric) -> Result<V
 
 Supported metrics: cosine, dot product, euclidean.
 
-## Later API (v2+)
+## Text Search API (v2, edgestore-text)
+
+Full-text search is in the `edgestore-text` crate as `TextIndex`:
 
 ```
-db.search(namespace, query) -> full-text search results
-db.index_text(namespace, key, text)
-CREATE TABLE / INSERT / SELECT (SQL layer or SQLite virtual table)
+text.index_document(&mut engine, namespace, key, text, facets)
+text.search(&engine, namespace, query, k) -> Vec<TextSearchResult>
+text.search_with_snippets(&engine, namespace, query, k) -> Vec<SnippetResult>
+text.persist(&mut engine)
 ```
+
+SQL layer (CREATE TABLE / INSERT / SELECT) is not yet implemented.
 
 ---
 
@@ -706,12 +711,12 @@ Verify convergence and durability.
 - HNSW index for vector search
 - `edgestore-tokio` async wrapper crate
 
-## Milestone 7 — Full-text search (v2)
+## Milestone 7 — Full-text search (v2, edgestore-text)
 
-- Tokenizer + stemmer pipeline
+- Tokenizer + Snowball stemmer pipeline
 - Inverted index (BM25, postings compression)
-- Per-segment posting lists merged during compaction
-- `db.index_text` / `db.search` API
+- Single merged inverted index per namespace, incremental update
+- `TextIndex::index_document` / `TextIndex::search` API (`edgestore-text` crate)
 
 ---
 

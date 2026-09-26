@@ -110,7 +110,7 @@ make publish-dryrun  # Verify without publishing
 | Error | `EdgestoreError` | All error variants |
 | Transaction | `Transaction` | Multi-record atomic batch |
 | Vector | `VectorEngine` trait, `VectorRecord`, `Dtype`, `Metric` | Vector storage & search |
-| Text | `TextEngine` trait, `TextSearchResult`, `SearchOptions` | Full-text search |
+| Text | `edgestore_text::TextIndex`, `TextSearchResult`, `SearchOptions` | Full-text search (edgestore-text crate) |
 | Snapshot | `Snapshot`, `SnapshotRegistry` | Point-in-time reads |
 | Replication | `ReplicationProtocol`, `HostId`, `SegmentRef` | Pull-only sync |
 | Storage | `StorageBackend`, `DefaultStorageBackend`, `MemoryStorageBackend` | Pluggable I/O |

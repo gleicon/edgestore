@@ -235,7 +235,7 @@ text.persist(&<span class="keyword">mut</span> db)?;
           <ul class="list-disc pl-5 space-y-1 mt-3">
             <li><strong>get_with_stats</strong> — point lookup + <code>QueryStats{segments_scanned, bytes_scanned, items_examined}</code></li>
             <li><strong>range_with_stats / prefix_with_stats</strong> — scan variants that count bytes as they iterate</li>
-            <li><strong>vector_search_with_stats / search_text_with_stats</strong> — same for ANN and BM25 paths</li>
+            <li><strong>vector_search_with_stats</strong> — same for ANN paths</li>
             <li><strong>range_budgeted / prefix_budgeted</strong> — accept a <code>ScanBudget{max_items, max_bytes}</code> and stop early, returning a <code>BudgetedScan{items, truncated}</code></li>
           </ul>
         </div>
@@ -269,7 +269,7 @@ println!(<span class="string">"{} items, truncated={}"</span>, result.items.len(
       </div>
       <div class="grid lg:grid-cols-2 gap-8">
         <div class="prose text-slate-600">
-          <p><code>search_text_with_snippets</code> returns <code>SnippetResult</code> values that bundle a document ID, BM25 score, and a list of <code>Snippet</code> objects — each with a context window around every matched term. The tokenizer now records exact character offsets so context windows align precisely with the original text.</p>
+          <p><code>text.search_with_snippets</code> returns <code>SnippetResult</code> values that bundle a document ID, BM25 score, and a list of <code>Snippet</code> objects — each with a context window around every matched term. The tokenizer records exact character offsets so context windows align precisely with the original text.</p>
           <ul class="list-disc pl-5 space-y-1 mt-3">
             <li><strong>SnippetResult</strong> — <code>{doc_id, score, snippets: Vec&lt;Snippet&gt;}</code></li>
             <li><strong>Snippet</strong> — <code>{term, span, context_start, context_end}</code> where <code>span</code> is the matched text</li>

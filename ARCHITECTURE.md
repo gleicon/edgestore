@@ -24,8 +24,8 @@ For the full technical specification, see [`prod.md`](../prod.md).
 │                              Application                                 │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐ │
 │  │   KV API    │  │ Vector API  │  │  Text API   │  │ Replication    │ │
-│  │  put / get  │  │ vector_put  │  │ index_text  │  │ compare_merkle │ │
-│  │  range / tx │  │ vector_get  │  │  search     │  │ import_segment │ │
+│  │  put / get  │  │ vector_put  │  │ TextIndex   │  │ compare_merkle │ │
+│  │  range / tx │  │ vector_get  │  │  (ext crate)│  │ import_segment │ │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └───────┬────────┘ │
 └─────────┼────────────────┼────────────────┼───────────────────┼──────────┘
           │                │                │                   │
@@ -130,12 +130,13 @@ into the KV value. Search supports flat SIMD scan (cosine, dot, euclidean) and
 HNSW approximate search for large collections. Removing the vector module does
 not break KV compilation or tests.
 
-### TextIndex / TextEngine
-Full-text search API (v2) layered on KV. Tokenization produces posting lists
-stored in a single merged inverted index per namespace (key `__index__` in the
-synthetic text namespace). `index_text` incrementally updates this merged index
-(read-modify-write). `search_text` reads the single merged index directly —
-O(1) deserialize, not O(N) per-document micro-index merging. BM25 scoring,
+### TextIndex (`edgestore-text`)
+Full-text search lives in the `edgestore-text` crate as `TextIndex`. Tokenization
+produces posting lists stored in a single merged inverted index per namespace
+(key `__text_index__` in the synthetic `__text__{ns}` namespace). `index_document`
+incrementally updates this merged index (read-modify-write); `persist` writes it to
+the engine WAL. `search` reads the merged index directly — O(1) deserialize, not
+O(N) per-document micro-index merging. BM25 scoring, multilingual Snowball stemming,
 faceting, and typo-tolerant search (1-edit Levenshtein) are supported. The merged
 index is a regular KV record, so compaction handles it naturally.
 

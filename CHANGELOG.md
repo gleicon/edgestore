@@ -7,11 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-26
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
 ### Added
 
 - **`Engine::wal_segment_count() -> usize`** — number of WAL files currently on disk. A value above a few dozen indicates `flush_to_segments` is not being called often enough for the write rate.
 - **`Engine::pending_wal_bytes() -> u64`** — bytes written to the active WAL file. Combine with `wal_segment_count` to estimate total unflushed WAL pressure.
 - **WAL flush documentation.** README now explains when to call `flush_to_segments` explicitly, with sync and async (Tokio) background-timer patterns.
+- **`TextIndex`: WAL reconstruction fallback.** `search`, `search_with_options`, and `search_with_stats` now rebuild the in-memory index from raw WAL records when neither the in-memory cache nor the persisted sidecar is present (post-crash cold start). This makes `persist()` a startup optimisation rather than a crash-safety requirement. A `persist()` call after the first search writes the sidecar and avoids repeated WAL scans on subsequent searches.
+- **`TextIndex::search_with_stats`** — returns `(Vec<TextSearchResult>, TextSearchStats)` with `total_docs_indexed`, `docs_examined`, and `bytes_scanned`. A result where `docs_examined == 0` and `total_docs_indexed > 0` means query terms are absent from the corpus (not an unbuilt index).
+- **`TextIndex` dirty tracking** — `persist()` only serialises namespaces that changed since the last call; repeated `persist()` calls with no intervening mutations are no-ops.
 
 ---
 

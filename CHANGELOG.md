@@ -9,17 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.2] - 2026-09-27
 
-### Added
+### Breaking
 
-### Changed
-
-### Deprecated
-
-### Removed
+- **`TextIndex` search methods now take `&mut self`**: `search`, `search_with_options`, `search_with_stats`, and `search_with_snippets` require a mutable binder (`let mut text = TextIndex::new()`). This allows WAL-reconstruction results to be cached in `self.indices` so subsequent same-process searches are fast.
 
 ### Fixed
 
-### Security
+- **`TextIndex` stale-sidecar correctness**: `search` and `index_document` on cold start now always rebuild from WAL records (`engine.prefix`) rather than reading the sidecar. The sidecar may be stale after a crash-before-persist or an `index_document` call after crash, which previously caused missing results or missing docs in the index state. The rebuilt index is cached in `self.indices` so the O(n) WAL scan runs at most once per namespace per `TextIndex` lifetime.
+
+### Added
+
+- **`edgestore-text/tests/spec_invariants.rs`** — two proptest cross-checks for the `TextSearchConsistency` invariant (engine TLA+ scope note D38): `text_search_consistency` and `text_search_consistency_with_stats`. Both exercise random sequences of `IndexDoc`/`Persist`/`Flush`/`Crash` and verify every indexed doc is findable after any combination. Proptest found both stale-sidecar bugs during development.
+
+---
 
 ## [2.0.1] - 2026-09-26
 

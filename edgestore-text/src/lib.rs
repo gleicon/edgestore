@@ -33,7 +33,8 @@ use crate::text::types::{encode_text_record, TextRecord};
 pub use crate::text::{
     bm25_score, decode_text_record, filter_by_facets, is_one_edit_away, levenshtein,
     score_document, text_namespace, tokenize, FacetFilter, FacetValue, InvertedIndex,
-    Language, Posting, SearchOptions, Snippet, SnippetResult, TextSearchResult, Token,
+    Language, Posting, SearchOptions, Snippet, SnippetResult, TextSearchResult,
+    TextSearchStats, Token,
 };
 
 const TEXT_INDEX_KEY: &[u8] = b"__index__";
@@ -43,12 +44,21 @@ const TEXT_INDEX_KEY: &[u8] = b"__index__";
 /// Text records are stored in the engine under synthetic `__text__{ns}` namespaces.
 /// The inverted index is cached in memory and flushed to a sidecar key on [`persist`].
 ///
-/// Call [`persist`] before shutdown to ensure crash safety.
+/// ## Flush strategy
+///
+/// Call [`persist`] **once after a batch** of `index_document` calls, not after
+/// every individual document. Persisting after every document causes O(n²) total
+/// bytes written (each persist serialises the full growing index).
+///
+/// Raw text records written by `index_document` are durable in the engine WAL
+/// immediately; only the search-optimised sidecar needs an explicit persist.
 ///
 /// [`persist`]: TextIndex::persist
 pub struct TextIndex {
     indices: HashMap<Vec<u8>, InvertedIndex>,
     language: Language,
+    /// Namespaces whose in-memory index is ahead of the persisted sidecar.
+    dirty: std::collections::HashSet<Vec<u8>>,
 }
 
 impl Default for TextIndex {
@@ -63,6 +73,7 @@ impl TextIndex {
         Self {
             indices: HashMap::new(),
             language: Language::English,
+            dirty: std::collections::HashSet::new(),
         }
     }
 
@@ -71,6 +82,7 @@ impl TextIndex {
         Self {
             indices: HashMap::new(),
             language,
+            dirty: std::collections::HashSet::new(),
         }
     }
 
@@ -104,6 +116,7 @@ impl TextIndex {
             index.remove_document(key);
         }
         index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
+        self.dirty.insert(text_ns.clone());
 
         let record = TextRecord { text: text.to_string(), facets };
         let record_bytes = encode_text_record(&record);
@@ -130,9 +143,11 @@ impl TextIndex {
         };
 
         index.remove_document(key);
+        self.dirty.insert(text_ns.clone());
 
         if index.total_docs == 0 {
             self.indices.remove(&text_ns);
+            self.dirty.remove(&text_ns);
             engine.delete(&text_ns, TEXT_INDEX_KEY)?;
         } else {
             let index_bytes = index.serialize();
@@ -152,6 +167,45 @@ impl TextIndex {
         k: usize,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
         self.search_with_options(engine, ns, query, &SearchOptions { k, ..Default::default() })
+    }
+
+    /// BM25 search with scan statistics.
+    ///
+    /// Returns results alongside [`TextSearchStats`] carrying `total_docs_indexed`,
+    /// `docs_examined`, and `bytes_scanned`. Useful for quality panels: a result of
+    /// `docs_examined == 0` with `total_docs_indexed > 0` means the query terms
+    /// genuinely don't appear in the corpus (not "index not built").
+    pub fn search_with_stats(
+        &self,
+        engine: &Engine,
+        ns: &[u8],
+        query: &str,
+        k: usize,
+    ) -> Result<(Vec<TextSearchResult>, TextSearchStats), EdgestoreError> {
+        if k == 0 {
+            return Ok((vec![], TextSearchStats::default()));
+        }
+
+        let query_tokens = tokenize(query, self.language);
+        if query_tokens.is_empty() {
+            return Ok((vec![], TextSearchStats::default()));
+        }
+
+        let text_ns = text_namespace(ns);
+
+        let index = match self.indices.get(&text_ns) {
+            Some(idx) => {
+                return Self::search_in_index_with_stats(idx, &query_tokens, k);
+            }
+            None => match engine.get(&text_ns, TEXT_INDEX_KEY)? {
+                Some(bytes) => InvertedIndex::deserialize(&bytes)?,
+                None => {
+                    return Ok((vec![], TextSearchStats::default()));
+                }
+            },
+        };
+
+        Self::search_in_index_with_stats(&index, &query_tokens, k)
     }
 
     /// Search with full options (facets, typo tolerance).
@@ -288,14 +342,25 @@ impl TextIndex {
         Ok(out)
     }
 
-    /// Persist all in-memory indices to the engine as sidecar entries.
+    /// Persist dirty in-memory indices to the engine as sidecar entries.
     ///
-    /// Call this before shutdown (or periodically) to ensure the indices survive
-    /// a process restart without needing to rebuild from raw records.
+    /// Only namespaces modified since the last `persist` call are written.
+    /// Calling `persist` with no intervening `index_document`/`delete_document`
+    /// is a no-op.
+    ///
+    /// ## Performance
+    ///
+    /// Call once after a **batch** of `index_document` calls, not after every
+    /// individual document. Calling after every document results in O(n²) total
+    /// bytes written because each persist serialises the full growing index.
     pub fn persist(&mut self, engine: &mut Engine) -> Result<(), EdgestoreError> {
+        if self.dirty.is_empty() {
+            return Ok(());
+        }
         let to_persist: Vec<(Vec<u8>, Vec<u8>)> = self
             .indices
             .iter()
+            .filter(|(ns, _)| self.dirty.contains(*ns))
             .map(|(ns, index)| (ns.clone(), index.serialize()))
             .collect();
         let mut lsns: Vec<(Vec<u8>, u64)> = Vec::with_capacity(to_persist.len());
@@ -307,6 +372,7 @@ impl TextIndex {
             if let Some(index) = self.indices.get_mut(&ns) {
                 index.sidecar_lsn = lsn;
             }
+            self.dirty.remove(&ns);
         }
         Ok(())
     }
@@ -370,5 +436,53 @@ impl TextIndex {
         });
         results.truncate(options.k);
         Ok(results)
+    }
+
+    fn search_in_index_with_stats(
+        index: &InvertedIndex,
+        query_tokens: &[crate::text::tokenizer::Token],
+        k: usize,
+    ) -> Result<(Vec<TextSearchResult>, TextSearchStats), EdgestoreError> {
+        let search_terms: Vec<String> =
+            query_tokens.iter().map(|t| t.term.clone()).collect();
+
+        let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
+        let mut bytes_scanned: u64 = 0;
+        let avg_doc_len = index.avg_doc_len();
+
+        for term in &search_terms {
+            if let Some(postings) = index.postings.get(term) {
+                let doc_freq = postings.len() as u64;
+                bytes_scanned += postings.len() as u64 * std::mem::size_of::<crate::text::index::Posting>() as u64;
+                for posting in postings {
+                    let score = bm25_score(
+                        index.total_docs,
+                        doc_freq,
+                        posting.term_freq,
+                        posting.doc_len,
+                        avg_doc_len,
+                        crate::text::index::BM25_K1,
+                        crate::text::index::BM25_B,
+                    );
+                    *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
+                }
+            }
+        }
+
+        let stats = TextSearchStats {
+            total_docs_indexed: index.total_docs,
+            docs_examined: doc_scores.len() as u64,
+            bytes_scanned,
+        };
+
+        let mut results: Vec<TextSearchResult> = doc_scores
+            .into_iter()
+            .map(|(doc_id, score)| TextSearchResult { doc_id, score })
+            .collect();
+        results.sort_by(|a, b| {
+            edgestore::total_cmp_f32(b.score, a.score).then(a.doc_id.cmp(&b.doc_id))
+        });
+        results.truncate(k);
+        Ok((results, stats))
     }
 }

@@ -16,7 +16,7 @@ name = "edgestore-cli"
 path = "src/main.rs"
 
 [dependencies]
-edgestore = { path = "../edgestore", version = "2.0.1" }
+edgestore = { path = "../edgestore", version = "2.0.2" }
 edgestore-text = { path = "../edgestore-text", version = "2.0.0" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

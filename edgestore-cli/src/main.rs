@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "edgestore-cli")]
 #[command(about = "EdgeStore database administration tool")]
-#[command(version = "2.0.1")]
+#[command(version = "2.0.2")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

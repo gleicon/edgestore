@@ -8,20 +8,26 @@ version = 2
 yanked = "deny"
 
 ignore = [
-    # rustls-webpki 0.101.7 pulled transitively by aws-smithy-http-client's
-    # legacy hyper-0.14/rustls-0.21 compatibility layer.  The modern hyper-1.x
-    # / rustls-0.23 / rustls-webpki-0.103 path is used at runtime; the legacy
-    # code is compiled in but never reached.  Tracked upstream:
-    # https://github.com/smithy-lang/smithy-rs/issues
-    "RUSTSEC-2023-0052",  # rustls-webpki: CPU DoS via cert path building
-    "RUSTSEC-2024-0336",  # rustls: large cert chains CPU bottleneck
+    # h2 0.3.x: unbounded empty DATA frames (low severity).
+    # Pulled transitively by AWS SDK's legacy hyper-0.14 compatibility layer.
+    # The modern hyper-1.x / h2-0.4 path is used at runtime; the legacy path
+    # is compiled in but unreachable from edgestore code. Blocked on AWS SDK
+    # dropping hyper-0.14. Track: https://github.com/smithy-lang/smithy-rs
+    "RUSTSEC-2026-0258",
+    # rustls 0.21.x: name-constraint and CRL parsing advisories (0098/0099/0104).
+    # Same root cause as above — AWS SDK legacy rustls-0.21 layer.
+    # The modern rustls-0.23 / aws-lc-rs path is the runtime path.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    # paste: unmaintained notice (not a vulnerability).
+    # Pulled by parquet v53.x (dev dependency of edgestore for benchmarks only).
+    # Not present in any published binary.
+    "RUSTSEC-2024-0436",
 ]
 
 [licenses]
 version = 2
-# Warn rather than block — license auditing is a separate concern.
-# Flip to "deny" and add entries when you want strict enforcement.
-unlicensed = "warn"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -34,9 +40,8 @@ allow = [
     "CC0-1.0",
     "OpenSSL",
     "Zlib",
+    "CDLA-Permissive-2.0",
 ]
-deny = []
-copyleft = "warn"
 
 [bans]
 multiple-versions = "warn"   # AWS SDK ships dual hyper/rustls stacks; warn, don't block

@@ -248,6 +248,33 @@ SegmentLsnOrder ==
             => /\ seg.entries[k].lsn >= seg.min_lsn
                /\ seg.entries[k].lsn <= seg.max_lsn
 
+(*
+  5. TextSearchConsistency (scope note):
+     The core spec models raw KV records only. The edgestore-text layer adds two
+     derived structures on top of raw KV:
+       (a) Raw text records:   engine.put(__text__{ns}, doc_key, text_bytes)
+       (b) Inverted-index sidecar: engine.put(__text__{ns}, __index__, sidecar)
+     The sidecar is optional — TextIndex.search falls back to WAL reconstruction
+     when the sidecar is absent. A full TextSearchConsistency invariant would be:
+
+       TextSearchConsistency ==
+         \A ns, doc_key :
+           WrittenRawTextRecord(ns, doc_key)    (* (a) durable via NoDataLoss *)
+           => SearchReturns(ns, doc_key)        (* query over ns finds doc_key *)
+
+     This is provable in the existing spec for (a) via NoDataLoss (raw records
+     survive crash). The gap that existed — "sidecar absent ⟹ search returns
+     empty even though raw records exist" — was a bug in edgestore-text, not in
+     the engine spec. It is fixed by WAL reconstruction in TextIndex.search.
+
+     To formally verify TextSearchConsistency in TLC, extend the spec with:
+       - CONSTANTS TextNamespaces, DocKeys
+       - Variables: text_records (set of written (ns, doc_key) pairs), sidecar_written
+       - Actions: IndexDocument, PersistSidecar, TextSearch, CrashBeforePersist
+       - Invariant: \A (ns, doc_key) \in text_records : SearchCanFind(ns, doc_key)
+     This is deferred to a future spec module (edgestore_text.tla).
+*)
+
 AllInvariants ==
     /\ TypeOK
     /\ NoDataLoss
@@ -259,4 +286,5 @@ AllInvariants ==
 \* Modification History
 \* Created for edgestore formal verification — zeroth spec (abstract data model)
 \* Covers: Put/Delete, WAL→memtable→segment flush, crash+recovery, compaction
+\* Extended: TextSearchConsistency scope note + edgestore_text.tla deferred spec
 \* Out of scope: replication (LWW import_segment), vector/text indexes, TTL

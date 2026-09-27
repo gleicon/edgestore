@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use edgestore::{EdgestoreConfig, Engine};
-use edgestore_text::{FacetFilter, FacetValue, SearchOptions, TextIndex};
+use edgestore_text::{FacetValue, SearchOptions, TextIndex};
 use tempfile::TempDir;
 
 fn open_engine(dir: &TempDir) -> Engine {
@@ -276,4 +276,62 @@ fn test_reindex_with_facets() {
     let r2 = text.search(&engine, b"ns", "sports", 5).unwrap();
     assert_eq!(r2.len(), 1);
     assert_eq!(r2[0].doc_id, b"doc1");
+}
+
+#[test]
+fn test_wal_reconstruction_without_sidecar() {
+    // Simulates the post-crash scenario: raw text records are durable in the WAL
+    // but persist() was never called, so no sidecar exists on cold start.
+    let dir = TempDir::new().unwrap();
+
+    // Phase 1: index docs, flush WAL, but do NOT call persist()
+    {
+        let mut engine = open_engine(&dir);
+        let mut text = TextIndex::new();
+        text.index_document(&mut engine, b"ns", b"doc1", "segment compaction storage", HashMap::new()).unwrap();
+        text.index_document(&mut engine, b"ns", b"doc2", "database segment index", HashMap::new()).unwrap();
+        text.index_document(&mut engine, b"ns", b"doc3", "replication backup", HashMap::new()).unwrap();
+        // Flush WAL to segments so records survive engine reopen — but no sidecar written.
+        engine.flush().unwrap();
+    }
+
+    // Phase 2: cold start — no in-memory index, no sidecar.
+    // WAL reconstruction must find docs from raw records.
+    {
+        let engine = open_engine(&dir);
+        let text = TextIndex::new();
+
+        let results = text.search(&engine, b"ns", "segment", 5).unwrap();
+        assert_eq!(results.len(), 2, "WAL reconstruction must find docs without sidecar");
+        assert!(results.iter().any(|r| r.doc_id == b"doc1"));
+        assert!(results.iter().any(|r| r.doc_id == b"doc2"));
+
+        let no_match = text.search(&engine, b"ns", "replication", 5).unwrap();
+        assert_eq!(no_match.len(), 1);
+        assert_eq!(no_match[0].doc_id, b"doc3");
+    }
+}
+
+#[test]
+fn test_search_with_stats_wal_reconstruction() {
+    // search_with_stats must also work via WAL reconstruction.
+    let dir = TempDir::new().unwrap();
+
+    {
+        let mut engine = open_engine(&dir);
+        let mut text = TextIndex::new();
+        text.index_document(&mut engine, b"ns", b"doc1", "segment compaction", HashMap::new()).unwrap();
+        text.index_document(&mut engine, b"ns", b"doc2", "segment database", HashMap::new()).unwrap();
+        engine.flush().unwrap();
+        // No persist() — no sidecar
+    }
+
+    {
+        let engine = open_engine(&dir);
+        let text = TextIndex::new();
+        let (results, stats) = text.search_with_stats(&engine, b"ns", "segment", 5).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(stats.total_docs_indexed, 2);
+        assert!(stats.docs_examined > 0);
+    }
 }

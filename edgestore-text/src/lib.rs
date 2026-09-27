@@ -44,14 +44,20 @@ const TEXT_INDEX_KEY: &[u8] = b"__index__";
 /// Text records are stored in the engine under synthetic `__text__{ns}` namespaces.
 /// The inverted index is cached in memory and flushed to a sidecar key on [`persist`].
 ///
+/// ## Crash safety
+///
+/// Raw text records written by `index_document` are durable in the engine WAL
+/// immediately. If the process crashes before `persist()` is called, the inverted
+/// index sidecar is absent on the next start — but `search` will rebuild the index
+/// on-the-fly by scanning the raw WAL records. This makes `persist()` a **startup
+/// optimisation**, not a crash-safety requirement.
+///
 /// ## Flush strategy
 ///
 /// Call [`persist`] **once after a batch** of `index_document` calls, not after
 /// every individual document. Persisting after every document causes O(n²) total
-/// bytes written (each persist serialises the full growing index).
-///
-/// Raw text records written by `index_document` are durable in the engine WAL
-/// immediately; only the search-optimised sidecar needs an explicit persist.
+/// bytes written (each persist serialises the full growing index). Dirty tracking
+/// ensures repeated `persist()` calls with no intervening mutations are no-ops.
 ///
 /// [`persist`]: TextIndex::persist
 pub struct TextIndex {
@@ -200,7 +206,8 @@ impl TextIndex {
             None => match engine.get(&text_ns, TEXT_INDEX_KEY)? {
                 Some(bytes) => InvertedIndex::deserialize(&bytes)?,
                 None => {
-                    return Ok((vec![], TextSearchStats::default()));
+                    // Sidecar absent — rebuild from raw WAL records (post-crash path).
+                    Self::rebuild_from_engine(engine, &text_ns, self.language)?
                 }
             },
         };
@@ -238,7 +245,15 @@ impl TextIndex {
                         }
                         Self::search_in_index(&idx, &query_tokens, options)
                     }
-                    None => Ok(vec![]),
+                    None => {
+                        // Sidecar absent — rebuild from raw WAL records (post-crash path).
+                        // Call persist() after this to write the sidecar and avoid future scans.
+                        let rebuilt = Self::rebuild_from_engine(engine, &text_ns, self.language)?;
+                        if rebuilt.total_docs == 0 {
+                            return Ok(vec![]);
+                        }
+                        Self::search_in_index(&rebuilt, &query_tokens, options)
+                    }
                 };
             }
         };
@@ -375,6 +390,32 @@ impl TextIndex {
             self.dirty.remove(&ns);
         }
         Ok(())
+    }
+
+    /// Rebuild an [`InvertedIndex`] by scanning raw text records from the engine WAL.
+    ///
+    /// Called as the last-resort fallback when neither the in-memory cache nor the
+    /// persisted sidecar is available (e.g. after a crash before `persist()` ran).
+    /// The result is NOT cached — call `persist()` afterward to write the sidecar
+    /// and avoid repeated scans on subsequent searches.
+    fn rebuild_from_engine(
+        engine: &Engine,
+        text_ns: &[u8],
+        language: Language,
+    ) -> Result<InvertedIndex, EdgestoreError> {
+        let pairs = engine.prefix(text_ns, b"")?;
+        let mut index = InvertedIndex::new();
+        for (key, value) in &pairs {
+            if key.as_slice() == TEXT_INDEX_KEY {
+                continue;
+            }
+            if let Some(record) = decode_text_record(value) {
+                let tokens = tokenize(&record.text, language);
+                let doc_len = tokens.len() as u32;
+                index.add_document(key.clone(), &tokens, doc_len, record.facets);
+            }
+        }
+        Ok(index)
     }
 
     fn search_in_index(

@@ -420,3 +420,17 @@ pub trait RemoteStore: Send + Sync {
 **Rationale:** Enables safe primary failover without split-brain writes, prevents double-uploads on retry without requiring a `list()` probe, and lets replicas detect topology changes without a separate gossip protocol.
 
 **Implication:** Existing `RemoteStore` implementors compile unchanged (default impl for `upload_if_absent`). Existing `ReplicationProtocol` implementors compile unchanged (default impl for `watermark`). The `WTOKEN` file is absent on existing databases — `load_write_token_from_path` treats `NotFound` as token 0 (backward-compatible).
+
+---
+
+## D38 — TLA+ spec gap: TextSearchConsistency not modeled until edgestore-text.tla
+
+**Decision:** The existing `edgestore.tla` spec covers the core engine's KV layer only. The `TextSearchConsistency` invariant — "every indexed document is findable via search, including after a crash before `persist()` is called" — was not modeled, so TLC could not flag the post-crash sidecar-absent search gap.
+
+**Root cause:** The spec was written before `edgestore-text` existed. The `AllInvariants` conjunction has no text-layer predicate. `NoDataLoss` covers raw KV records (including raw text records written by `index_document`) but says nothing about derived search results.
+
+**Fix (implemented):** WAL reconstruction in `TextIndex.search` / `search_with_stats` / `search_with_options`. When neither the in-memory index nor the sidecar is present, these methods scan `engine.prefix(__text__{ns}, "")`, skip the `__index__` key, decode each raw text record, tokenize, and rebuild a temporary `InvertedIndex`. This makes `persist()` a startup optimisation, not a crash-safety requirement.
+
+**Spec follow-up:** Add `edgestore_text.tla` with `TextSearchConsistency` invariant (deferred). Until then, `edgestore.tla` carries a scope note in the `AllInvariants` section explaining the gap and the fix. Two new integration tests cover the crash path: `test_wal_reconstruction_without_sidecar` and `test_search_with_stats_wal_reconstruction`.
+
+**Rationale:** Formal methods catch violations of explicitly modeled invariants only. A new abstraction layer (text index) adds new invariants that were outside the original spec scope. Lesson: extend the spec as new crates are added.

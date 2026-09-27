@@ -1,7 +1,4 @@
-use std::collections::HashMap;
-
 use crate::text::facet::FacetFilter;
-use crate::text::types::FacetValue;
 
 /// Result of a text search: document key and BM25 score.
 #[derive(Debug, Clone)]

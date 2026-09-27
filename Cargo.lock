@@ -1351,6 +1351,7 @@ version = "2.0.1"
 dependencies = [
  "edgestore",
  "log",
+ "proptest",
  "rust-stemmers",
  "serde",
  "serde_bytes",

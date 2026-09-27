@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0d3d092636ca285b8cd70a7661385a7fc3800b2cbd3647e71d6369404cde9c72 # shrinks to ops = [IndexDoc([115, 112, 101, 99, 95, 98], [100, 111, 99, 49], "segment compaction storage engine"), Persist, IndexDoc([115, 112, 101, 99, 95, 98], [100, 111, 99, 50], "segment compaction storage engine"), Crash]
+cc 63a2c42b9f6e7c9871f41a847061be65ce8ecb139f862cb44e4e9dad33fa68a2 # shrinks to ops = [IndexDoc([115, 112, 101, 99, 95, 97], [100, 111, 99, 49], "segment compaction storage engine"), Crash, IndexDoc([115, 112, 101, 99, 95, 97], [100, 111, 99, 50], "segment compaction storage engine")]

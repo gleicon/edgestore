@@ -25,7 +25,7 @@ pub fn handle_text_search(cmd: TextSearch) -> Result<(), Box<dyn std::error::Err
     }
     let config = EdgestoreConfig::new(&cmd.path);
     let engine = Engine::open(config).map_err(|e| format!("Failed to open database: {}", e))?;
-    let text = TextIndex::new();
+    let mut text = TextIndex::new();
     let results = text
         .search(&engine, cmd.namespace.as_bytes(), &cmd.query, cmd.k)
         .map_err(|e| format!("Search failed: {}", e))?;

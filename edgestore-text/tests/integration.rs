@@ -42,7 +42,7 @@ fn test_bm25_ranking() {
 fn test_search_empty_namespace() {
     let dir = TempDir::new().unwrap();
     let engine = open_engine(&dir);
-    let text = TextIndex::new();
+    let mut text = TextIndex::new();
 
     let results = text.search(&engine, b"ns", "segment", 5).unwrap();
     assert!(results.is_empty());
@@ -195,7 +195,7 @@ fn test_cold_cache_search_after_persist() {
     // Phase 2: cold TextIndex reads sidecar from disk
     {
         let engine = open_engine(&dir);
-        let text = TextIndex::new();
+        let mut text = TextIndex::new();
         let results = text.search(&engine, b"ns", "segment", 5).unwrap();
         assert_eq!(results.len(), 2, "cold search must find docs via disk sidecar");
     }
@@ -299,7 +299,7 @@ fn test_wal_reconstruction_without_sidecar() {
     // WAL reconstruction must find docs from raw records.
     {
         let engine = open_engine(&dir);
-        let text = TextIndex::new();
+        let mut text = TextIndex::new();
 
         let results = text.search(&engine, b"ns", "segment", 5).unwrap();
         assert_eq!(results.len(), 2, "WAL reconstruction must find docs without sidecar");
@@ -328,7 +328,7 @@ fn test_search_with_stats_wal_reconstruction() {
 
     {
         let engine = open_engine(&dir);
-        let text = TextIndex::new();
+        let mut text = TextIndex::new();
         let (results, stats) = text.search_with_stats(&engine, b"ns", "segment", 5).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(stats.total_docs_indexed, 2);

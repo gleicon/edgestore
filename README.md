@@ -70,6 +70,52 @@ See [`examples/unified_engine.rs`](edgestore/examples/unified_engine.rs) for the
 
 ---
 
+## WAL Management
+
+The WAL is flushed to immutable segments when the memtable fills (`memtable_max_bytes`, default 8 MB). High-throughput write workloads hit this automatically. **Low-write-rate applications** (e.g. devices writing a few KB every few minutes) must flush explicitly, otherwise WAL files accumulate without bound.
+
+**Sync apps** — call `flush_to_segments()` on a timer or after a logical batch:
+
+```rust
+// Flush once per hour from your own background thread.
+std::thread::spawn(move || loop {
+    std::thread::sleep(std::time::Duration::from_secs(3600));
+    engine.lock().unwrap().flush_to_segments().ok();
+});
+```
+
+**Async / Tokio apps** — use `edgestore-tokio`'s `AsyncEngine`:
+
+```rust
+use edgestore_tokio::AsyncEngine;
+use std::sync::Arc;
+use std::time::Duration;
+
+let engine = Arc::new(AsyncEngine::open(config)?);
+let bg = Arc::clone(&engine);
+
+tokio::spawn(async move {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    loop {
+        interval.tick().await;
+        if let Err(e) = bg.flush_to_segments().await {
+            tracing::warn!("flush_to_segments failed: {e}");
+        }
+    }
+});
+```
+
+Use `engine.wal_segment_count()` and `engine.pending_wal_bytes()` to instrument flush decisions or alert when WAL growth is unexpected:
+
+```rust
+if engine.wal_segment_count() > 100 {
+    tracing::warn!("WAL has {} unflushed files — consider calling flush_to_segments()",
+        engine.wal_segment_count());
+}
+```
+
+---
+
 ## Replica Safety
 
 Open replicas with `Engine::open_readonly` to prevent accidental writes:

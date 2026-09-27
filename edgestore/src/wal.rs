@@ -231,6 +231,11 @@ impl WalWriter {
         &self.path
     }
 
+    /// Bytes written to this WAL file so far (including the header).
+    pub(crate) fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
     /// Append one record.  Format:  {crc32c:u32-LE}{compressed_len:u32-LE}{lz4_payload}
     ///
     /// Does NOT call fsync — callers use `fsync()` for group-commit.

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`Engine::wal_segment_count() -> usize`** — number of WAL files currently on disk. A value above a few dozen indicates `flush_to_segments` is not being called often enough for the write rate.
+- **`Engine::pending_wal_bytes() -> u64`** — bytes written to the active WAL file. Combine with `wal_segment_count` to estimate total unflushed WAL pressure.
+- **WAL flush documentation.** README now explains when to call `flush_to_segments` explicitly, with sync and async (Tokio) background-timer patterns.
+
+---
+
 ## [2.0.0] - 2026-09-26
 
 ### Breaking

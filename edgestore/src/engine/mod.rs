@@ -252,6 +252,27 @@ impl Engine {
         self.lsn_counter
     }
 
+    /// Number of WAL segment files currently on disk.
+    ///
+    /// A value above a few dozen usually means `flush_to_segments` is not being
+    /// called often enough. Low-write-rate applications should call it
+    /// periodically (e.g. on a background timer) rather than relying solely on
+    /// the `memtable_max_bytes` auto-flush threshold.
+    pub fn wal_segment_count(&self) -> usize {
+        crate::recovery::list_wal_files(&self.config.path)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    }
+
+    /// Bytes written to the current (active) WAL file.
+    ///
+    /// Combine with `wal_segment_count` to estimate total unflushed WAL size.
+    /// Useful for triggering an explicit `flush_to_segments` call before the
+    /// memtable auto-flush threshold is reached.
+    pub fn pending_wal_bytes(&self) -> u64 {
+        self.wal.bytes_written()
+    }
+
     /// Current write token.
     ///
     /// A monotonically increasing u64 that survives restarts.  When a replica is

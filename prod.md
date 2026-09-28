@@ -401,10 +401,11 @@ Supported metrics: cosine, dot product, euclidean.
 Full-text search is in the `edgestore-text` crate as `TextIndex`:
 
 ```
+let mut text = TextIndex::new();  // must be mut — search methods take &mut self
 text.index_document(&mut engine, namespace, key, text, facets)
 text.search(&engine, namespace, query, k) -> Vec<TextSearchResult>
 text.search_with_snippets(&engine, namespace, query, k) -> Vec<SnippetResult>
-text.persist(&mut engine)
+text.persist(&mut engine)  // optional: writes sidecar for faster cold-start reads
 ```
 
 SQL layer (CREATE TABLE / INSERT / SELECT) is not yet implemented.

@@ -58,7 +58,7 @@ engine.vector_put(b"products", b"p1", 4, Dtype::F32, &embed_bytes)?;
 
 // Full-text — via edgestore-text (BM25, multilingual stemming)
 text.index_document(&mut engine, b"products", b"p1", "compact widget a", HashMap::new())?;
-text.persist(&mut engine)?; // write inverted index sidecar to WAL
+text.persist(&mut engine)?; // optional: write sidecar for faster cold-start reads
 
 // One flush, one segment, one replication target.
 engine.flush_to_segments()?;

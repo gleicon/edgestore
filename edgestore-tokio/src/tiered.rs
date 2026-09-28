@@ -1,10 +1,7 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use edgestore::{
-    EdgestoreConfig, EdgestoreError, Engine, FacetValue, RemoteStore, TextEngine, TextSearchResult,
-};
+use edgestore::{EdgestoreConfig, EdgestoreError, Engine, RemoteStore};
 use edgestore_tier::{ArchivedSegment, TieredEngine};
 
 /// Async wrapper around the synchronous `edgestore_tier::TieredEngine` — same
@@ -351,57 +348,6 @@ impl AsyncTieredEngine {
         })
         .await
         .unwrap_or_default()
-    }
-
-    /// BM25 index — reaches through to the local `Engine` directly (`TieredEngine`
-    /// doesn't wrap `TextEngine` itself); text data is not tiered,
-    /// so this needs no read-through behavior.
-    pub async fn index_text(
-        &self,
-        ns: &[u8],
-        key: &[u8],
-        text: &str,
-        facets: HashMap<String, FacetValue>,
-    ) -> Result<u64, EdgestoreError> {
-        let ns = ns.to_vec();
-        let key = key.to_vec();
-        let text = text.to_string();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut engine = inner.blocking_write();
-            engine.local_mut().index_text(&ns, &key, &text, facets)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
-    }
-
-    /// BM25 search — reaches through to the local `Engine` directly (local-only,
-    /// same as `range`/`prefix`; see struct docs).
-    pub async fn search_text(
-        &self,
-        ns: &[u8],
-        query: &str,
-        k: usize,
-    ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        let ns = ns.to_vec();
-        let query = query.to_string();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let engine = inner.blocking_read();
-            engine.local().search_text(&ns, &query, k)
-        })
-        .await
-        .map_err(|e| {
-            EdgestoreError::Io(std::io::Error::other(format!(
-                "spawn_blocking failed: {}",
-                e
-            )))
-        })?
     }
 
     /// Uploads the given local segments to the remote store and records them as

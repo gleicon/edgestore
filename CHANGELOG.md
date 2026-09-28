@@ -9,17 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.3] - 2026-09-27
 
-### Added
-
-### Changed
-
-### Deprecated
-
 ### Removed
+
+- **`AsyncTieredEngine::index_text` and `AsyncTieredEngine::search_text`** — removed. Both delegated to `Engine::index_text()`/`search_text()` which were deleted in 2.0.0. Use `edgestore_text::TextIndex` directly alongside `AsyncTieredEngine` (call `engine.local_mut()` for indexing, `engine.local()` for search).
 
 ### Fixed
 
-### Security
+- Stale imports of `FacetValue`, `TextEngine`, `TextSearchResult` from `edgestore` core removed from `edgestore-tokio/src/tiered.rs` (all moved to `edgestore-text` in 2.0.0).
 
 ## [2.0.2] - 2026-09-27
 

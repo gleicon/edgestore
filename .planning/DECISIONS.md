@@ -434,3 +434,40 @@ pub trait RemoteStore: Send + Sync {
 **Spec follow-up:** Add `edgestore_text.tla` with `TextSearchConsistency` invariant (deferred). Until then, `edgestore.tla` carries a scope note in the `AllInvariants` section explaining the gap and the fix. Two new integration tests cover the crash path: `test_wal_reconstruction_without_sidecar` and `test_search_with_stats_wal_reconstruction`.
 
 **Rationale:** Formal methods catch violations of explicitly modeled invariants only. A new abstraction layer (text index) adds new invariants that were outside the original spec scope. Lesson: extend the spec as new crates are added.
+
+---
+
+## D39 — BBTree concurrent memtable + 3-phase lock-free flush (v2.2.0)
+
+**Question:** The default `BTreeMemTable` serializes all reads on a single thread (no concurrent readers) and `AsyncEngine::flush_to_segments` held the write lock for the full duration of disk I/O. How do we make reads non-blocking and eliminate the flush-induced read stall?
+
+**Decision:** Three coordinated changes:
+
+**P1 — BBTree memtable variants (bbtree = 0.1.5)**
+
+- `BBTreeMemTable` (unsync): `bbtree::unsync::BBTreeMap` drop-in for `BTreeMemTable`. Same `&mut self` ownership model. ~5× faster point lookups due to SIMD-accelerated B-tree node search. Zero architectural change.
+- `BBTreeConcurrentMemTable` (concurrent root variant): `bbtree::BBTreeMap` with interior mutability. Multiple readers never write to shared cache lines — the version lock reuses freed nodes internally, making reads cache-coherent at scale. Scales to 180 M ops/s at 96 threads with 83-90% linear efficiency. Requires owned returns (`get_cloned`, `scan`) because `&V` cannot be safely returned.
+- Default `EdgestoreConfig::memtable_factory` changed to `BBTreeConcurrentMemTable`.
+- `MemTable` trait changed to owned returns (`Option<MemEntry>`, `Vec<(Vec<u8>, MemEntry)>`) to enable the concurrent variant without a lifetime parameter.
+
+**P2 — 3-phase flush protocol**
+
+Phase 1 (`Engine::begin_flush`, under write lock): snapshot memtable entries into `FlushWork` (records `flushed_max_lsn`). Memtable is NOT cleared — reads continue to be served without interruption.
+
+Phase 2 (`FlushWork::execute`, no lock): write ZSTD-compressed SSTable files to disk. Write lock is fully released; concurrent reads and writes proceed normally.
+
+Phase 3 (`Engine::finalize_flush`, under write lock): register segment in manifest and reader list; rebuild the active memtable keeping only entries with `lsn > flushed_max_lsn` (entries written during Phase 2 that are not yet in any segment); fire the on_segment_flushed callback; retire old WAL files.
+
+**P3 — AsyncEngine::flush_to_segments restructured**
+
+Uses three separate `spawn_blocking` calls (one per phase) rather than a single `run_write`. The write lock is held only for the fast bookkeeping steps; the slow I/O in Phase 2 runs outside any lock. Concurrent `get`, `range`, `prefix` calls that previously blocked for the full flush duration now complete without waiting.
+
+**Correctness invariant:** Between Phase 1 and Phase 3, entries in `FlushWork.entries` are still present in the active memtable (lsn ≤ flushed_max_lsn). Reads always find them. New writes during Phase 2 land in the memtable at lsn > flushed_max_lsn and are retained after Phase 3's rebuild.
+
+**Consequence:**
+- `MemTable` trait is now a breaking API change (owned returns in `get`, `range`, `prefix`, `iter`).
+- `Engine::finalize_flush` takes `(meta: SegmentMeta, flushed_max_lsn: u64)`.
+- `FlushWork` is now `pub` (used by both `edgestore` and `edgestore-tokio`).
+- The old `SegmentStore::flush_memtable` wrapper is removed; callers use `prepare_flush` + `execute` + `finalize_segment` directly.
+
+**Rationale:** The grill-me session resolved that BBTree has two variants with different implications. `unsync` = drop-in (5× faster, zero arch change). `sync` = concurrent (can't return `&V`, needs owned-return trait). The 3-phase flush is required to release the write lock during I/O; correctness requires that the snapshot remain readable during Phase 2 (hence no memtable swap — use `flushed_max_lsn` filtering instead of immutable memtable to keep the change scope small).

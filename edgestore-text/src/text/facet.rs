@@ -39,7 +39,7 @@ mod tests {
         Posting {
             doc_id: vec![doc_id],
             term_freq: 1,
-            doc_len: 10,
+            doc_len_tokens: 10,
             facets,
             positions: vec![],
         }

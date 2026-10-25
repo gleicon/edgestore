@@ -587,6 +587,61 @@ drop(snap);</code></pre>
     </section>
   </div>
 
+  <div class="max-w-4xl mx-auto px-4 py-12">
+
+    <section class="mb-16">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-8">
+        <h2 class="text-2xl font-bold text-slate-900">Concurrent Memtable <span class="text-sm font-normal text-slate-500 ml-2">v2.2.0</span></h2>
+        <p class="text-slate-600 mt-4">The default write buffer is now backed by <code>bbtree::BBTreeMap</code>, a concurrent B-tree with interior mutability. Multiple readers never write to shared cache lines — the version lock reuses freed nodes internally, keeping reads cache-coherent at scale: <strong>180 M ops/s at 96 threads, 83-90% linear scaling</strong>.</p>
+        <p class="text-slate-600 mt-3">Two additional implementations are available via <code>EdgestoreConfig::memtable_factory</code>:</p>
+        <ul class="list-disc ml-6 text-slate-600 mt-2 space-y-1">
+          <li><code>BBTreeMemTable</code> — unsync variant (~5× faster than std BTreeMap on single-threaded workloads, SIMD node search)</li>
+          <li><code>BTreeMemTable</code> — original std BTreeMap (kept for compatibility)</li>
+          <li><code>BBTreeConcurrentMemTable</code> — concurrent variant, now the default</li>
+        </ul>
+        <pre class="bg-slate-50 rounded-lg p-4 mt-4 text-sm overflow-x-auto"><code><span class="comment">// Use the unsync variant for single-threaded embedding</span>
+use edgestore::memtable::BBTreeMemTable;
+let config = EdgestoreConfig {
+    memtable_factory: Box::new(|| Box::new(BBTreeMemTable::new())),
+    ..EdgestoreConfig::new("/var/db")
+};</code></pre>
+      </div>
+    </section>
+
+    <section class="mb-16">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-8">
+        <h2 class="text-2xl font-bold text-slate-900">Lock-Free Flush <span class="text-sm font-normal text-slate-500 ml-2">v2.2.0</span></h2>
+        <p class="text-slate-600 mt-4"><code>AsyncEngine::flush_to_segments</code> uses a 3-phase protocol that releases the write lock during disk I/O. Reads that previously blocked for the full flush duration (typically 20–200 ms) now complete without waiting.</p>
+        <div class="grid grid-cols-3 gap-4 mt-4">
+          <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+            <div class="font-semibold text-emerald-800">Phase 1</div>
+            <div class="text-sm text-emerald-700 mt-1">Snapshot memtable entries under write lock. Lock held &lt;1 ms.</div>
+          </div>
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div class="font-semibold text-blue-800">Phase 2</div>
+            <div class="text-sm text-blue-700 mt-1">Write segment files to disk. <strong>No lock held.</strong> Reads and writes proceed normally.</div>
+          </div>
+          <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+            <div class="font-semibold text-emerald-800">Phase 3</div>
+            <div class="text-sm text-emerald-700 mt-1">Register segment, rebuild memtable, retire WAL. Lock held &lt;1 ms.</div>
+          </div>
+        </div>
+        <p class="text-slate-600 mt-4 text-sm"><strong>Correctness:</strong> The memtable is not cleared during Phase 1 — reads always find their data. After Phase 3, entries already in the new segment are dropped from the memtable; writes that arrived during Phase 2 are retained.</p>
+        <pre class="bg-slate-50 rounded-lg p-4 mt-4 text-sm overflow-x-auto"><code><span class="comment">// v2.2.0: reads are not blocked during flush</span>
+let engine = AsyncEngine::open(config).await?;
+engine.put(b"ns", b"key", b"val").await?;
+
+<span class="comment">// These run concurrently — flush doesn't block the get</span>
+let (_, result) = tokio::join!(
+    engine.flush_to_segments(),
+    engine.get(b"ns", b"key"),
+);
+assert_eq!(result?, Some(b"val".to_vec()));</code></pre>
+      </div>
+    </section>
+
+  </div>
+
   <footer class="bg-slate-900 text-slate-400 py-8 mt-12">
     <div class="max-w-7xl mx-auto px-4 text-center text-sm">
       <p><a href="index.html" class="hover:text-white transition">EdgeStore</a> — Local-first embedded database</p>

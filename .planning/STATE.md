@@ -23,13 +23,15 @@ milestone_name: milestone
 
 ## Now
 
-**State:** v1.3.0 shipped. Decisions D26–D33 recorded. Two user feedback cycles resolved (Vectoria: D26–D31; Pierre: D32–D33). No open implementation work — all decisions translated to code or docs. Pierre's tiered replication pattern documented in DECISIONS.md; no edgestore code changes needed for Pierre.
+**State:** v2.2.0 complete. D39 recorded. BBTree concurrent memtable (default), 3-phase lock-free flush, owned MemTable trait, concurrency + performance tests, benchmarks, docs updated, CHANGELOG written.
 
-**Next:** No active task. Next action is user-driven — either another user feedback cycle, or a new feature request.
+Key correctness detail resolved: 3-phase flush originally swapped the memtable in Phase 1 (creating a visibility window). Fixed via `flushed_max_lsn` — snapshot without clearing, rebuild memtable in Phase 3 keeping lsn > flushed_max_lsn.
 
-**Open questions:** None blocking.
+**Next:** Decide which v2.x item to tackle from BACKLOG — candidates: pluggable Tokenizer (FT-01), concurrency testing with `shuttle` (from grill-me session), or shuttle-based formal concurrency verification of the 3-phase flush protocol itself.
 
-**Watch:** Pierre integrating TieredEngine + AntiEntropyLoop pattern (D32/D33) — may surface further gaps.
+**Open questions:** `text_search` bench fails to compile (pre-existing: references `edgestore::TextEngine` which moved to `edgestore-text`). Should be fixed as part of bench housekeeping before next release.
+
+**Watch:** Release v2.2.0 via `make tag && make tags-push && make publish` when ready.
 
 ## Phase Progress
 

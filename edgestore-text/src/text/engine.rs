@@ -51,7 +51,7 @@ pub struct TextSearchStats {
 #[derive(Debug, Clone, Default)]
 pub struct SearchOptions {
     /// Maximum number of results to return.
-    pub k: usize,
+    pub limit: usize,
     /// Optional facet filters to narrow results.
     pub facet_filters: Vec<FacetFilter>,
     /// Enable typo tolerance (edit distance ≤ 1).

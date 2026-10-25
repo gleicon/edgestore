@@ -618,14 +618,14 @@ impl Engine {
             } else if !has_mem {
                 true
             } else {
-                seg_results[si].0.as_slice() >= mem_asc[mi - 1].0
+                seg_results[si].0.as_slice() >= mem_asc[mi - 1].0.as_slice()
             };
             if pick_seg {
                 merged.push(seg_results[si].clone());
                 si += 1;
             } else {
                 mi -= 1;
-                merged.push((mem_asc[mi].0.to_vec(), mem_asc[mi].1.clone()));
+                merged.push(mem_asc[mi].clone());
             }
         }
 
@@ -1063,7 +1063,7 @@ impl Engine {
         let encoded_key = encode_key(ns, key);
         match self.memtable.get(&encoded_key) {
             Some(entry) if entry.op == Operation::Delete => return Ok(None),
-            Some(entry) => return Ok(entry.value.clone()),
+            Some(entry) => return Ok(entry.value),
             None => {}
         }
         if let Some(entry) = self.segment_store.get(&encoded_key)? {
@@ -1147,15 +1147,16 @@ impl Engine {
         let mut mi = 0usize;
         while si < seg_results.len() || mi < mem_results.len() {
             let (k, e) = if si < seg_results.len()
-                && (mi >= mem_results.len() || seg_results[si].0.as_slice() <= mem_results[mi].0)
+                && (mi >= mem_results.len()
+                    || seg_results[si].0.as_slice() <= mem_results[mi].0.as_slice())
             {
                 let (k, e) = &seg_results[si];
                 si += 1;
                 (k.clone(), e.clone())
             } else {
-                let (k, e) = mem_results[mi];
+                let (k, e) = mem_results[mi].clone();
                 mi += 1;
-                (k.to_vec(), e.clone())
+                (k, e)
             };
             merged.push((k, e));
         }
@@ -1245,15 +1246,16 @@ impl Engine {
         let mut mi = 0usize;
         while si < seg_results.len() || mi < mem_results.len() {
             let (k, e) = if si < seg_results.len()
-                && (mi >= mem_results.len() || seg_results[si].0.as_slice() <= mem_results[mi].0)
+                && (mi >= mem_results.len()
+                    || seg_results[si].0.as_slice() <= mem_results[mi].0.as_slice())
             {
                 let (k, e) = &seg_results[si];
                 si += 1;
                 (k.clone(), e.clone())
             } else {
-                let (k, e) = mem_results[mi];
+                let (k, e) = mem_results[mi].clone();
                 mi += 1;
-                (k.to_vec(), e.clone())
+                (k, e)
             };
             merged.push((k, e));
         }
@@ -1310,19 +1312,59 @@ impl Engine {
         })
     }
 
-    fn flush_to_segments_inner(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
+    /// Phase 1 of the 3-phase flush: snapshot the memtable entries and reserve a
+    /// segment ID. The active memtable is NOT cleared — writes can continue, and
+    /// reads remain fully served during Phase 2 disk I/O.
+    ///
+    /// Returns `None` if the memtable is empty. The caller must pass the returned
+    /// `FlushWork::flushed_max_lsn` to `finalize_flush` to drop the snapshotted
+    /// entries from the memtable after the segment is registered.
+    pub fn begin_flush(&mut self) -> Option<crate::segment::FlushWork> {
         if self.memtable.is_empty() {
-            return Err(EdgestoreError::SegmentCorrupt(
-                "memtable is empty".to_string(),
-            ));
+            return None;
         }
-        let meta = self.segment_store.flush_memtable(self.memtable.as_ref())?;
-        self.memtable.clear();
+        debug_assert!(!self.memtable.is_empty(), "begin_flush: memtable must be non-empty");
+        self.segment_store.prepare_flush(self.memtable.as_ref())
+    }
+
+    /// Phase 3 of the 3-phase flush: register the completed segment, rebuild the
+    /// memtable keeping only entries written after the snapshot, fire the flush
+    /// callback, and retire old WAL files.
+    ///
+    /// `flushed_max_lsn` is `FlushWork::flushed_max_lsn` from Phase 1. Entries
+    /// at or below that LSN are in the new segment and are removed from the memtable.
+    /// Entries above it were written during Phase 2 and are retained.
+    pub fn finalize_flush(
+        &mut self,
+        meta: crate::types::SegmentMeta,
+        flushed_max_lsn: u64,
+    ) -> Result<(), EdgestoreError> {
+        debug_assert!(
+            meta.segment_id < self.segment_store.next_segment_id(),
+            "meta must reference a reserved segment ID"
+        );
+        self.segment_store.finalize_segment(meta.clone())?;
+        // Rebuild memtable: keep only entries written AFTER the snapshot LSN.
+        // These are writes that arrived during Phase 2 and are not yet in any segment.
+        let remaining: Vec<(Vec<u8>, crate::types::MemEntry)> = self
+            .memtable
+            .iter()
+            .into_iter()
+            .filter(|(_, e)| e.lsn > flushed_max_lsn)
+            .collect();
+        self.memtable = (self.config.memtable_factory)();
+        let remaining_count = remaining.len();
+        for (k, e) in remaining {
+            self.memtable.insert(k, e);
+        }
+        debug_assert_eq!(
+            self.memtable.len(),
+            remaining_count,
+            "memtable len must match re-inserted entry count"
+        );
         if let Some(cb) = &self.on_segment_flushed {
             cb(&meta);
         }
-        // Retire WAL files whose data is now durably stored in the segment.
-        // Keep only the current WAL file — it may hold entries written after this flush.
         let current_wal_name = self.wal.path().file_name().map(|n| n.to_os_string());
         if let Ok(wal_files) = crate::recovery::list_wal_files(&self.config.path) {
             for path in &wal_files {
@@ -1331,6 +1373,16 @@ impl Engine {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn flush_to_segments_inner(&mut self) -> Result<crate::types::SegmentMeta, EdgestoreError> {
+        let work = self.begin_flush().ok_or_else(|| {
+            EdgestoreError::SegmentCorrupt("memtable is empty".to_string())
+        })?;
+        let flushed_max_lsn = work.flushed_max_lsn;
+        let meta = work.execute()?;
+        self.finalize_flush(meta.clone(), flushed_max_lsn)?;
         Ok(meta)
     }
 

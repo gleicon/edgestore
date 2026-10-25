@@ -235,7 +235,7 @@ fn test_typo_tolerance() {
     text.index_document(&mut engine, b"ns", b"doc2", "segmnt database", HashMap::new()).unwrap();
 
     let results = text.search_with_options(&engine, b"ns", "segment", &SearchOptions {
-        k: 5,
+        limit: 5,
         typo_tolerance: true,
         facet_filters: vec![],
     }).unwrap();

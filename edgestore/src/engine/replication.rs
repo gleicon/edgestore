@@ -128,7 +128,6 @@ impl Engine {
             let local_entry = self
                 .memtable
                 .get(&encoded_key)
-                .cloned()
                 .or_else(|| self.segment_store.get(&encoded_key).ok().flatten());
 
             let apply = match local_entry {

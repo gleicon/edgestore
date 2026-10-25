@@ -380,6 +380,37 @@ fn flush_block_to_file(dat: &mut std::fs::File, block: &[u8]) -> Result<usize, E
     Ok(aligned_size)
 }
 
+// ── FlushWork ─────────────────────────────────────────────────────────────
+
+/// Self-contained work package for Phase 2 of the 3-phase flush protocol.
+///
+/// Carries everything needed to write a segment to disk without holding any
+/// Engine state or lock. Call `execute` from a `spawn_blocking` task.
+pub struct FlushWork {
+    /// Snapshot of memtable entries to flush, in sorted order.
+    pub entries: Vec<(Vec<u8>, MemEntry)>,
+    /// Segment ID reserved during Phase 1.
+    pub segment_id: SegmentId,
+    /// Directory where segment files will be written.
+    pub base_path: PathBuf,
+    /// Cohort window width in seconds for deathtime bucketing.
+    pub cohort_window_secs: u64,
+    /// Maximum LSN present in the snapshot. Used by `Engine::finalize_flush` to
+    /// determine which memtable entries can be dropped after the segment is registered.
+    pub flushed_max_lsn: u64,
+}
+
+impl FlushWork {
+    /// Phase 2: write segment files to disk. No Engine state required.
+    pub fn execute(self) -> Result<SegmentMeta, EdgestoreError> {
+        debug_assert!(!self.entries.is_empty(), "FlushWork::execute: entries must not be empty");
+        let mut writer = SegmentWriter::new(self.base_path, self.segment_id, self.cohort_window_secs);
+        let meta = writer.flush(&self.entries)?;
+        debug_assert_eq!(meta.segment_id, self.segment_id, "segment ID must match reserved ID");
+        Ok(meta)
+    }
+}
+
 // ── SegmentReader ──────────────────────────────────────────────────────────
 
 /// Read-only handle for an on-disk segment file.
@@ -730,32 +761,43 @@ impl SegmentStore {
         })
     }
 
-    pub(crate) fn flush_memtable(
-        &mut self,
-        memtable: &dyn MemTable,
-    ) -> Result<SegmentMeta, EdgestoreError> {
-        let raw = memtable.iter();
-        if raw.is_empty() {
-            return Err(EdgestoreError::SegmentCorrupt(
-                "memtable is empty".to_string(),
-            ));
+    /// Phase 1: snapshot memtable entries and reserve a segment ID.
+    ///
+    /// Returns `None` if the memtable is empty. Advances `next_segment_id` so
+    /// that concurrent callers (even if they never call `execute`) cannot reuse
+    /// the same ID. On restart the manifest is authoritative for used IDs.
+    pub(crate) fn prepare_flush(&mut self, memtable: &dyn MemTable) -> Option<FlushWork> {
+        let entries = memtable.iter();
+        debug_assert!(!entries.is_empty() || memtable.is_empty(), "iter vs is_empty mismatch");
+        if entries.is_empty() {
+            return None;
         }
-        let entries: Vec<(Vec<u8>, MemEntry)> = raw
-            .into_iter()
-            .map(|(k, e)| (k.to_vec(), e.clone()))
-            .collect();
+        let flushed_max_lsn = entries.iter().map(|(_, e)| e.lsn).max().unwrap_or(0);
+        let segment_id = self.next_segment_id;
+        self.next_segment_id += 1;
+        debug_assert!(segment_id < self.next_segment_id, "segment_id must advance");
+        Some(FlushWork {
+            entries,
+            segment_id,
+            base_path: self.base_path.clone(),
+            cohort_window_secs: self.cohort_window_secs,
+            flushed_max_lsn,
+        })
+    }
 
-        let mut writer = SegmentWriter::new(
-            self.base_path.clone(),
-            self.next_segment_id,
-            self.cohort_window_secs,
-        );
-        let meta = writer.flush(&entries)?;
+    /// Phase 3: register a completed segment in manifest and reader list.
+    pub(crate) fn finalize_segment(&mut self, meta: SegmentMeta) -> Result<(), EdgestoreError> {
+        debug_assert!(meta.segment_id < self.next_segment_id, "meta must use a reserved ID");
         self.manifest.add_segment(meta.clone())?;
         let reader = SegmentReader::open(self.base_path.clone(), meta.segment_id)?;
         self.readers.push(reader);
-        self.next_segment_id += 1;
-        Ok(meta)
+        debug_assert!(!self.readers.is_empty(), "reader list must not be empty after finalize");
+        Ok(())
+    }
+
+    /// Next segment ID that will be reserved by `prepare_flush`.
+    pub(crate) fn next_segment_id(&self) -> SegmentId {
+        self.next_segment_id
     }
 
     /// Return the segment IDs of all segments currently loaded in this store.

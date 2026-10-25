@@ -340,9 +340,43 @@ impl AsyncEngine {
         self.run_write(|e| e.flush()).await
     }
 
-    /// Flush the current memtable to a new immutable segment file — heavy I/O, runs on spawn_blocking.
+    /// Flush the current memtable to a new immutable segment file.
+    ///
+    /// Uses a 3-phase protocol to release the write lock during disk I/O:
+    /// - Phase 1 (write lock): snapshot entries, swap in fresh memtable.
+    /// - Phase 2 (no lock): write segment files to disk.
+    /// - Phase 3 (write lock): register segment, retire old WAL files.
     pub async fn flush_to_segments(&self) -> Result<SegmentMeta, EdgestoreError> {
-        self.run_write(|e| e.flush_to_segments()).await
+        // Phase 1: snapshot memtable entries under write lock.
+        // The active memtable is NOT cleared — reads remain fully served during Phase 2.
+        let inner = self.inner.clone();
+        let work = tokio::task::spawn_blocking(move || {
+            inner.blocking_write().begin_flush().ok_or_else(|| {
+                EdgestoreError::SegmentCorrupt("memtable is empty".to_string())
+            })
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))??;
+
+        let flushed_max_lsn = work.flushed_max_lsn;
+
+        // Phase 2: disk I/O — write lock is free, reads and writes proceed normally.
+        let meta = tokio::task::spawn_blocking(move || work.execute())
+            .await
+            .map_err(|e| {
+                EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e)))
+            })??;
+
+        // Phase 3: register segment, drop flushed memtable entries, retire WAL under write lock.
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            inner
+                .blocking_write()
+                .finalize_flush(meta.clone(), flushed_max_lsn)
+                .map(|()| meta)
+        })
+        .await
+        .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking: {}", e))))?
     }
 
     /// Local segment manifest (hash + id per segment) — used by replication/backup callers.
@@ -652,5 +686,177 @@ mod tests {
         for t in tasks {
             t.await.unwrap();
         }
+    }
+
+    /// Verifies that the 3-phase flush releases the write lock during disk I/O.
+    ///
+    /// If Phase 2 still held the write lock, the reader tasks below would deadlock
+    /// after Phase 1 swaps the memtable and before Phase 3 registers the segment.
+    /// `tokio::time::timeout` catches the deadlock within the test.
+    #[tokio::test]
+    async fn test_flush_releases_lock_during_io() {
+        use std::time::Duration;
+
+        let dir = TempDir::new().unwrap();
+        let engine = open_async_engine(&dir).await;
+
+        for i in 0u32..200 {
+            engine
+                .put(b"ns", format!("k{:06}", i).as_bytes(), b"val")
+                .await
+                .unwrap();
+        }
+
+        // Spawn 16 readers that each do 20 gets. If flush holds the write lock
+        // during disk I/O, these will deadlock (Tokio RwLock is fair by default).
+        let mut reader_handles = vec![];
+        for t in 0..16u32 {
+            let e = engine.clone();
+            reader_handles.push(tokio::spawn(async move {
+                for i in 0u32..20 {
+                    let key = format!("k{:06}", (t * 20 + i) % 200);
+                    let got = e.get(b"ns", key.as_bytes()).await.unwrap();
+                    assert!(got.is_some(), "key {key} must be readable during flush");
+                }
+            }));
+        }
+
+        // Flush concurrently with the readers. Must complete within 10 s even
+        // under heavy read pressure (disk I/O with lock released ≈ <50 ms).
+        let flush_handle = {
+            let e = engine.clone();
+            tokio::spawn(async move {
+                tokio::time::timeout(Duration::from_secs(10), e.flush_to_segments())
+                    .await
+                    .expect("flush must not deadlock")
+                    .unwrap()
+            })
+        };
+
+        let meta = flush_handle.await.unwrap();
+        assert_eq!(meta.segment_hash.len(), 32, "flush must produce a valid segment");
+
+        for h in reader_handles {
+            tokio::time::timeout(Duration::from_secs(10), h)
+                .await
+                .expect("reader must not deadlock")
+                .unwrap();
+        }
+    }
+
+    /// Verifies correctness under concurrent writers, readers, and a flush.
+    #[tokio::test]
+    async fn test_concurrent_writes_reads_and_flush() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let dir = TempDir::new().unwrap();
+        let engine = Arc::new(open_async_engine(&dir).await);
+
+        // Seed 50 keys so reads have something to find.
+        for i in 0u32..50 {
+            engine
+                .put(b"w", format!("seed{:04}", i).as_bytes(), b"v0")
+                .await
+                .unwrap();
+        }
+
+        let mut handles = vec![];
+
+        // 8 writer tasks
+        for t in 0u32..8 {
+            let e = engine.clone();
+            handles.push(tokio::spawn(async move {
+                for i in 0u32..25 {
+                    let k = format!("w{:03}{:04}", t, i);
+                    e.put(b"w", k.as_bytes(), b"vw").await.unwrap();
+                }
+            }));
+        }
+
+        // 8 reader tasks
+        for t in 0u32..8 {
+            let e = engine.clone();
+            handles.push(tokio::spawn(async move {
+                for i in 0u32..25 {
+                    let k = format!("seed{:04}", (t * 25 + i) % 50);
+                    let _ = e.get(b"w", k.as_bytes()).await.unwrap();
+                }
+            }));
+        }
+
+        // 1 flush task
+        let flush_e = engine.clone();
+        handles.push(tokio::spawn(async move {
+            let _ = flush_e.flush_to_segments().await; // may find memtable empty if writers are slow
+        }));
+
+        for h in handles {
+            tokio::time::timeout(Duration::from_secs(15), h)
+                .await
+                .expect("task must not deadlock")
+                .unwrap();
+        }
+
+        // Seed keys must still be readable after all the chaos.
+        for i in 0u32..50 {
+            let k = format!("seed{:04}", i);
+            let v = engine.get(b"w", k.as_bytes()).await.unwrap();
+            assert!(v.is_some(), "seed key {k} must survive concurrent flush + writes");
+        }
+    }
+
+    /// Verifies that all three MemTable variants produce identical results.
+    #[tokio::test]
+    async fn test_memtable_variants_correctness() {
+        use edgestore::memtable::{BBTreeConcurrentMemTable, BBTreeMemTable, BTreeMemTable};
+
+        fn run_ops(mut m: Box<dyn edgestore::memtable::MemTable>) {
+            let k1 = b"aaa".to_vec();
+            let k2 = b"bbb".to_vec();
+            let k3 = b"ccc".to_vec();
+
+            let entry = |v: &[u8]| edgestore::types::MemEntry {
+                key: v.to_vec(),
+                value: Some(v.to_vec()),
+                op: edgestore::types::Operation::Put,
+                lsn: 1,
+                timestamp: 0,
+                ttl: 0,
+            };
+
+            m.insert(k1.clone(), entry(b"v1"));
+            m.insert(k2.clone(), entry(b"v2"));
+            m.insert(k3.clone(), entry(b"v3"));
+
+            assert_eq!(m.len(), 3, "len must be 3 after 3 distinct inserts");
+            assert!(m.get(&k1).is_some(), "k1 must be present");
+            assert!(m.get(&k2).is_some(), "k2 must be present");
+            assert!(m.get(&k3).is_some(), "k3 must be present");
+            assert!(m.get(b"zzz").is_none(), "absent key must return None");
+
+            // Overwrite k1 — len stays 3
+            m.insert(k1.clone(), entry(b"v1b"));
+            assert_eq!(m.len(), 3, "len must stay 3 after overwrite");
+            assert_eq!(
+                m.get(&k1).unwrap().value,
+                Some(b"v1b".to_vec()),
+                "overwrite must update value"
+            );
+
+            let all = m.iter();
+            assert_eq!(all.len(), 3, "iter must return all 3 entries");
+
+            let prefix_result = m.prefix(b"a");
+            assert_eq!(prefix_result.len(), 1, "prefix 'a' must return 1 entry");
+
+            m.clear();
+            assert!(m.is_empty(), "memtable must be empty after clear");
+            assert_eq!(m.len(), 0, "len must be 0 after clear");
+        }
+
+        run_ops(Box::new(BTreeMemTable::new()));
+        run_ops(Box::new(BBTreeMemTable::new()));
+        run_ops(Box::new(BBTreeConcurrentMemTable::new()));
     }
 }

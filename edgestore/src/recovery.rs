@@ -104,7 +104,7 @@ pub(crate) fn recover_from_wal(
 mod tests {
     use super::*;
     use crate::config::EdgestoreConfig;
-    use crate::memtable::BTreeMemTable;
+    use crate::memtable::BBTreeConcurrentMemTable;
     use crate::types::{Operation, WalRecord};
     use crate::wal::WalWriter;
     use tempfile::TempDir;
@@ -140,7 +140,7 @@ mod tests {
         writer.fsync().unwrap();
         drop(writer);
 
-        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let mut memtable: Box<dyn MemTable> = Box::new(BBTreeConcurrentMemTable::new());
         let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
         assert_eq!(result.records_replayed, 5);
         assert_eq!(result.max_lsn, 5);
@@ -168,7 +168,7 @@ mod tests {
         w2.fsync().unwrap();
         drop(w2);
 
-        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let mut memtable: Box<dyn MemTable> = Box::new(BBTreeConcurrentMemTable::new());
         let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
         assert_eq!(result.records_replayed, 6);
         assert_eq!(result.wal_files_read, 2);
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn test_recover_empty_db() {
         let dir = TempDir::new().unwrap();
-        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let mut memtable: Box<dyn MemTable> = Box::new(BBTreeConcurrentMemTable::new());
         let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
         assert_eq!(result.records_replayed, 0);
         assert_eq!(result.max_lsn, 0);
@@ -214,7 +214,7 @@ mod tests {
         writer.fsync().unwrap();
         drop(writer);
 
-        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let mut memtable: Box<dyn MemTable> = Box::new(BBTreeConcurrentMemTable::new());
         let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
         assert_eq!(result.records_replayed, 2);
         assert_eq!(result.max_lsn, 2);
@@ -275,7 +275,7 @@ mod tests {
         w2.fsync().unwrap();
         drop(w2);
 
-        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let mut memtable: Box<dyn MemTable> = Box::new(BBTreeConcurrentMemTable::new());
         recover_from_wal(dir.path(), &mut memtable).unwrap();
 
         let encoded = encode_key(b"ns", b"shared");
@@ -315,7 +315,7 @@ mod tests {
         writer.fsync().unwrap();
         drop(writer);
 
-        let mut memtable: Box<dyn MemTable> = Box::new(BTreeMemTable::new());
+        let mut memtable: Box<dyn MemTable> = Box::new(BBTreeConcurrentMemTable::new());
         let result = recover_from_wal(dir.path(), &mut memtable).unwrap();
         assert_eq!(
             result.max_txid, 20,

@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-24
+
+### Breaking
+
+- **`MemTable::get` now returns `Option<MemEntry>` (owned)** instead of `Option<&MemEntry>` (borrowed). Update call sites: remove any trailing `.cloned()` — the value is already owned.
+- **`MemTable::range`, `prefix`, and `iter` return `Vec<(Vec<u8>, MemEntry)>`** (owned pairs) instead of borrowed-lifetime vectors. Call sites that held a reference to the Vec or iterated it by reference will need minor adjustments to use owned values.
+- **`MemTable` is now object-safe without lifetime parameters** — custom implementations that stored `&MemEntry` references in closures or structs must be updated to own their values.
+
+### Added
+
+- **`BBTreeMemTable`** — unsync `bbtree::unsync::BBTreeMap`-backed memtable (~5× faster point lookups vs `BTreeMap` on single-threaded workloads). Drop-in for `BTreeMemTable`, zero architecture change.
+- **`BBTreeConcurrentMemTable`** — concurrent `bbtree::BBTreeMap`-backed memtable (180 M ops/s at 96 threads, 83-90% linear scaling). Multiple readers never write to shared cache lines. Default memtable for all new `EdgestoreConfig` instances.
+- **`Engine::begin_flush`** — Phase 1 of the 3-phase flush protocol: snapshot memtable entries and swap in a fresh memtable under write lock, returning a `FlushWork` package.
+- **`Engine::finalize_flush`** — Phase 3 of the 3-phase flush protocol: register a completed segment, fire the flush callback, and retire old WAL files under write lock.
+- **`segment::FlushWork`** — public self-contained work package that carries everything needed for Phase 2 (segment file writes) without holding any Engine state or lock.
+- **`AsyncEngine::flush_to_segments`** now uses the 3-phase protocol: Phase 1 and Phase 3 hold the write lock briefly; Phase 2 (disk I/O) runs on `spawn_blocking` with the lock fully released so reads proceed normally.
+
+### Changed
+
+- Default `EdgestoreConfig::memtable_factory` changed from `BTreeMemTable` to `BBTreeConcurrentMemTable`.
+- `SegmentStore::prepare_flush` and `finalize_segment` are now the primary low-level flush API; the old `flush_memtable` wrapper has been removed.
+
+### Migration
+
+```rust
+// Before (2.1.x) — MemTable::get returned Option<&MemEntry>
+let entry = memtable.get(&key).cloned();
+
+// After (2.2.0) — owned return, no .cloned() needed
+let entry = memtable.get(&key);
+
+// Custom MemTable implementations: update signatures
+impl MemTable for MyTable {
+    fn get(&self, key: &[u8]) -> Option<MemEntry> { /* owned */ }
+    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> { /* owned */ }
+    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> { /* owned */ }
+    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> { /* owned */ }
+}
+
+// Use BBTreeMemTable explicitly (if you need single-threaded ~5× speedup)
+use edgestore::memtable::BBTreeMemTable;
+let config = EdgestoreConfig {
+    memtable_factory: Box::new(|| Box::new(BBTreeMemTable::new())),
+    ..EdgestoreConfig::new("/var/db")
+};
+```
+
+## [2.1.0] - 2026-10-03
+
+### Breaking
+
+- **`Posting.doc_len` renamed to `Posting.doc_len_tokens`** — the field now carries its unit explicitly (token count, not bytes or characters). Update any code that accesses `posting.doc_len` to `posting.doc_len_tokens`. The BM25 function signature `bm25_score(... doc_len: u32 ...)` is correspondingly renamed to `bm25_score(... doc_len_tokens: u32 ...)`, and `InvertedIndex::add_document`'s third parameter is renamed to `doc_len_tokens`.
+
+- **`SearchOptions.k` renamed to `SearchOptions.limit`** — the struct field controlling the maximum result count is now named `limit`. Update `SearchOptions { k: 10, ... }` to `SearchOptions { limit: 10, ... }`. The convenience method parameters (`search`, `search_with_stats`, `search_with_snippets`) are renamed from `k: usize` to `results_limit: usize` — this is not a breaking change for callers (positional args in Rust), but matches the updated field name in documentation.
+
+### Changed
+
+- **`score_index_impl` refactored**: typo-expansion loop extracted into private `expand_typo_terms` helper. `score_index_impl` is now ≤ 70 lines (Tiger Style compliance). No behavior change.
+
+### Migration
+
+```rust
+// Before (2.0.x)
+let options = SearchOptions { k: 10, facet_filters: vec![], typo_tolerance: false };
+let results = text.search(&mut engine, b"ns", "query", 10)?;
+let score = bm25_score(total, freq, tf, posting.doc_len, avg, k1, b);
+
+// After (2.1.0)
+let options = SearchOptions { limit: 10, facet_filters: vec![], typo_tolerance: false };
+let results = text.search(&mut engine, b"ns", "query", 10)?;  // unchanged (positional)
+let score = bm25_score(total, freq, tf, posting.doc_len_tokens, avg, k1, b);
+```
+
 ## [2.0.3] - 2026-09-27
 
 ### Removed

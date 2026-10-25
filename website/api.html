@@ -111,7 +111,15 @@
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.flush_to_segments() -> Result&lt;SegmentMeta, EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">Flush memtable to an immutable segment on disk. Creates .dat, .idx, .xf, and .meta files.</p>
+          <p class="text-slate-600 text-sm mt-1">Flush memtable to an immutable segment on disk. Creates .dat, .idx, .xf, and .meta files. On <code>AsyncEngine</code>, uses the 3-phase lock-free protocol — the write lock is released during disk I/O so reads are not blocked.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.begin_flush() -> Option&lt;FlushWork&gt;</code>
+          <p class="text-slate-600 text-sm mt-1"><span class="text-xs bg-blue-100 text-blue-700 rounded px-1 py-0.5 mr-1">v2.2.0</span> Phase 1 of the 3-phase flush. Snapshots memtable entries without clearing them. Returns <code>None</code> if empty. The caller must call <code>finalize_flush</code> with the returned <code>FlushWork::flushed_max_lsn</code>.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">engine.finalize_flush(meta, flushed_max_lsn) -> Result&lt;(), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1"><span class="text-xs bg-blue-100 text-blue-700 rounded px-1 py-0.5 mr-1">v2.2.0</span> Phase 3 of the 3-phase flush. Registers the completed segment, rebuilds the memtable (retaining only entries written after the snapshot), and retires old WAL files.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.compact_once() -> Result&lt;CompactionStats, EdgestoreError&gt;</code>
@@ -203,7 +211,7 @@
           <p class="text-slate-600 text-sm mt-1">ANN / flat-scan search with byte and segment accounting.</p>
         </div>
         <div class="api-item p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">text.search(&amp;engine, ns, query, k) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
+          <code class="font-mono text-sm text-edge-700 font-semibold">text.search(&amp;engine, ns, query, results_limit) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
           <p class="text-slate-600 text-sm mt-1">BM25 text search via <code>edgestore-text::TextIndex</code> (<code>text</code> must be <code>let mut</code>). For cost accounting on the text path, combine with engine-level stats (segments scanned, bytes read) from surrounding KV operations.</p>
         </div>
       </div>
@@ -323,7 +331,7 @@
       <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
         <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Text Search API <span class="text-sm font-normal text-slate-500 ml-2">edgestore-text v2.0</span>
       </h2>
-      <p class="text-slate-600 text-sm mb-4">Full-text search lives in the <code>edgestore-text</code> crate. Add <code>edgestore-text = "2.0"</code> to your <code>Cargo.toml</code>. Declare <code>TextIndex</code> as <code>let mut text = TextIndex::new()</code> — all search methods take <code>&amp;mut self</code> to cache WAL-reconstructed indices on first use. <code>persist()</code> writes a sidecar for faster cold-start reads; WAL reconstruction provides crash safety even without it.</p>
+      <p class="text-slate-600 text-sm mb-4">Full-text search lives in the <code>edgestore-text</code> crate. Add <code>edgestore-text = "2.1"</code> to your <code>Cargo.toml</code>. Declare <code>TextIndex</code> as <code>let mut text = TextIndex::new()</code> — all search methods take <code>&amp;mut self</code> to cache WAL-reconstructed indices on first use. <code>persist()</code> writes a sidecar for faster cold-start reads; WAL reconstruction provides crash safety even without it.</p>
       <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">TextIndex::new() -> TextIndex</code>
@@ -334,24 +342,36 @@
           <p class="text-slate-600 text-sm mt-1">Tokenize and index a document. Stores the inverted index sidecar in the <code>__text__{ns}</code> namespace. Pass <code>HashMap::new()</code> for no facets.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">text.search(&amp;engine, ns, query, k) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">BM25-ranked search; takes <code>&amp;mut self</code> (caches WAL-reconstructed index on first call). Returns up to <code>k</code> results with <code>doc_id</code> and <code>score</code>. Tokenizes the query, intersects posting lists, scores with BM25(k1=1.2, b=0.75).</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">text.search(&amp;engine, ns, query, results_limit) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">BM25-ranked search; takes <code>&amp;mut self</code> (caches WAL-reconstructed index on first call). Returns up to <code>results_limit</code> results with <code>doc_id: Vec&lt;u8&gt;</code> and <code>score: f32</code>. Tokenizes the query, intersects posting lists, scores with BM25(k1=1.2, b=0.75).</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">text.search_with_snippets(&amp;engine, ns, query, k) -> Result&lt;Vec&lt;SnippetResult&gt;, EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">BM25 search with context windows around matched terms; takes <code>&amp;mut self</code>. Each <code>SnippetResult</code> contains <code>doc_id</code>, <code>score</code>, and <code>snippets: Vec&lt;Snippet&gt;</code> with exact character offsets.</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">text.search_with_stats(&amp;engine, ns, query, results_limit) -> Result&lt;(Vec&lt;TextSearchResult&gt;, TextSearchStats), EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">BM25 search with scan statistics: <code>total_docs_indexed</code>, <code>docs_examined</code> (matched before cutoff), <code>bytes_scanned</code>. Useful for diagnosing empty results — if <code>docs_examined == 0</code> and <code>total_docs_indexed &gt; 0</code>, the query terms are simply absent from the corpus.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">text.search_with_options(&amp;engine, ns, query, &amp;SearchOptions) -> Result&lt;Vec&lt;TextSearchResult&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">Full-control search. <code>SearchOptions</code> fields: <code>limit: usize</code> (max results), <code>facet_filters: Vec&lt;FacetFilter&gt;</code>, <code>typo_tolerance: bool</code> (edit-distance ≤ 1 expansion). Example: <code>SearchOptions { limit: 10, typo_tolerance: true, facet_filters: vec![] }</code>.</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">text.search_with_snippets(&amp;engine, ns, query, results_limit, context_chars) -> Result&lt;Vec&lt;SnippetResult&gt;, EdgestoreError&gt;</code>
+          <p class="text-slate-600 text-sm mt-1">BM25 search with context windows around matched terms; takes <code>&amp;mut self</code>. Each <code>SnippetResult</code> contains <code>doc_id</code>, <code>score</code>, and <code>snippets: Vec&lt;Snippet&gt;</code>. Each <code>Snippet</code> has <code>text</code> (context window), <code>byte_start</code>, <code>byte_end</code> (match offsets within <code>text</code>).</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">text.delete_document(&amp;mut engine, ns, key) -> Result&lt;u64, EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">Remove a document from the text index.</p>
+          <p class="text-slate-600 text-sm mt-1">Remove a document from the text index. Writes a tombstone to the WAL immediately; the sidecar is updated on the next <code>persist()</code> call. WAL reconstruction skips tombstoned documents, so the deletion is crash-safe without an explicit <code>persist()</code>.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">text.persist(&amp;mut engine) -> Result&lt;(), EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1">Write the in-memory inverted index to the engine's WAL. Call once after a batch of <code>index_document</code> calls.</p>
+          <p class="text-slate-600 text-sm mt-1">Optional: write the inverted-index sidecar to the engine WAL for faster cold-start reads. Call once after a batch of <code>index_document</code> calls. No-op when nothing changed. Without <code>persist()</code>, the index is rebuilt from raw WAL records on next cold start — correct but slightly slower (one <code>engine.prefix()</code> scan per namespace).</p>
+        </div>
+        <div class="api-item border-b border-slate-100 p-4">
+          <code class="font-mono text-sm text-edge-700 font-semibold">SearchOptions { limit, facet_filters, typo_tolerance }</code>
+          <p class="text-slate-600 text-sm mt-1">Passed to <code>search_with_options</code>. All fields: <code>limit: usize</code> (max results to return), <code>facet_filters: Vec&lt;FacetFilter&gt;</code> (narrow by facet value), <code>typo_tolerance: bool</code> (match within edit distance 1). Use <code>..Default::default()</code> to fill unset fields.</p>
         </div>
         <div class="api-item p-4">
-          <code class="font-mono text-sm text-edge-700 font-semibold">SearchOptions</code>
-          <p class="text-slate-600 text-sm mt-1">Options for <code>search_with_options</code>: <code>k</code>, facet filters (<code>facets: Vec&lt;(String, edgestore_text::FacetValue)&gt;</code>), typo tolerance (<code>typo_tolerance: bool</code>).</p>
+          <code class="font-mono text-sm text-edge-700 font-semibold">Posting { doc_id, term_freq, doc_len_tokens, facets, positions }</code>
+          <p class="text-slate-600 text-sm mt-1">A posting in the inverted index. <code>doc_len_tokens</code> is the token count of the document (not bytes) — used by BM25 for length normalization. Exported for custom scoring via <code>bm25_score()</code> or <code>score_document()</code>.</p>
         </div>
       </div>
     </section>

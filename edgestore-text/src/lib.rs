@@ -119,21 +119,20 @@ impl TextIndex {
         text: &str,
         facets: HashMap<String, FacetValue>,
     ) -> Result<u64, EdgestoreError> {
+        assert!(!ns.is_empty(), "ns must not be empty");
+        assert!(!key.is_empty(), "key must not be empty");
         let tokens = tokenize(text, self.language);
-        let doc_len = tokens.len() as u32;
+        let doc_len_tokens = tokens.len() as u32;
         let text_ns = text_namespace(ns);
 
-        // Cold start: WAL is ground truth. Never load from sidecar (may be stale).
-        if !self.indices.contains_key(&text_ns) {
-            let rebuilt = Self::rebuild_from_engine(engine, &text_ns, self.language)?;
-            self.indices.insert(text_ns.clone(), rebuilt);
-        }
+        self.ensure_loaded(engine, &text_ns)?;
 
+        debug_assert!(self.indices.contains_key(&text_ns), "ensure_loaded guarantees namespace is populated");
         let index = self.indices.get_mut(&text_ns).unwrap();
         if index.doc_bloom.might_contain(key) {
             index.remove_document(key);
         }
-        index.add_document(key.to_vec(), &tokens, doc_len, facets.clone());
+        index.add_document(key.to_vec(), &tokens, doc_len_tokens, facets.clone());
         self.dirty.insert(text_ns.clone());
 
         let record = TextRecord { text: text.to_string(), facets };
@@ -148,39 +147,37 @@ impl TextIndex {
         ns: &[u8],
         key: &[u8],
     ) -> Result<u64, EdgestoreError> {
+        assert!(!ns.is_empty(), "ns must not be empty");
+        assert!(!key.is_empty(), "key must not be empty");
         let text_ns = text_namespace(ns);
+        self.ensure_loaded(engine, &text_ns)?;
 
-        // Cold start: WAL is ground truth. Never load from sidecar (may be stale).
-        let mut index = match self.indices.remove(&text_ns) {
-            Some(idx) => idx,
-            None => Self::rebuild_from_engine(engine, &text_ns, self.language)?,
-        };
-
+        debug_assert!(self.indices.contains_key(&text_ns), "ensure_loaded guarantees namespace is populated");
+        let index = self.indices.get_mut(&text_ns).unwrap();
         index.remove_document(key);
-        self.dirty.insert(text_ns.clone());
+        let is_empty = index.total_docs == 0;
 
-        if index.total_docs == 0 {
+        if is_empty {
             self.indices.remove(&text_ns);
             self.dirty.remove(&text_ns);
             engine.delete(&text_ns, TEXT_INDEX_KEY)?;
         } else {
-            let index_bytes = index.serialize();
-            engine.put(&text_ns, TEXT_INDEX_KEY, &index_bytes)?;
-            self.indices.insert(text_ns.clone(), index);
+            self.dirty.insert(text_ns.clone());
         }
 
         engine.delete(&text_ns, key)
     }
 
-    /// Search for the k most relevant documents using BM25 scoring.
+    /// Search for the top `results_limit` most relevant documents using BM25 scoring.
     pub fn search(
         &mut self,
         engine: &Engine,
         ns: &[u8],
         query: &str,
-        k: usize,
+        results_limit: usize,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        self.search_with_options(engine, ns, query, &SearchOptions { k, ..Default::default() })
+        assert!(!ns.is_empty(), "ns must not be empty");
+        self.search_with_options(engine, ns, query, &SearchOptions { limit: results_limit, ..Default::default() })
     }
 
     /// BM25 search with scan statistics.
@@ -194,9 +191,10 @@ impl TextIndex {
         engine: &Engine,
         ns: &[u8],
         query: &str,
-        k: usize,
+        results_limit: usize,
     ) -> Result<(Vec<TextSearchResult>, TextSearchStats), EdgestoreError> {
-        if k == 0 {
+        assert!(!ns.is_empty(), "ns must not be empty");
+        if results_limit == 0 {
             return Ok((vec![], TextSearchStats::default()));
         }
 
@@ -208,8 +206,9 @@ impl TextIndex {
         let text_ns = text_namespace(ns);
         self.ensure_loaded(engine, &text_ns)?;
 
+        debug_assert!(self.indices.contains_key(&text_ns), "ensure_loaded guarantees namespace is populated");
         let index = self.indices.get(&text_ns).unwrap();
-        Self::search_in_index_with_stats(index, &query_tokens, k)
+        Self::search_in_index_with_stats(index, &query_tokens, results_limit)
     }
 
     /// Search with full options (facets, typo tolerance).
@@ -220,7 +219,8 @@ impl TextIndex {
         query: &str,
         options: &SearchOptions,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
-        if options.k == 0 {
+        assert!(!ns.is_empty(), "ns must not be empty");
+        if options.limit == 0 {
             return Ok(vec![]);
         }
 
@@ -232,6 +232,7 @@ impl TextIndex {
         let text_ns = text_namespace(ns);
         self.ensure_loaded(engine, &text_ns)?;
 
+        debug_assert!(self.indices.contains_key(&text_ns), "ensure_loaded guarantees namespace is populated");
         let index = self.indices.get(&text_ns).unwrap();
         if index.total_docs == 0 {
             return Ok(vec![]);
@@ -246,85 +247,94 @@ impl TextIndex {
         engine: &Engine,
         ns: &[u8],
         query: &str,
-        k: usize,
+        results_limit: usize,
         context_chars: usize,
     ) -> Result<Vec<SnippetResult>, EdgestoreError> {
-        let text_ns = text_namespace(ns);
+        assert!(!ns.is_empty(), "ns must not be empty");
         let query_tokens = tokenize(query, self.language);
-        if query_tokens.is_empty() || k == 0 {
+        if query_tokens.is_empty() || results_limit == 0 {
             return Ok(vec![]);
         }
         let query_terms: std::collections::HashSet<String> =
             query_tokens.iter().map(|t| t.term.clone()).collect();
-
-        let base_results = self.search(engine, ns, query, k)?;
-
-        // After search, self.indices is populated (warm or WAL-reconstructed).
+        let text_ns = text_namespace(ns);
+        let base_results = self.search(engine, ns, query, results_limit)?;
         let index_opt = self.indices.get(&text_ns).cloned();
 
-        let mut out = Vec::with_capacity(base_results.len());
-        for result in base_results {
-            let snippets = if let Some(ref index) = index_opt {
-                let mut byte_positions: Vec<u32> = Vec::new();
-                for (term, postings) in &index.postings {
-                    if !query_terms.contains(term.as_str()) {
-                        continue;
-                    }
-                    if let Some(posting) = postings.iter().find(|p| p.doc_id == result.doc_id) {
-                        byte_positions.extend_from_slice(&posting.positions);
-                    }
-                }
-                if !byte_positions.is_empty() {
-                    match engine.get(&text_ns, &result.doc_id)? {
-                        Some(raw) => match decode_text_record(&raw) {
-                            Some(rec) => {
-                                let chars: Vec<char> = rec.text.chars().collect();
-                                byte_positions.sort_unstable();
-                                byte_positions.dedup();
-                                byte_positions
-                                    .iter()
-                                    .filter_map(|&pos| {
-                                        let char_start = pos as usize;
-                                        if char_start >= chars.len() {
-                                            return None;
-                                        }
-                                        let char_end = chars[char_start..]
-                                            .iter()
-                                            .position(|c| c.is_whitespace())
-                                            .map(|i| char_start + i)
-                                            .unwrap_or(chars.len());
-                                        let ctx_start = char_start.saturating_sub(context_chars);
-                                        let ctx_end = (char_end + context_chars).min(chars.len());
-                                        let ctx: String = chars[ctx_start..ctx_end].iter().collect();
-                                        let prefix: String =
-                                            chars[ctx_start..char_start].iter().collect();
-                                        let matched: String =
-                                            chars[char_start..char_end].iter().collect();
-                                        Some(Snippet {
-                                            text: ctx,
-                                            byte_start: prefix.len(),
-                                            byte_end: prefix.len() + matched.len(),
-                                        })
-                                    })
-                                    .collect()
-                            }
-                            None => vec![],
-                        },
-                        None => vec![],
-                    }
-                } else {
-                    vec![]
-                }
-            } else {
-                vec![]
-            };
-            out.push(SnippetResult {
-                doc_id: result.doc_id,
-                score: result.score,
-                snippets,
-            });
+        base_results
+            .into_iter()
+            .map(|result| {
+                let snippets = match &index_opt {
+                    Some(index) => Self::build_snippets(
+                        index, &result.doc_id, &query_terms, engine, &text_ns, context_chars,
+                    )?,
+                    None => vec![],
+                };
+                Ok(SnippetResult { doc_id: result.doc_id, score: result.score, snippets })
+            })
+            .collect()
+    }
+
+    fn build_snippets(
+        index: &InvertedIndex,
+        doc_id: &[u8],
+        query_terms: &std::collections::HashSet<String>,
+        engine: &Engine,
+        text_ns: &[u8],
+        context_chars: usize,
+    ) -> Result<Vec<Snippet>, EdgestoreError> {
+        assert!(!doc_id.is_empty(), "doc_id must not be empty");
+        assert!(!text_ns.is_empty(), "text_ns must not be empty");
+        let mut char_positions: Vec<u32> = Vec::new();
+        for (term, postings) in &index.postings {
+            if !query_terms.contains(term.as_str()) {
+                continue;
+            }
+            if let Some(posting) = postings.iter().find(|p| p.doc_id.as_slice() == doc_id) {
+                char_positions.extend_from_slice(&posting.positions);
+            }
         }
-        Ok(out)
+        if char_positions.is_empty() {
+            return Ok(vec![]);
+        }
+        let raw = match engine.get(text_ns, doc_id)? {
+            Some(r) => r,
+            None => return Ok(vec![]),
+        };
+        // None here means the WAL record is corrupt; WAL reconstruction would have
+        // skipped it too, so we return no snippets rather than propagating an error.
+        let record = match decode_text_record(&raw) {
+            Some(r) => r,
+            None => return Ok(vec![]),
+        };
+        let chars: Vec<char> = record.text.chars().collect();
+        char_positions.sort_unstable();
+        char_positions.dedup();
+        debug_assert!(!char_positions.is_empty(), "char_positions must be non-empty after dedup");
+        Ok(char_positions
+            .iter()
+            .filter_map(|&pos| {
+                let char_start = pos as usize;
+                if char_start >= chars.len() {
+                    return None;
+                }
+                let char_end = chars[char_start..]
+                    .iter()
+                    .position(|c| c.is_whitespace())
+                    .map(|i| char_start + i)
+                    .unwrap_or(chars.len());
+                let ctx_start = char_start.saturating_sub(context_chars);
+                let ctx_end = (char_end + context_chars).min(chars.len());
+                let context_text: String = chars[ctx_start..ctx_end].iter().collect();
+                let prefix_text: String = chars[ctx_start..char_start].iter().collect();
+                let matched_text: String = chars[char_start..char_end].iter().collect();
+                Some(Snippet {
+                    text: context_text,
+                    byte_start: prefix_text.len(),
+                    byte_end: prefix_text.len() + matched_text.len(),
+                })
+            })
+            .collect())
     }
 
     /// Persist dirty in-memory indices to the engine as sidecar entries.
@@ -367,10 +377,12 @@ impl TextIndex {
     /// This is the single cold-start loading point. WAL is always the ground truth —
     /// the sidecar is never loaded here because it may be stale after a crash.
     fn ensure_loaded(&mut self, engine: &Engine, text_ns: &[u8]) -> Result<(), EdgestoreError> {
+        assert!(!text_ns.is_empty(), "text_ns must not be empty");
         if !self.indices.contains_key(text_ns) {
             let rebuilt = Self::rebuild_from_engine(engine, text_ns, self.language)?;
             self.indices.insert(text_ns.to_vec(), rebuilt);
         }
+        debug_assert!(self.indices.contains_key(text_ns), "namespace must be populated after ensure_loaded");
         Ok(())
     }
 
@@ -384,6 +396,7 @@ impl TextIndex {
         text_ns: &[u8],
         language: Language,
     ) -> Result<InvertedIndex, EdgestoreError> {
+        assert!(!text_ns.is_empty(), "text_ns must not be empty");
         let pairs = engine.prefix(text_ns, b"")?;
         let mut index = InvertedIndex::new();
         for (key, value) in &pairs {
@@ -392,10 +405,15 @@ impl TextIndex {
             }
             if let Some(record) = decode_text_record(value) {
                 let tokens = tokenize(&record.text, language);
-                let doc_len = tokens.len() as u32;
-                index.add_document(key.clone(), &tokens, doc_len, record.facets);
+                let doc_len_tokens = tokens.len() as u32;
+                index.add_document(key.clone(), &tokens, doc_len_tokens, record.facets);
             }
+            // decode_text_record returning None means a corrupt WAL record — skipped
+            // silently here because WAL reconstruction is best-effort; the document
+            // simply won't appear in search results, which is consistent with what
+            // would happen if the write never completed.
         }
+        debug_assert!(index.total_docs as usize <= pairs.len(), "total_docs cannot exceed WAL pair count");
         Ok(index)
     }
 
@@ -404,27 +422,60 @@ impl TextIndex {
         query_tokens: &[crate::text::tokenizer::Token],
         options: &SearchOptions,
     ) -> Result<Vec<TextSearchResult>, EdgestoreError> {
+        Ok(Self::score_index_impl(index, query_tokens, options)?.0)
+    }
+
+    fn search_in_index_with_stats(
+        index: &InvertedIndex,
+        query_tokens: &[crate::text::tokenizer::Token],
+        results_limit: usize,
+    ) -> Result<(Vec<TextSearchResult>, TextSearchStats), EdgestoreError> {
+        Self::score_index_impl(index, query_tokens, &SearchOptions { limit: results_limit, ..Default::default() })
+    }
+
+    /// Expand `search_terms` with typo candidates (edit distance ≤ 1) from the index.
+    fn expand_typo_terms(
+        index: &InvertedIndex,
+        query_tokens: &[crate::text::tokenizer::Token],
+        search_terms: &mut Vec<String>,
+    ) {
+        for token in query_tokens {
+            for term in index.postings.keys() {
+                if term != &token.term
+                    && is_one_edit_away(term, &token.term)
+                    && !search_terms.contains(term)
+                {
+                    search_terms.push(term.clone());
+                }
+            }
+        }
+    }
+
+    fn score_index_impl(
+        index: &InvertedIndex,
+        query_tokens: &[crate::text::tokenizer::Token],
+        options: &SearchOptions,
+    ) -> Result<(Vec<TextSearchResult>, TextSearchStats), EdgestoreError> {
+        assert!(!query_tokens.is_empty(), "query_tokens must not be empty — callers must check");
+        assert!(options.limit > 0, "limit must be positive — callers must check");
         let mut search_terms: Vec<String> =
             query_tokens.iter().map(|t| t.term.clone()).collect();
 
         if options.typo_tolerance {
-            for token in query_tokens {
-                for term in index.postings.keys() {
-                    if term != &token.term
-                        && is_one_edit_away(term, &token.term)
-                        && !search_terms.contains(term)
-                    {
-                        search_terms.push(term.clone());
-                    }
-                }
-            }
+            Self::expand_typo_terms(index, query_tokens, &mut search_terms);
         }
 
         let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
+        let mut bytes_scanned: u64 = 0;
         let avg_doc_len = index.avg_doc_len();
+
         for term in &search_terms {
             if let Some(postings) = index.postings.get(term) {
                 let doc_freq = postings.len() as u64;
+                bytes_scanned +=
+                    postings.len() as u64
+                    * std::mem::size_of::<crate::text::index::Posting>() as u64;
+
                 let filtered = if !options.facet_filters.is_empty() {
                     crate::text::facet::filter_by_facets(postings, &options.facet_filters)
                 } else {
@@ -439,53 +490,11 @@ impl TextIndex {
                         index.total_docs,
                         doc_freq,
                         posting.term_freq,
-                        posting.doc_len,
+                        posting.doc_len_tokens,
                         avg_doc_len,
                         crate::text::index::BM25_K1,
                         crate::text::index::BM25_B,
                     ) * weight;
-                    *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
-                }
-            }
-        }
-
-        let mut results: Vec<TextSearchResult> = doc_scores
-            .into_iter()
-            .map(|(doc_id, score)| TextSearchResult { doc_id, score })
-            .collect();
-        results.sort_by(|a, b| {
-            edgestore::total_cmp_f32(b.score, a.score).then(a.doc_id.cmp(&b.doc_id))
-        });
-        results.truncate(options.k);
-        Ok(results)
-    }
-
-    fn search_in_index_with_stats(
-        index: &InvertedIndex,
-        query_tokens: &[crate::text::tokenizer::Token],
-        k: usize,
-    ) -> Result<(Vec<TextSearchResult>, TextSearchStats), EdgestoreError> {
-        let search_terms: Vec<String> =
-            query_tokens.iter().map(|t| t.term.clone()).collect();
-
-        let mut doc_scores: HashMap<Vec<u8>, f32> = HashMap::new();
-        let mut bytes_scanned: u64 = 0;
-        let avg_doc_len = index.avg_doc_len();
-
-        for term in &search_terms {
-            if let Some(postings) = index.postings.get(term) {
-                let doc_freq = postings.len() as u64;
-                bytes_scanned += postings.len() as u64 * std::mem::size_of::<crate::text::index::Posting>() as u64;
-                for posting in postings {
-                    let score = bm25_score(
-                        index.total_docs,
-                        doc_freq,
-                        posting.term_freq,
-                        posting.doc_len,
-                        avg_doc_len,
-                        crate::text::index::BM25_K1,
-                        crate::text::index::BM25_B,
-                    );
                     *doc_scores.entry(posting.doc_id.clone()).or_insert(0.0) += score;
                 }
             }
@@ -504,7 +513,8 @@ impl TextIndex {
         results.sort_by(|a, b| {
             edgestore::total_cmp_f32(b.score, a.score).then(a.doc_id.cmp(&b.doc_id))
         });
-        results.truncate(k);
+        results.truncate(options.limit);
+        debug_assert!(results.len() <= options.limit, "results must not exceed limit after truncation");
         Ok((results, stats))
     }
 }

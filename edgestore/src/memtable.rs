@@ -1,17 +1,23 @@
+use bbtree::unsync::BBTreeMap;
+
 use crate::types::MemEntry;
 
 /// In-memory ordered table trait. Implementations must be Send + Sync.
+///
+/// All read methods return owned values. This allows concurrent implementations
+/// (e.g. `bbtree::BBTreeMap`) that cannot safely return borrowed references
+/// because the underlying node memory may be reclaimed and reused.
 pub trait MemTable: Send + Sync {
     /// Insert or overwrite an entry.
     fn insert(&mut self, key: Vec<u8>, entry: MemEntry);
-    /// Retrieve an entry by key.
-    fn get(&self, key: &[u8]) -> Option<&MemEntry>;
-    /// Scan entries in [start, end).
-    fn range<'a>(&'a self, start: &[u8], end: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)>;
-    /// Scan entries with the given prefix.
-    fn prefix<'a>(&'a self, prefix: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)>;
-    /// Iterate all entries.
-    fn iter(&self) -> Vec<(&[u8], &MemEntry)>;
+    /// Retrieve an entry by key (owned clone).
+    fn get(&self, key: &[u8]) -> Option<MemEntry>;
+    /// Scan entries in [start, end) — returns owned pairs.
+    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)>;
+    /// Scan entries with the given prefix — returns owned pairs.
+    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)>;
+    /// Iterate all entries — returns owned pairs.
+    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)>;
     /// Number of entries.
     fn len(&self) -> usize;
     /// Clear all entries.
@@ -47,31 +53,31 @@ impl MemTable for BTreeMemTable {
         self.inner.insert(key, entry);
     }
 
-    fn get(&self, key: &[u8]) -> Option<&MemEntry> {
-        self.inner.get(key)
+    fn get(&self, key: &[u8]) -> Option<MemEntry> {
+        self.inner.get(key).cloned()
     }
 
-    fn range<'a>(&'a self, start: &[u8], end: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)> {
+    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
         use std::ops::Bound;
         self.inner
             .range((
                 Bound::Included(start.to_vec()),
                 Bound::Excluded(end.to_vec()),
             ))
-            .map(|(k, v)| (k.as_slice(), v))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
 
-    fn prefix<'a>(&'a self, prefix: &[u8]) -> Vec<(&'a [u8], &'a MemEntry)> {
+    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
         self.inner
             .range(prefix.to_vec()..)
             .take_while(|(k, _)| k.starts_with(prefix))
-            .map(|(k, v)| (k.as_slice(), v))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
 
-    fn iter(&self) -> Vec<(&[u8], &MemEntry)> {
-        self.inner.iter().map(|(k, v)| (k.as_slice(), v)).collect()
+    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> {
+        self.inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
     fn len(&self) -> usize {
@@ -80,6 +86,167 @@ impl MemTable for BTreeMemTable {
 
     fn clear(&mut self) {
         self.inner.clear();
+    }
+}
+
+/// Memtable backed by `bbtree::unsync::BBTreeMap`.
+///
+/// Drop-in replacement for `BTreeMemTable` with ~5× faster point lookups,
+/// lower memory usage, and SIMD-accelerated node search. Uses the same
+/// `&mut self` ownership model as std's `BTreeMap` — no API changes required.
+pub struct BBTreeMemTable {
+    inner: BBTreeMap<Vec<u8>, MemEntry>,
+}
+
+impl BBTreeMemTable {
+    /// Create a new empty `BBTreeMemTable`.
+    pub fn new() -> Self {
+        BBTreeMemTable {
+            inner: BBTreeMap::new(),
+        }
+    }
+}
+
+impl Default for BBTreeMemTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemTable for BBTreeMemTable {
+    fn insert(&mut self, key: Vec<u8>, entry: MemEntry) {
+        self.inner.insert(key, entry);
+    }
+
+    fn get(&self, key: &[u8]) -> Option<MemEntry> {
+        self.inner.get(key).cloned()
+    }
+
+    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
+        use std::ops::Bound;
+        self.inner
+            .range((
+                Bound::Included(start.to_vec()),
+                Bound::Excluded(end.to_vec()),
+            ))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
+        self.inner
+            .range(prefix.to_vec()..)
+            .take_while(|(k, _)| k.starts_with(prefix))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> {
+        self.inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+/// Memtable backed by `bbtree::BBTreeMap` — the concurrent B-tree variant.
+///
+/// Multiple readers can access this table simultaneously without cache coherence
+/// traffic because the internal version lock never writes to shared cache lines
+/// during reads. Writes still require exclusive `&mut self` access (for WAL/LSN
+/// ordering), but concurrent reads in `AsyncEngine::run_read` benefit
+/// significantly at high thread counts.
+///
+/// `get`, `range`, `prefix`, and `iter` all return owned values — the version
+/// lock may reclaim and reuse freed nodes, so it is unsound to return `&V`.
+pub struct BBTreeConcurrentMemTable {
+    inner: bbtree::BBTreeMap<Vec<u8>, MemEntry>,
+    count: usize,
+}
+
+impl BBTreeConcurrentMemTable {
+    /// Create a new empty `BBTreeConcurrentMemTable`.
+    pub fn new() -> Self {
+        BBTreeConcurrentMemTable {
+            inner: bbtree::BBTreeMap::new(),
+            count: 0,
+        }
+    }
+}
+
+impl Default for BBTreeConcurrentMemTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemTable for BBTreeConcurrentMemTable {
+    fn insert(&mut self, key: Vec<u8>, entry: MemEntry) {
+        match self.inner.insert(key, entry) {
+            Ok(None) => self.count += 1,
+            Ok(Some(_)) => {}
+            Err(_) => panic!("BBTreeConcurrentMemTable: allocation failed"),
+        }
+    }
+
+    fn get(&self, key: &[u8]) -> Option<MemEntry> {
+        self.inner.get_cloned(key)
+    }
+
+    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
+        use std::ops::Bound;
+        let mut results = Vec::new();
+        self.inner.scan::<[u8], ()>(
+            (Bound::Included(start), Bound::Excluded(end)),
+            |k, v| {
+                results.push((k.clone(), v.clone()));
+                std::ops::ControlFlow::Continue(())
+            },
+        );
+        results
+    }
+
+    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
+        use std::ops::Bound;
+        let mut results = Vec::new();
+        self.inner.scan::<[u8], ()>(
+            (Bound::Included(prefix), Bound::Unbounded),
+            |k, v| {
+                if !k.starts_with(prefix) {
+                    return std::ops::ControlFlow::Break(());
+                }
+                results.push((k.clone(), v.clone()));
+                std::ops::ControlFlow::Continue(())
+            },
+        );
+        results
+    }
+
+    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> {
+        use std::ops::Bound;
+        let mut results = Vec::new();
+        self.inner.scan::<[u8], ()>(
+            (Bound::Unbounded, Bound::Unbounded),
+            |k, v| {
+                results.push((k.clone(), v.clone()));
+                std::ops::ControlFlow::Continue(())
+            },
+        );
+        results
+    }
+
+    fn len(&self) -> usize {
+        self.count
+    }
+
+    fn clear(&mut self) {
+        self.inner = bbtree::BBTreeMap::new();
+        self.count = 0;
     }
 }
 

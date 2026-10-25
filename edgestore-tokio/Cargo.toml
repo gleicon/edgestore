@@ -12,14 +12,14 @@ keywords = ["edgestore", "tokio", "async", "database"]
 categories = ["database-implementations", "asynchronous"]
 
 [dependencies]
-edgestore = { path = "../edgestore", version = "2.0.3" }
-edgestore-tier = { path = "../edgestore-tier", version = "2.0.0", optional = true }
+edgestore = { path = "../edgestore", version = "2.2.0" }
+edgestore-tier = { path = "../edgestore-tier", version = "2.2.0", optional = true }
 tokio = { version = "1.44", features = ["sync", "rt"] }
 
 [features]
 tier = ["dep:edgestore-tier"]
 
 [dev-dependencies]
-tokio = { version = "1.44", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "time"] }
 edgestore-repl = { path = "../edgestore-repl" }
 tempfile = "3"

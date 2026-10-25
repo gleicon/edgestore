@@ -1,4 +1,4 @@
-use crate::memtable::{BTreeMemTable, MemTable};
+use crate::memtable::{BBTreeConcurrentMemTable, MemTable};
 use crate::types::Compression;
 use std::path::PathBuf;
 
@@ -87,7 +87,7 @@ impl EdgestoreConfig {
             fdp_enabled: false,
             hnsw_max_ram_bytes: 512 * 1024 * 1024,
             readonly: false,
-            memtable_factory: Box::new(|| Box::new(BTreeMemTable::new())),
+            memtable_factory: Box::new(|| Box::new(BBTreeConcurrentMemTable::new())),
         }
     }
 }

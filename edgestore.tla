@@ -260,17 +260,40 @@ SegmentLsnOrder ==
        TextSearchConsistency ==
          \A ns, doc_key :
            WrittenRawTextRecord(ns, doc_key)    (* (a) durable via NoDataLoss *)
+           /\ ~DeletedRawTextRecord(ns, doc_key)
            => SearchReturns(ns, doc_key)        (* query over ns finds doc_key *)
 
      This is provable in the existing spec for (a) via NoDataLoss (raw records
-     survive crash). The gap that existed — "sidecar absent ⟹ search returns
-     empty even though raw records exist" — was a bug in edgestore-text, not in
-     the engine spec. It is fixed by WAL reconstruction in TextIndex.search.
+     survive crash and DeleteDocument removes them via tombstone). The gap that
+     existed — "sidecar absent ⟹ search returns empty even though raw records
+     exist" — was a bug in edgestore-text, not in the engine spec. It is fixed
+     by WAL reconstruction in TextIndex.search (D38 in DECISIONS.md).
+
+     Implementation invariants reflected in this spec:
+       1. IndexDocument:  engine.put(__text__{ns}, doc_key, text_bytes)
+                          — raw record is durable immediately via NoDataLoss.
+       2. DeleteDocument: engine.delete(__text__{ns}, doc_key)
+                          — tombstone written to WAL; sidecar update deferred to
+                          PersistSidecar. WAL reconstruction skips deleted keys,
+                          so TextSearchConsistency is maintained via NoDataLoss +
+                          tombstone semantics even without a sidecar update.
+       3. PersistSidecar: engine.put(__text__{ns}, __index__, sidecar_bytes)
+                          — optimisation only; not required for correctness.
+                          TextIndex marks the namespace dirty on index_document/
+                          delete_document and writes the sidecar lazily via persist().
+
+     Crash-safety argument:
+       After a crash, WAL reconstruction (engine.prefix(__text__{ns}, ""))
+       replays all Put and Delete records in LSN order. The resulting in-memory
+       InvertedIndex is exactly the set of documents that were durably written
+       but not yet deleted — consistent with NoDataLoss and the tombstone model
+       in the Delete action above.
 
      To formally verify TextSearchConsistency in TLC, extend the spec with:
        - CONSTANTS TextNamespaces, DocKeys
        - Variables: text_records (set of written (ns, doc_key) pairs), sidecar_written
-       - Actions: IndexDocument, PersistSidecar, TextSearch, CrashBeforePersist
+       - Actions: IndexDocument, DeleteDocument, PersistSidecar, TextSearch,
+                  CrashBeforePersist
        - Invariant: \A (ns, doc_key) \in text_records : SearchCanFind(ns, doc_key)
      This is deferred to a future spec module (edgestore_text.tla).
 *)
@@ -287,4 +310,7 @@ AllInvariants ==
 \* Created for edgestore formal verification — zeroth spec (abstract data model)
 \* Covers: Put/Delete, WAL→memtable→segment flush, crash+recovery, compaction
 \* Extended: TextSearchConsistency scope note + edgestore_text.tla deferred spec
+\* Extended: DeleteDocument action added to TextSearchConsistency scope note;
+\*           documented deferred-sidecar-write invariant (sidecar never written on
+\*           delete — only tombstone in WAL; PersistSidecar is always deferred)
 \* Out of scope: replication (LWW import_segment), vector/text indexes, TTL

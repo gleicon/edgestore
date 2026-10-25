@@ -11,8 +11,8 @@ pub struct Posting {
     pub doc_id: Vec<u8>,
     /// Term frequency in this document.
     pub term_freq: u32,
-    /// Total token count in this document.
-    pub doc_len: u32,
+    /// Total token count in this document (not bytes).
+    pub doc_len_tokens: u32,
     /// Facet values attached to this document.
     pub facets: HashMap<String, FacetValue>,
     /// Byte-level positions of this term in the document text (v3 format).
@@ -91,7 +91,7 @@ impl InvertedIndex {
                 if p.doc_id == doc_id {
                     removed = true;
                     if doc_len_removed.is_none() {
-                        doc_len_removed = Some(p.doc_len as u64);
+                        doc_len_removed = Some(p.doc_len_tokens as u64);
                     }
                     false
                 } else {
@@ -102,6 +102,8 @@ impl InvertedIndex {
         });
 
         if let Some(len) = doc_len_removed {
+            assert!(self.total_docs > 0, "total_docs underflow: remove_document called on empty index");
+            assert!(self.total_doc_len >= len, "total_doc_len underflow: stored len exceeds index total");
             self.total_docs -= 1;
             self.total_doc_len -= len;
         }
@@ -114,7 +116,7 @@ impl InvertedIndex {
         &mut self,
         doc_id: Vec<u8>,
         tokens: &[crate::text::tokenizer::Token],
-        doc_len: u32,
+        doc_len_tokens: u32,
         facets: HashMap<String, FacetValue>,
     ) {
         self.bloom_insert(&doc_id);
@@ -133,7 +135,7 @@ impl InvertedIndex {
             let posting = Posting {
                 doc_id: doc_id.clone(),
                 term_freq: freq,
-                doc_len,
+                doc_len_tokens,
                 facets: facets.clone(),
                 positions,
             };
@@ -141,7 +143,7 @@ impl InvertedIndex {
         }
 
         self.total_docs += 1;
-        self.total_doc_len += doc_len as u64;
+        self.total_doc_len += doc_len_tokens as u64;
     }
 
     /// Average document length (tokens). Returns 0.0 if no documents.
@@ -172,7 +174,7 @@ impl InvertedIndex {
                 buf.extend_from_slice(&(p.doc_id.len() as u16).to_le_bytes());
                 buf.extend_from_slice(&p.doc_id);
                 buf.extend_from_slice(&p.term_freq.to_le_bytes());
-                buf.extend_from_slice(&p.doc_len.to_le_bytes());
+                buf.extend_from_slice(&p.doc_len_tokens.to_le_bytes());
                 buf.extend_from_slice(&(p.facets.len() as u16).to_le_bytes());
                 for (k, v) in &p.facets {
                     let k_bytes = k.as_bytes();
@@ -261,7 +263,7 @@ impl InvertedIndex {
                 let id_len = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
                 let doc_id = read!(id_len).to_vec();
                 let term_freq = u32::from_le_bytes(read!(4).try_into().unwrap());
-                let doc_len = u32::from_le_bytes(read!(4).try_into().unwrap());
+                let doc_len_tokens = u32::from_le_bytes(read!(4).try_into().unwrap());
                 let facet_count = u16::from_le_bytes(read!(2).try_into().unwrap()) as usize;
                 let mut facets = HashMap::with_capacity(facet_count);
                 for _ in 0..facet_count {
@@ -310,7 +312,7 @@ impl InvertedIndex {
                 posting_vec.push(Posting {
                     doc_id,
                     term_freq,
-                    doc_len,
+                    doc_len_tokens,
                     facets,
                     positions,
                 });
@@ -343,18 +345,20 @@ pub fn bm25_score(
     total_docs: u64,
     doc_freq: u64,
     term_freq: u32,
-    doc_len: u32,
+    doc_len_tokens: u32,
     avg_doc_len: f32,
     k1: f32,
     b: f32,
 ) -> f32 {
+    debug_assert!(k1 > 0.0, "k1 must be positive for BM25 to be well-defined");
+    debug_assert!(b >= 0.0 && b <= 1.0, "b must be in [0, 1] per BM25 definition");
     if total_docs == 0 || avg_doc_len == 0.0 {
         return 0.0;
     }
 
     let idf = (((total_docs as f32 - doc_freq as f32 + 0.5) / (doc_freq as f32 + 0.5)) + 1.0).ln();
     let tf_component = (term_freq as f32 * (k1 + 1.0))
-        / (term_freq as f32 + k1 * (1.0 - b + b * (doc_len as f32 / avg_doc_len)));
+        / (term_freq as f32 + k1 * (1.0 - b + b * (doc_len_tokens as f32 / avg_doc_len)));
 
     idf * tf_component
 }
@@ -376,7 +380,7 @@ pub fn score_document(
                     index.total_docs,
                     doc_freq,
                     posting.term_freq,
-                    posting.doc_len,
+                    posting.doc_len_tokens,
                     avg_doc_len,
                     BM25_K1,
                     BM25_B,
@@ -416,7 +420,7 @@ mod tests {
         let hello_postings = index.postings.get("hello").unwrap();
         assert_eq!(hello_postings.len(), 1);
         assert_eq!(hello_postings[0].term_freq, 2);
-        assert_eq!(hello_postings[0].doc_len, 3);
+        assert_eq!(hello_postings[0].doc_len_tokens, 3);
     }
 
     #[test]

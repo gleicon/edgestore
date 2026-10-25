@@ -1,4 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use edgestore::memtable::{BBTreeConcurrentMemTable, BBTreeMemTable, BTreeMemTable, MemTable};
+use edgestore::types::{MemEntry, Operation};
 use edgestore::{Dtype, EdgestoreConfig, Engine, Metric, VectorEngine, VectorRecord};
 use tempfile::TempDir;
 
@@ -115,5 +117,64 @@ fn bench_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_throughput);
+/// Compare put and get throughput across the three MemTable implementations.
+///
+/// Measures isolated memtable performance — no WAL, no segment I/O.
+fn bench_memtable_variants(c: &mut Criterion) {
+    const N: usize = 10_000;
+
+    let make_entry = |i: usize| MemEntry {
+        key: format!("k{:08}", i).into_bytes(),
+        value: Some(format!("value_{:016}", i).into_bytes()),
+        op: Operation::Put,
+        lsn: i as u64,
+        timestamp: 0,
+        ttl: 0,
+    };
+
+    type MemFactory = fn() -> Box<dyn MemTable>;
+    let variants: &[(&str, MemFactory)] = &[
+        ("btree", || Box::new(BTreeMemTable::new())),
+        ("bbtree_unsync", || Box::new(BBTreeMemTable::new())),
+        ("bbtree_concurrent", || Box::new(BBTreeConcurrentMemTable::new())),
+    ];
+
+    let mut put_group = c.benchmark_group("memtable_put_10k");
+    for &(label, factory) in variants {
+        put_group.bench_with_input(BenchmarkId::new("variant", label), &label, |b, _| {
+            b.iter_batched(
+                factory,
+                |mut m| {
+                    for i in 0..N {
+                        let key = format!("k{:08}", i).into_bytes();
+                        m.insert(key, make_entry(i));
+                    }
+                    black_box(m);
+                },
+                criterion::BatchSize::PerIteration,
+            );
+        });
+    }
+    put_group.finish();
+
+    let mut get_group = c.benchmark_group("memtable_get_10k_hot");
+    for &(label, factory) in variants {
+        get_group.bench_with_input(BenchmarkId::new("variant", label), &label, |b, _| {
+            let mut m = factory();
+            for i in 0..N {
+                let key = format!("k{:08}", i).into_bytes();
+                m.insert(key, make_entry(i));
+            }
+            b.iter(|| {
+                for i in 0..N {
+                    let key = format!("k{:08}", i);
+                    black_box(m.get(key.as_bytes()));
+                }
+            });
+        });
+    }
+    get_group.finish();
+}
+
+criterion_group!(benches, bench_throughput, bench_memtable_variants);
 criterion_main!(benches);

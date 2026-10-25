@@ -71,6 +71,40 @@ fn open(path: &PathBuf) -> Engine {
     Engine::open(EdgestoreConfig::new(path)).unwrap()
 }
 
+// Execute a sequence of TextOps against a fresh engine+index and return the final
+// state. Crash arms drop and reopen the engine (releasing the file lock first) and
+// reset the TextIndex; the model retains all indexed docs across crashes.
+fn execute_ops(
+    ops: &[TextOp],
+    path: &PathBuf,
+) -> (Engine, TextIndex, HashMap<(Vec<u8>, Vec<u8>), String>) {
+    let mut engine = open(path);
+    let mut text = TextIndex::new();
+    let mut model: HashMap<(Vec<u8>, Vec<u8>), String> = HashMap::new();
+
+    for op in ops {
+        match op {
+            TextOp::IndexDoc(ns, key, content) => {
+                text.index_document(&mut engine, ns, key, content, HashMap::new()).unwrap();
+                model.insert((ns.clone(), key.clone()), content.clone());
+            }
+            TextOp::Persist => { text.persist(&mut engine).unwrap(); }
+            TextOp::Flush => { let _ = engine.flush(); }
+            TextOp::Crash => {
+                // Flush so raw WAL records survive reopen; do NOT call persist()
+                // — the sidecar may or may not exist. Drop before reopen to release
+                // the file lock, then open fresh.
+                let _ = engine.flush();
+                drop(engine);
+                engine = open(path);
+                text = TextIndex::new();
+            }
+        }
+    }
+
+    (engine, text, model)
+}
+
 // TextSearchConsistency: every indexed document is findable via search after
 // any sequence of index/persist/crash operations.
 //
@@ -84,44 +118,13 @@ proptest! {
     fn text_search_consistency(ops in arb_text_ops()) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
+        let (engine, mut text, model) = execute_ops(&ops, &path);
 
-        let mut engine = open(&path);
-        let mut text = TextIndex::new();
-
-        // model: (ns, key) -> content for all docs indexed so far
-        let mut model: HashMap<(Vec<u8>, Vec<u8>), String> = HashMap::new();
-
-        for op in &ops {
-            match op {
-                TextOp::IndexDoc(ns, key, content) => {
-                    text.index_document(&mut engine, ns, key, content, HashMap::new()).unwrap();
-                    model.insert((ns.clone(), key.clone()), content.clone());
-                }
-                TextOp::Persist => {
-                    text.persist(&mut engine).unwrap();
-                }
-                TextOp::Flush => {
-                    let _ = engine.flush();
-                }
-                TextOp::Crash => {
-                    // Flush WAL so raw records survive reopen (models Engine::drop fsync).
-                    // Do NOT call persist() — the sidecar may or may not exist.
-                    let _ = engine.flush();
-                    drop(engine);
-                    engine = open(&path);
-                    text = TextIndex::new(); // fresh: no in-memory cache, no sidecar guaranteed
-                }
-            }
-        }
-
-        // Invariant: every doc in the model must be findable via search.
         for ((ns, key), content) in &model {
-            // Extract a non-trivial term (len > 4, skips stopwords / short tokens).
             let term = match content.split_whitespace().find(|w| w.len() > 4) {
                 Some(t) => t,
                 None => continue,
             };
-
             let results = text.search(&engine, ns, term, 100).unwrap();
             prop_assert!(
                 results.iter().any(|r| &r.doc_id == key),
@@ -141,44 +144,21 @@ proptest! {
     fn text_search_consistency_with_stats(ops in arb_text_ops()) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
-
-        let mut engine = open(&path);
-        let mut text = TextIndex::new();
-        let mut model: HashMap<(Vec<u8>, Vec<u8>), String> = HashMap::new();
-
-        for op in &ops {
-            match op {
-                TextOp::IndexDoc(ns, key, content) => {
-                    text.index_document(&mut engine, ns, key, content, HashMap::new()).unwrap();
-                    model.insert((ns.clone(), key.clone()), content.clone());
-                }
-                TextOp::Persist => { text.persist(&mut engine).unwrap(); }
-                TextOp::Flush => { let _ = engine.flush(); }
-                TextOp::Crash => {
-                    let _ = engine.flush();
-                    drop(engine);
-                    engine = open(&path);
-                    text = TextIndex::new();
-                }
-            }
-        }
+        let (engine, mut text, model) = execute_ops(&ops, &path);
 
         for ((ns, key), content) in &model {
             let term = match content.split_whitespace().find(|w| w.len() > 4) {
                 Some(t) => t,
                 None => continue,
             };
-
             let (results, stats) = text.search_with_stats(&engine, ns, term, 100).unwrap();
 
-            // total_docs_indexed must be at least as many as the model for this namespace.
             let ns_doc_count = model.keys().filter(|(n, _)| n == ns).count() as u64;
             prop_assert!(
                 stats.total_docs_indexed >= ns_doc_count,
                 "stats.total_docs_indexed ({}) < model doc count ({}) for ns {:?}",
                 stats.total_docs_indexed, ns_doc_count, String::from_utf8_lossy(ns),
             );
-
             prop_assert!(
                 results.iter().any(|r| &r.doc_id == key),
                 "TextSearchConsistency (stats path) violated: doc {:?} in ns {:?} not found for term {:?}",

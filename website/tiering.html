@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tiered Storage — EdgeStore</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          colors: { edge: { 50:'#f0f9ff',100:'#e0f2fe',200:'#bae6fd',300:'#7dd3fc',400:'#38bdf8',500:'#0ea5e9',600:'#0284c7',700:'#0369a1',800:'#075985',900:'#0c4a6e' }, rust: { 500:'#dea584',600:'#c56c3a' } }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Layout: two-column sticky-nav + scrollable content ── */
+    :root {
+      --bg:       #f8fafc;
+      --surface:  #ffffff;
+      --border:   #e2e8f0;
+      --text:     #1e293b;
+      --muted:    #64748b;
+      --accent:   #0284c7;
+      --accent-bg:#eff6ff;
+      --code-bg:  #1e293b;
+      --code-fg:  #e2e8f0;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg:       #0f172a;
+        --surface:  #1e293b;
+        --border:   #334155;
+        --text:     #f1f5f9;
+        --muted:    #94a3b8;
+        --accent:   #38bdf8;
+        --accent-bg:#0c4a6e;
+        --code-bg:  #0a1628;
+        --code-fg:  #e2e8f0;
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg:       #0f172a;
+      --surface:  #1e293b;
+      --border:   #334155;
+      --text:     #f1f5f9;
+      --muted:    #94a3b8;
+      --accent:   #38bdf8;
+      --accent-bg:#0c4a6e;
+      --code-bg:  #0a1628;
+      --code-fg:  #e2e8f0;
+      color-scheme: dark;
+    }
+    body { background: var(--bg); color: var(--text); }
+
+    .code-block { background: var(--code-bg); border-radius: 0.5rem; overflow-x: auto; }
+    .code-block code { color: var(--code-fg); white-space: pre; display: block; }
+    .keyword { color: #c678dd; } .string { color: #98c379; } .function { color: #61afef; }
+    .comment { color: #5c6370; font-style: italic; } .type { color: #e5c07b; } .number { color: #d19a66; }
+
+    .toc-link { display: block; padding: 0.25rem 0.75rem; font-size: 0.8125rem; color: var(--muted); border-left: 2px solid transparent; transition: all 0.15s; }
+    .toc-link:hover, .toc-link.active { color: var(--accent); border-left-color: var(--accent); }
+    .toc-sub { padding-left: 1.5rem; }
+
+    .step-num { width: 1.75rem; height: 1.75rem; background: var(--accent); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; }
+
+    .callout { background: var(--accent-bg); border-left: 3px solid var(--accent); border-radius: 0 0.375rem 0.375rem 0; }
+
+    .provider-card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.5rem; }
+  </style>
+</head>
+<body class="font-sans antialiased">
+
+  <nav class="sticky top-0 z-50 border-b" style="background:var(--surface); border-color:var(--border);">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center"><span class="text-white font-bold text-sm">E</span></div>
+          <a href="index.html" class="font-bold text-xl" style="color:var(--text)">EdgeStore</a>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="font-medium transition" style="color:var(--muted)">Home</a>
+          <a href="features.html" class="font-medium transition" style="color:var(--muted)">Features</a>
+          <a href="architecture.html" class="font-medium transition" style="color:var(--muted)">Architecture</a>
+          <a href="examples.html" class="font-medium transition" style="color:var(--muted)">Examples</a>
+          <a href="papers.html" class="font-medium transition" style="color:var(--muted)">Papers</a>
+          <a href="api.html" class="font-medium transition" style="color:var(--muted)">API</a>
+          <a href="internals.html" class="font-medium transition" style="color:var(--muted)">Internals</a>
+          <a href="tiering.html" class="font-medium" style="color:var(--accent)">Tiering</a>
+        </div>
+        <a href="https://docs.rs/edgestore-tier" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <div class="lg:grid lg:grid-cols-[220px_1fr] lg:gap-12">
+
+      <!-- Sticky TOC -->
+      <aside class="hidden lg:block">
+        <nav class="sticky top-24 space-y-1" aria-label="Page sections">
+          <p class="text-xs font-semibold uppercase tracking-widest mb-3" style="color:var(--muted)">On this page</p>
+          <a href="#what-is-tiering" class="toc-link">What is tiering</a>
+          <a href="#segment-lifecycle" class="toc-link">Segment lifecycle</a>
+          <a href="#setup" class="toc-link">Setup</a>
+          <a href="#archive-pattern" class="toc-link">Archive pattern</a>
+          <a href="#read-through" class="toc-link">Read-through</a>
+          <a href="#stripping" class="toc-link">Index stripping</a>
+          <a href="#sidecars" class="toc-link">Sidecars</a>
+          <a href="#retry" class="toc-link">Retry behavior</a>
+          <a href="#local-testing" class="toc-link">Local testing</a>
+          <a href="#production-s3" class="toc-link">Production S3</a>
+          <a href="#alternatives" class="toc-link">S3-compatible</a>
+          <a href="#custom-backend" class="toc-link">Custom backend</a>
+        </nav>
+      </aside>
+
+      <!-- Main content -->
+      <main class="min-w-0">
+
+        <div class="mb-10">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs font-semibold uppercase tracking-widest" style="color:var(--accent)">edgestore-tier</span>
+          </div>
+          <h1 class="text-4xl font-bold mb-4" style="text-wrap:balance">Tiered Storage</h1>
+          <p class="text-lg max-w-2xl" style="color:var(--muted)">Transparently extend a local <code class="font-mono text-sm">Engine</code> to an S3-compatible cold archive. Writes stay fast and local; reads fall through to remote only on a miss.</p>
+        </div>
+
+        <!-- What is tiering -->
+        <section id="what-is-tiering" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">What is tiering</h2>
+          <div class="prose max-w-2xl" style="color:var(--muted)">
+            <p class="mb-3">A single <code class="font-mono text-sm" style="color:var(--text)">Engine</code> stores data on local disk. Once segments are sealed and immutable, they can be uploaded to an object store — S3, MinIO, Cloudflare R2, GCS — and eventually pruned from local disk. Future reads that miss the local cache silently fetch the matching segment from remote, merge it, and return the result.</p>
+            <p class="mb-3"><code class="font-mono text-sm" style="color:var(--text)">edgestore-tier</code> implements this as <code class="font-mono text-sm" style="color:var(--text)">TieredEngine</code>: a thin wrapper that owns a local <code class="font-mono text-sm" style="color:var(--text)">Engine</code> and a <code class="font-mono text-sm" style="color:var(--text)">Box&lt;dyn RemoteStore&gt;</code>. No background threads. No daemon process. You call <code class="font-mono text-sm" style="color:var(--text)">archive_segments</code> when your policy says it's time.</p>
+          </div>
+
+          <div class="callout p-4 mt-6 max-w-2xl">
+            <p class="text-sm font-medium mb-1" style="color:var(--text)">Cargo dependencies</p>
+            <div class="code-block p-3 mt-2">
+              <code class="text-sm">[dependencies]
+edgestore-tier  = "<span class="string">2.2.1</span>"
+edgestore-repl  = { version = "<span class="string">2.2.1</span>", features = [<span class="string">"s3"</span>] }  <span class="comment"># for S3RemoteStore</span></code>
+            </div>
+          </div>
+        </section>
+
+        <!-- Segment lifecycle -->
+        <section id="segment-lifecycle" class="mb-14">
+          <h2 class="text-2xl font-bold mb-6" style="text-wrap:balance">Segment lifecycle</h2>
+          <div class="space-y-3 max-w-2xl">
+            <div class="flex gap-4 items-start">
+              <div class="step-num">1</div>
+              <div>
+                <p class="font-semibold text-sm" style="color:var(--text)">Write → memtable</p>
+                <p class="text-sm mt-0.5" style="color:var(--muted)"><code class="font-mono">put / delete</code> land in the in-memory memtable. No S3 involved.</p>
+              </div>
+            </div>
+            <div class="flex gap-4 items-start">
+              <div class="step-num">2</div>
+              <div>
+                <p class="font-semibold text-sm" style="color:var(--text)">Flush → sealed segment on local disk</p>
+                <p class="text-sm mt-0.5" style="color:var(--muted)"><code class="font-mono">flush_to_segments()</code> writes a <code class="font-mono">segment-NNNNNNNN.dat</code> file. The segment is now immutable; its BLAKE3 hash is its identity everywhere.</p>
+              </div>
+            </div>
+            <div class="flex gap-4 items-start">
+              <div class="step-num">3</div>
+              <div>
+                <p class="font-semibold text-sm" style="color:var(--text)">Archive → upload to remote</p>
+                <p class="text-sm mt-0.5" style="color:var(--muted)"><code class="font-mono">archive_segments(&metas)</code> reads each <code class="font-mono">.dat</code> file and calls <code class="font-mono">remote.upload_if_absent(hash, data)</code>. Already-uploaded segments are skipped (idempotent). The segment is registered in the local archived list.</p>
+              </div>
+            </div>
+            <div class="flex gap-4 items-start">
+              <div class="step-num">4</div>
+              <div>
+                <p class="font-semibold text-sm" style="color:var(--text)">Prune → reclaim local disk (optional)</p>
+                <p class="text-sm mt-0.5" style="color:var(--muted)">Once archived, call <code class="font-mono">prune_local_segment(segment_id)</code> to delete the local <code class="font-mono">.dat</code>. The remote copy remains. Do this only after confirming the segment is in <code class="font-mono">archived_segments()</code>.</p>
+              </div>
+            </div>
+            <div class="flex gap-4 items-start">
+              <div class="step-num">5</div>
+              <div>
+                <p class="font-semibold text-sm" style="color:var(--text)">Miss → fetch from remote</p>
+                <p class="text-sm mt-0.5" style="color:var(--muted)"><code class="font-mono">get()</code> misses local, scans the archived list by key bounds, downloads the matching segment, imports it into local storage (LWW merge), and returns the value. Subsequent reads are local hits.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Setup -->
+        <section id="setup" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Setup</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">Builder methods chain off <code class="font-mono text-sm" style="color:var(--text)">TieredEngine::new</code>. All are optional.</p>
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm"><span class="keyword">use</span> edgestore::{EdgestoreConfig, Engine};
+<span class="keyword">use</span> edgestore_repl::S3RemoteStore;
+<span class="keyword">use</span> edgestore_tier::TieredEngine;
+
+<span class="keyword">let</span> local = Engine::open(EdgestoreConfig::new(<span class="string">"/var/db/hot"</span>))?;
+<span class="keyword">let</span> remote = S3RemoteStore::new(
+    <span class="string">"my-bucket"</span>,         <span class="comment">// bucket name</span>
+    <span class="type">Some</span>(<span class="string">"myapp/"</span>),         <span class="comment">// optional key prefix</span>
+    <span class="type">None</span>,                  <span class="comment">// None = standard AWS endpoint</span>
+)?;
+
+<span class="keyword">let mut</span> tiered = TieredEngine::new(local, Box::new(remote))
+    .with_segment_cache_bytes(<span class="number">32</span> * <span class="number">1024</span> * <span class="number">1024</span>) <span class="comment">// 32 MB ephemeral cache</span>
+    .with_text_stripping(<span class="type">true</span>)                    <span class="comment">// strip BM25 after archive</span>
+    .with_vector_stripping(<span class="type">true</span>)                  <span class="comment">// strip __vec__ after archive</span>
+    .with_sidecars(<span class="type">true</span>);                         <span class="comment">// upload .idx/.xf/.meta</span></code>
+          </div>
+
+          <div class="mt-6 max-w-2xl overflow-x-auto">
+            <table class="w-full text-sm border-collapse">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <th class="text-left py-2 pr-4 font-semibold" style="color:var(--text)">Builder</th>
+                  <th class="text-left py-2 pr-4 font-semibold" style="color:var(--text)">Default</th>
+                  <th class="text-left py-2 font-semibold" style="color:var(--text)">Effect</th>
+                </tr>
+              </thead>
+              <tbody style="color:var(--muted)">
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-4 font-mono text-xs" style="color:var(--text)">with_segment_cache_bytes(n)</td>
+                  <td class="py-2 pr-4 font-mono text-xs">32 MB</td>
+                  <td class="py-2">LRU byte budget for ephemeral range/prefix reads. Set 0 to disable.</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-4 font-mono text-xs" style="color:var(--text)">with_text_stripping(true)</td>
+                  <td class="py-2 pr-4 font-mono text-xs">false</td>
+                  <td class="py-2">After archive, remove <code class="font-mono text-xs">__text__*</code> records from local copy.</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-4 font-mono text-xs" style="color:var(--text)">with_vector_stripping(true)</td>
+                  <td class="py-2 pr-4 font-mono text-xs">false</td>
+                  <td class="py-2">After archive, remove <code class="font-mono text-xs">__vec__*</code> records from local copy.</td>
+                </tr>
+                <tr>
+                  <td class="py-2 pr-4 font-mono text-xs" style="color:var(--text)">with_sidecars(true)</td>
+                  <td class="py-2 pr-4 font-mono text-xs">false</td>
+                  <td class="py-2">Upload <code class="font-mono text-xs">.idx</code>, <code class="font-mono text-xs">.xf</code>, <code class="font-mono text-xs">.meta</code> alongside each <code class="font-mono text-xs">.dat</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Archive pattern -->
+        <section id="archive-pattern" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Monitor-and-archive pattern</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">EdgeStore is caller-driven. Your application controls when to archive and how many segments to keep hot. A common pattern: archive when segment count exceeds a threshold, keep the N most recent segments local.</p>
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm"><span class="keyword">loop</span> {
+    <span class="comment">// ... handle requests ...</span>
+
+    <span class="keyword">let</span> metas = tiered.local().list_segment_metas();
+    <span class="keyword">if</span> metas.len() > <span class="number">8</span> {
+        <span class="comment">// archive the oldest; keep 4 most recent hot</span>
+        <span class="keyword">let</span> to_archive = &amp;metas[..metas.len() - <span class="number">4</span>];
+        tiered.archive_segments(to_archive)?;
+
+        <span class="comment">// optionally reclaim local disk</span>
+        <span class="keyword">for</span> m <span class="keyword">in</span> to_archive {
+            tiered.prune_local_segment(m.segment_id)?;
+        }
+    }
+}
+
+<span class="comment">// After restart: restore the archived list from your persistence layer</span>
+<span class="comment">// (you must save archived_segments() somewhere — a JSON file, a DB row, etc.)</span>
+tiered.register_archived(load_archived_from_disk());</code>
+          </div>
+          <div class="callout p-4 mt-4 max-w-2xl">
+            <p class="text-sm" style="color:var(--text)"><strong>Persist the archived list.</strong> <code class="font-mono text-sm">archived_segments()</code> returns a <code class="font-mono text-sm">Vec&lt;ArchivedSegment&gt;</code> (each has <code class="font-mono text-sm">hash</code>, <code class="font-mono text-sm">min_key</code>, <code class="font-mono text-sm">max_key</code>). Serialize this after every <code class="font-mono text-sm">archive_segments</code> call and call <code class="font-mono text-sm">register_archived</code> on startup. Without it, remote segments will not be considered on reads after a restart.</p>
+          </div>
+        </section>
+
+        <!-- Read-through -->
+        <section id="read-through" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Read-through behavior</h2>
+
+          <div class="space-y-6 max-w-2xl">
+            <div>
+              <h3 class="font-semibold mb-2" style="color:var(--text)">get()</h3>
+              <p class="text-sm mb-3" style="color:var(--muted)">Tries local first. On miss, finds archived segments whose <code class="font-mono text-sm">[min_key, max_key]</code> bounds contain the encoded key, downloads and imports them (LWW merge), then retries locally. Once fetched, segments are cached in <code class="font-mono text-sm">self.fetched</code> — no re-download within a session.</p>
+            </div>
+
+            <div>
+              <h3 class="font-semibold mb-2" style="color:var(--text)">range() and prefix()</h3>
+              <p class="text-sm mb-3" style="color:var(--muted)">Scans local, then builds an ephemeral <code class="font-mono text-sm">ImmutableEngine</code> from all archived segments whose key bounds overlap the query. Segment bytes are served from the LRU byte cache when available — no disk write, no permanent import. Local data wins for any key present in both sources.</p>
+            </div>
+
+            <div>
+              <h3 class="font-semibold mb-2" style="color:var(--text)">Async fast-path (AsyncTieredEngine)</h3>
+              <p class="text-sm mb-3" style="color:var(--muted)">Call <code class="font-mono text-sm">get_needs_archived_fetch(ns, key)</code> under a read lock before escalating to a write lock. When it returns <code class="font-mono text-sm">false</code>, the local-only result is the complete answer — no writer needed.</p>
+            </div>
+
+            <div>
+              <h3 class="font-semibold mb-2" style="color:var(--text)">Selective pre-fetch</h3>
+              <div class="code-block p-4">
+                <code class="text-sm"><span class="comment">// Pre-fetch only segments that overlap a known time range</span>
+tiered.fetch_archived_overlapping(<span class="string">b"logs"</span>, <span class="string">b"2026-01-01"</span>, <span class="string">b"2026-01-31"</span>)?;
+
+<span class="comment">// Download bytes without importing (ephemeral, for your own ImmutableEngine)</span>
+<span class="keyword">let</span> bytes = tiered.download_segment(&amp;hash)?;
+
+<span class="comment">// Warm everything (disaster recovery / full replay)</span>
+tiered.fetch_all_archived()?;</code>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Index stripping -->
+        <section id="stripping" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Index stripping</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">After archiving a segment to remote, the full-text BM25 index and HNSW vector index embedded in the local copy become redundant — the remote copy retains them. Stripping removes those records from local disk after each successful upload.</p>
+
+          <div class="grid sm:grid-cols-2 gap-4 max-w-2xl">
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">Text stripping</p>
+              <div class="code-block p-3 mt-2">
+                <code class="text-xs">.with_text_stripping(<span class="type">true</span>)</code>
+              </div>
+              <p class="text-xs mt-2" style="color:var(--muted)">Removes <code class="font-mono text-xs">__text__*</code> namespace records after archive. Trade-off: <code class="font-mono text-xs">rebuild_text_indices</code> cannot reconstruct entries for stripped segments — only use after the merged <code class="font-mono text-xs">__index__</code> sidecar has been flushed.</p>
+            </div>
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">Vector stripping</p>
+              <div class="code-block p-3 mt-2">
+                <code class="text-xs">.with_vector_stripping(<span class="type">true</span>)</code>
+              </div>
+              <p class="text-xs mt-2" style="color:var(--muted)">Removes <code class="font-mono text-xs">__vec__*</code> namespace records after archive. HNSW queries on stripped segments fall through to remote. Combine with text stripping for maximum reclaim.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Sidecars -->
+        <section id="sidecars" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Sidecars</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">With <code class="font-mono text-sm">with_sidecars(true)</code>, <code class="font-mono text-sm">archive_segments</code> uploads three auxiliary files alongside each <code class="font-mono text-sm">.dat</code> segment:</p>
+          <div class="max-w-2xl overflow-x-auto">
+            <table class="w-full text-sm border-collapse">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <th class="text-left py-2 pr-6 font-semibold" style="color:var(--text)">File</th>
+                  <th class="text-left py-2 font-semibold" style="color:var(--text)">Contents</th>
+                </tr>
+              </thead>
+              <tbody style="color:var(--muted)">
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-6 font-mono text-xs" style="color:var(--text)">{hash}.idx</td>
+                  <td class="py-2 text-xs">Key index for direct offset lookup without full scan</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-6 font-mono text-xs" style="color:var(--text)">{hash}.xf</td>
+                  <td class="py-2 text-xs">XOR filter for fast key-not-present probes</td>
+                </tr>
+                <tr>
+                  <td class="py-2 pr-6 font-mono text-xs" style="color:var(--text)">{hash}.meta</td>
+                  <td class="py-2 text-xs">Segment metadata (key bounds, record count, hash)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="text-sm mt-3 max-w-2xl" style="color:var(--muted)">Sidecar upload errors are logged and skipped — the <code class="font-mono text-sm">.dat</code> alone is sufficient for correctness. Sidecars enable <code class="font-mono text-sm">ImmutableEngine</code> to reconstruct its in-memory index faster on replica nodes.</p>
+        </section>
+
+        <!-- Retry behavior -->
+        <section id="retry" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Retry behavior</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">Both <code class="font-mono text-sm">upload_with_retry</code> (called from <code class="font-mono text-sm">archive_segments</code>) and the download path inside <code class="font-mono text-sm">get()</code> use the same <code class="font-mono text-sm">retry_transient</code> policy:</p>
+          <div class="max-w-2xl overflow-x-auto">
+            <table class="w-full text-sm border-collapse">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <th class="text-left py-2 pr-6 font-semibold" style="color:var(--text)">Constant</th>
+                  <th class="text-left py-2 pr-6 font-semibold" style="color:var(--text)">Value</th>
+                  <th class="text-left py-2 font-semibold" style="color:var(--text)">Meaning</th>
+                </tr>
+              </thead>
+              <tbody style="color:var(--muted)">
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-6 font-mono text-xs" style="color:var(--text)">MAX_RETRIES</td>
+                  <td class="py-2 pr-6 font-mono text-xs">3</td>
+                  <td class="py-2 text-xs">Maximum attempts after the first failure</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td class="py-2 pr-6 font-mono text-xs" style="color:var(--text)">BASE_DELAY_MS</td>
+                  <td class="py-2 pr-6 font-mono text-xs">10 ms</td>
+                  <td class="py-2 text-xs">Exponential backoff base: delay = 10 × 2^attempt ms</td>
+                </tr>
+                <tr>
+                  <td class="py-2 pr-6 font-mono text-xs" style="color:var(--text)">Transient triggers</td>
+                  <td class="py-2 pr-6 font-mono text-xs">"throttled"<br>"timeout"<br>"503"</td>
+                  <td class="py-2 text-xs">Non-transient errors (404, 403, hash mismatch) fail immediately without retry</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="text-sm mt-3 max-w-2xl" style="color:var(--muted)">Delays: 10 ms, 20 ms, 40 ms. Total worst-case wait before failure: 70 ms. Uploads use <code class="font-mono text-sm">upload_if_absent</code> (idempotent) so retrying a partially-completed upload never creates a duplicate.</p>
+        </section>
+
+        <!-- Local testing -->
+        <section id="local-testing" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Local testing with MinIO</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">MinIO is a single-container S3-compatible object store. It supports path-style addressing and requires no AWS account. The project ships a <code class="font-mono text-sm">docker-compose.yml</code> and a <code class="font-mono text-sm">Makefile</code> target.</p>
+
+          <h3 class="font-semibold mb-2 mt-6" style="color:var(--text)">Quick start</h3>
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm"><span class="comment"># Start MinIO and create the test bucket</span>
+make s3-up
+
+<span class="comment"># Run all S3 integration tests</span>
+make s3-test
+
+<span class="comment"># Stop and remove the container</span>
+make s3-down</code>
+          </div>
+
+          <h3 class="font-semibold mb-2 mt-6" style="color:var(--text)">Manual run</h3>
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm"><span class="comment"># Start container</span>
+docker run -d --name edgestore-minio \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio:latest server /data --console-address ":9001"
+
+<span class="comment"># Create bucket</span>
+AWS_ACCESS_KEY_ID=minioadmin \
+AWS_SECRET_ACCESS_KEY=minioadmin \
+aws s3 mb s3://edgestore-test --endpoint-url http://localhost:9000
+
+<span class="comment"># Run edgestore-tier integration tests</span>
+EDGESTORE_S3_ENDPOINT_URL=http://localhost:9000 \
+EDGESTORE_S3_BUCKET=edgestore-test \
+AWS_ACCESS_KEY_ID=minioadmin \
+AWS_SECRET_ACCESS_KEY=minioadmin \
+AWS_DEFAULT_REGION=us-east-1 \
+cargo test --package edgestore-tier --test integration_s3 -- --nocapture</code>
+          </div>
+
+          <div class="grid sm:grid-cols-2 gap-4 mt-6 max-w-2xl">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-widest mb-2" style="color:var(--muted)">Environment variables</p>
+              <div class="space-y-1.5 text-xs" style="color:var(--muted)">
+                <div class="flex gap-2"><code class="font-mono" style="color:var(--text); min-width:220px">EDGESTORE_S3_ENDPOINT_URL</code><span>Override endpoint (required for MinIO/local)</span></div>
+                <div class="flex gap-2"><code class="font-mono" style="color:var(--text); min-width:220px">EDGESTORE_S3_BUCKET</code><span>Bucket name (default: <code class="font-mono">edgestore-test</code>)</span></div>
+                <div class="flex gap-2"><code class="font-mono" style="color:var(--text); min-width:220px">AWS_ACCESS_KEY_ID</code><span>Access key</span></div>
+                <div class="flex gap-2"><code class="font-mono" style="color:var(--text); min-width:220px">AWS_SECRET_ACCESS_KEY</code><span>Secret key</span></div>
+                <div class="flex gap-2"><code class="font-mono" style="color:var(--text); min-width:220px">AWS_DEFAULT_REGION</code><span>Region (MinIO: <code class="font-mono">us-east-1</code>)</span></div>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-widest mb-2" style="color:var(--muted)">MinIO console</p>
+              <p class="text-xs" style="color:var(--muted)">After <code class="font-mono text-xs">make s3-up</code>, open <a href="http://localhost:9001" class="underline" style="color:var(--accent)">http://localhost:9001</a> in a browser. Login: <code class="font-mono text-xs">minioadmin / minioadmin</code>. Browse buckets, inspect uploaded segments, and verify key layout.</p>
+            </div>
+          </div>
+
+          <h3 class="font-semibold mb-2 mt-6" style="color:var(--text)">Skip behavior</h3>
+          <p class="text-sm max-w-2xl" style="color:var(--muted)">S3 tests skip gracefully when <code class="font-mono text-sm">EDGESTORE_S3_ENDPOINT_URL</code> is not set — they print <code class="font-mono text-sm">skip: EDGESTORE_S3_ENDPOINT_URL not set</code> and return. The full unit test suite (<code class="font-mono text-sm">cargo test --workspace</code>) always passes without a running container.</p>
+        </section>
+
+        <!-- Production S3 -->
+        <section id="production-s3" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Production: AWS S3</h2>
+
+          <h3 class="font-semibold mb-2 mt-4" style="color:var(--text)">Credentials</h3>
+          <p class="text-sm mb-3 max-w-2xl" style="color:var(--muted)">Credentials are resolved by the standard <code class="font-mono text-sm">aws-config</code> chain in order: environment variables → <code class="font-mono text-sm">~/.aws/credentials</code> → IAM instance role (EC2/ECS) → IMDS. Pass <code class="font-mono text-sm">None</code> as <code class="font-mono text-sm">endpoint_url</code> to use the standard AWS endpoint.</p>
+
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm"><span class="comment">// Production: standard AWS endpoint, credentials from env or IAM role</span>
+<span class="keyword">let</span> remote = S3RemoteStore::new(
+    <span class="string">"my-prod-bucket"</span>,
+    <span class="type">Some</span>(<span class="string">"edgestore/"</span>),  <span class="comment">// key prefix — recommended in shared buckets</span>
+    <span class="type">None</span>,              <span class="comment">// None = standard AWS endpoint</span>
+)?;</code>
+          </div>
+
+          <h3 class="font-semibold mb-2 mt-6" style="color:var(--text)">IAM policy (minimum)</h3>
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm">{
+  <span class="string">"Effect"</span>: <span class="string">"Allow"</span>,
+  <span class="string">"Action"</span>: [
+    <span class="string">"s3:PutObject"</span>,
+    <span class="string">"s3:GetObject"</span>,
+    <span class="string">"s3:DeleteObject"</span>,
+    <span class="string">"s3:ListBucket"</span>
+  ],
+  <span class="string">"Resource"</span>: [
+    <span class="string">"arn:aws:s3:::my-prod-bucket"</span>,
+    <span class="string">"arn:aws:s3:::my-prod-bucket/edgestore/*"</span>
+  ]
+}</code>
+          </div>
+
+          <h3 class="font-semibold mb-2 mt-6" style="color:var(--text)">Key layout in the bucket</h3>
+          <div class="code-block p-3 max-w-2xl">
+            <code class="text-sm">{prefix}segments/{blake3_hex_64}.dat    <span class="comment"># segment data</span>
+{prefix}segments/{blake3_hex_64}.idx    <span class="comment"># key index sidecar</span>
+{prefix}segments/{blake3_hex_64}.xf     <span class="comment"># xor filter sidecar</span>
+{prefix}segments/{blake3_hex_64}.meta   <span class="comment"># segment metadata sidecar</span></code>
+          </div>
+
+          <h3 class="font-semibold mb-2 mt-6" style="color:var(--text)">S3 bucket settings</h3>
+          <ul class="text-sm space-y-1 max-w-2xl" style="color:var(--muted)">
+            <li><strong style="color:var(--text)">Versioning:</strong> not required — segments are content-addressed and immutable.</li>
+            <li><strong style="color:var(--text)">Lifecycle policy:</strong> recommended for pruned segments. Target prefix <code class="font-mono text-xs">{prefix}segments/</code> with a 30-day expiry after your retention window.</li>
+            <li><strong style="color:var(--text)">Storage class:</strong> S3 Standard for active workloads; S3-IA or Glacier for deep cold archive. Glacier retrieval latency is incompatible with synchronous read-through — use it only with pre-fetch patterns.</li>
+            <li><strong style="color:var(--text)">Encryption:</strong> SSE-S3 or SSE-KMS both work transparently.</li>
+            <li><strong style="color:var(--text)">Path-style addressing:</strong> forced on when an endpoint URL is provided (MinIO / local testing). Not needed for standard AWS.</li>
+          </ul>
+        </section>
+
+        <!-- S3-compatible alternatives -->
+        <section id="alternatives" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">S3-compatible backends</h2>
+          <p class="text-sm mb-6 max-w-2xl" style="color:var(--muted)">Any service that speaks the S3 API works. Pass its endpoint URL as the third argument to <code class="font-mono text-sm">S3RemoteStore::new</code>. Path-style addressing is enabled automatically when an endpoint URL is present.</p>
+
+          <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-3xl">
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">AWS S3</p>
+              <p class="text-xs mb-2" style="color:var(--muted)">The canonical target. Pass <code class="font-mono text-xs">None</code> for endpoint; credentials via env or IAM role.</p>
+              <div class="code-block p-2"><code class="text-xs">S3RemoteStore::new(
+  "bucket", prefix,
+  None  // standard AWS
+)</code></div>
+            </div>
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">Cloudflare R2</p>
+              <p class="text-xs mb-2" style="color:var(--muted)">S3-compatible, no egress fees. Endpoint: <code class="font-mono text-xs">https://{account}.r2.cloudflarestorage.com</code></p>
+              <div class="code-block p-2"><code class="text-xs">S3RemoteStore::new(
+  "bucket", prefix,
+  Some("https://…r2…")
+)</code></div>
+            </div>
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">Google Cloud Storage</p>
+              <p class="text-xs mb-2" style="color:var(--muted)">S3 interop endpoint. Requires HMAC credentials, not service-account JSON.</p>
+              <div class="code-block p-2"><code class="text-xs">S3RemoteStore::new(
+  "bucket", prefix,
+  Some("https://storage.googleapis.com")
+)</code></div>
+            </div>
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">MinIO (local dev)</p>
+              <p class="text-xs mb-2" style="color:var(--muted)">Single Docker container. <code class="font-mono text-xs">make s3-up</code> starts it on port 9000.</p>
+              <div class="code-block p-2"><code class="text-xs">S3RemoteStore::new(
+  "bucket", prefix,
+  Some("http://localhost:9000")
+)</code></div>
+            </div>
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">MinIO (production)</p>
+              <p class="text-xs mb-2" style="color:var(--muted)">Self-hosted S3 for on-prem or air-gapped deployments. Same API as local dev.</p>
+              <div class="code-block p-2"><code class="text-xs">S3RemoteStore::new(
+  "bucket", prefix,
+  Some("https://minio.internal:9000")
+)</code></div>
+            </div>
+            <div class="provider-card p-4">
+              <p class="font-semibold text-sm mb-1" style="color:var(--text)">Backblaze B2</p>
+              <p class="text-xs mb-2" style="color:var(--muted)">S3-compatible. Endpoint region-specific: <code class="font-mono text-xs">https://s3.{region}.backblazeb2.com</code></p>
+              <div class="code-block p-2"><code class="text-xs">S3RemoteStore::new(
+  "bucket", prefix,
+  Some("https://s3.us-west-004…")
+)</code></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Custom backend -->
+        <section id="custom-backend" class="mb-14">
+          <h2 class="text-2xl font-bold mb-4" style="text-wrap:balance">Custom backend (RemoteStore trait)</h2>
+          <p class="text-sm mb-4 max-w-2xl" style="color:var(--muted)">Any type that implements <code class="font-mono text-sm">RemoteStore</code> works as a backend. The trait is in <code class="font-mono text-sm">edgestore</code> (not <code class="font-mono text-sm">edgestore-repl</code>), so you can implement it without pulling in the replication crate.</p>
+          <div class="code-block p-4 max-w-2xl">
+            <code class="text-sm"><span class="comment">// edgestore::RemoteStore</span>
+<span class="keyword">pub trait</span> RemoteStore: Send + Sync {
+    <span class="comment">// Required</span>
+    <span class="keyword">fn</span> <span class="function">upload</span>(&amp;self, hash: &amp;[u8; <span class="number">32</span>], data: &amp;[u8]) -&gt; Result&lt;(), EdgestoreError&gt;;
+    <span class="keyword">fn</span> <span class="function">download</span>(&amp;self, hash: &amp;[u8; <span class="number">32</span>]) -&gt; Result&lt;Vec&lt;u8&gt;, EdgestoreError&gt;;
+    <span class="keyword">fn</span> <span class="function">list</span>(&amp;self) -&gt; Result&lt;Vec&lt;[u8; <span class="number">32</span>]&gt;, EdgestoreError&gt;;
+    <span class="keyword">fn</span> <span class="function">delete</span>(&amp;self, hash: &amp;[u8; <span class="number">32</span>]) -&gt; Result&lt;(), EdgestoreError&gt;;
+
+    <span class="comment">// Optional — default impl returns Ok(false) / Err(InvalidOperation)</span>
+    <span class="keyword">fn</span> <span class="function">upload_if_absent</span>(&amp;self, hash: &amp;[u8; <span class="number">32</span>], data: &amp;[u8]) -&gt; Result&lt;bool, EdgestoreError&gt;;
+    <span class="keyword">fn</span> <span class="function">upload_aux</span>(&amp;self, hash: &amp;[u8; <span class="number">32</span>], ext: &amp;str, data: &amp;[u8]) -&gt; Result&lt;(), EdgestoreError&gt;;
+    <span class="keyword">fn</span> <span class="function">download_aux</span>(&amp;self, hash: &amp;[u8; <span class="number">32</span>], ext: &amp;str) -&gt; Result&lt;Vec&lt;u8&gt;, EdgestoreError&gt;;
+}
+
+<span class="comment">// Built-in implementations</span>
+<span class="comment">// FilesystemRemoteStore — stores segments as files in a local directory</span>
+<span class="comment">// S3RemoteStore         — AWS SDK, any S3-compatible endpoint</span></code>
+          </div>
+          <p class="text-sm mt-3 max-w-2xl" style="color:var(--muted)">Implement <code class="font-mono text-sm">upload_if_absent</code> for idempotent archiving — the default impl calls <code class="font-mono text-sm">upload</code> and always returns <code class="font-mono text-sm">Ok(true)</code>. The retry loop in <code class="font-mono text-sm">TieredEngine</code> uses <code class="font-mono text-sm">upload_if_absent</code>, so a correct idempotent implementation prevents double-upload on retries.</p>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <script>
+    // Highlight active TOC link as user scrolls
+    const sections = document.querySelectorAll('section[id]');
+    const tocLinks = document.querySelectorAll('.toc-link');
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          tocLinks.forEach(l => l.classList.remove('active'));
+          const active = document.querySelector(`.toc-link[href="#${e.target.id}"]`);
+          if (active) active.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(s => obs.observe(s));
+  </script>
+</body>
+</html>

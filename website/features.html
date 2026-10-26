@@ -41,6 +41,7 @@
           <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
           <a href="api.html" class="text-slate-600 hover:text-edge-600 font-medium transition">API</a>
           <a href="internals.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Internals</a>
+          <a href="tiering.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Tiering</a>
         </div>
         <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
       </div>
@@ -481,36 +482,9 @@ println!(<span class="string">"confirmed_lsn={} wtoken={}"</span>,
         </div>
         <h2 class="text-2xl font-bold text-slate-900">Tiered Storage <span class="text-sm font-normal text-slate-500 ml-2">edgestore-tier</span></h2>
       </div>
-      <div class="grid lg:grid-cols-2 gap-8">
-        <div class="prose text-slate-600">
-          <p>When local disk can't hold your full dataset, <code>edgestore-tier</code> wraps a local <code>Engine</code> with a transparent S3 read-through layer. Reads try local first; on a miss they fetch the matching archived segment from S3 ephemerally without permanently importing it.</p>
-          <ul class="list-disc pl-5 space-y-1 mt-3">
-            <li><strong>Caller-driven archiving</strong> — policy (when to archive, when to prune) stays in your code</li>
-            <li><strong>Read lock fast path</strong> — hot-window queries never block behind the writer (v1.4.0)</li>
-            <li><strong>Flush-wake notify</strong> — <code>flush_notify()</code> on <code>AsyncTieredEngine</code> wakes a tiering worker the moment a segment lands</li>
-            <li><strong>Text index stripping</strong> — <code>with_text_stripping(true)</code> auto-strips text index bytes from archived segments to reclaim local disk</li>
-            <li><strong>Vector index stripping</strong> — <code>with_vector_stripping(true)</code> (v1.5.0) strips <code>__vec__</code> records from archived segments. Paired with <code>strip_vector_index(seg_id)</code> on the core engine for manual use.</li>
-          </ul>
-        </div>
-        <div class="code-block p-4">
-          <pre><code><span class="comment">// Requires edgestore-tier crate</span>
-<span class="keyword">use</span> edgestore_tier::TieredEngine;
-<span class="keyword">use</span> edgestore_repl::S3RemoteStore;
-
-<span class="keyword">let</span> local = Engine::open(config)?;
-<span class="keyword">let</span> remote = S3RemoteStore::new(<span class="string">"bucket"</span>, <span class="type">None</span>, <span class="type">None</span>)?;
-<span class="keyword">let mut</span> tiered = TieredEngine::new(local, Box::new(remote));
-
-<span class="comment">// Writes stay local</span>
-tiered.put(<span class="string">b"logs"</span>, <span class="string">b"2026-07-12"</span>, data)?;
-
-<span class="comment">// Reads fall through to S3 on local miss</span>
-<span class="keyword">let</span> val = tiered.get(<span class="string">b"logs"</span>, <span class="string">b"2025-01-01"</span>)?;
-
-<span class="comment">// Archive old segments to S3</span>
-<span class="keyword">let</span> old = tiered.local().list_segment_metas();
-tiered.archive_segments(&old)?;</code></pre>
-        </div>
+      <div class="prose text-slate-600 max-w-2xl">
+        <p><code>edgestore-tier</code> wraps a local <code>Engine</code> with a transparent S3 read-through layer — writes stay fast and local; reads fall through to remote only on a miss. Supports caller-driven archiving, index stripping, sidecars, and any S3-compatible backend including MinIO, Cloudflare R2, and GCS.</p>
+        <p class="mt-3"><a href="tiering.html" class="text-edge-600 font-medium hover:underline">Full tiering documentation →</a> &ensp; setup, builder API, local testing with MinIO, production S3, custom backends.</p>
       </div>
     </section>
 

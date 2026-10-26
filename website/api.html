@@ -43,6 +43,7 @@
           <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
           <a href="api.html" class="text-edge-600 font-medium">API</a>
           <a href="internals.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Internals</a>
+          <a href="tiering.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Tiering</a>
         </div>
         <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
       </div>
@@ -436,9 +437,10 @@
 
     <!-- Tiered Storage API -->
     <section id="tiered" class="mb-12">
-      <h2 class="text-2xl font-bold text-slate-900 mb-4 flex items-center">
+      <h2 class="text-2xl font-bold text-slate-900 mb-2 flex items-center">
         <span class="w-3 h-3 bg-edge-500 rounded-full mr-3"></span>Tiered Storage API <span class="text-sm font-normal text-slate-500 ml-2">edgestore-tier</span>
       </h2>
+      <p class="text-sm text-slate-500 mb-4">Setup, local testing with MinIO, production S3, and custom backends: <a href="tiering.html" class="text-edge-600 hover:underline font-medium">Tiering guide →</a></p>
       <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">TieredEngine::new(local: Engine, remote: Box&lt;dyn RemoteStore&gt;) -> TieredEngine</code>

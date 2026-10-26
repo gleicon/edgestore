@@ -71,41 +71,52 @@ doc:
 bench:
 	cargo bench --workspace
 
-# ── S3 / LocalStack integration tests ─────────────────────────────────────
+# ── S3 / MinIO integration tests ──────────────────────────────────────────
 
-s3-up: ## Start LocalStack container for S3 testing
-	@echo "Starting LocalStack..."
-	@docker stop edgestore-localstack >/dev/null 2>&1 || true
-	@docker rm edgestore-localstack >/dev/null 2>&1 || true
+s3-up: ## Start MinIO container for S3 testing
+	@echo "Starting MinIO..."
+	@docker stop edgestore-minio >/dev/null 2>&1 || true
+	@docker rm edgestore-minio >/dev/null 2>&1 || true
 	docker run -d \
-		--name edgestore-localstack \
-		-p 4566:4566 \
-		-e SERVICES=s3 \
-		-e AWS_ACCESS_KEY_ID=test \
-		-e AWS_SECRET_ACCESS_KEY=test \
-		-e AWS_DEFAULT_REGION=us-east-1 \
-		-v "$(PWD)/scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh:ro" \
-		localstack/localstack:3
-	@echo "Waiting for LocalStack to be ready..."
-	@sleep 3
-	@until curl -sf http://localhost:4566/_localstack/health >/dev/null 2>&1; do \
+		--name edgestore-minio \
+		-p 9000:9000 \
+		-p 9001:9001 \
+		-e MINIO_ROOT_USER=minioadmin \
+		-e MINIO_ROOT_PASSWORD=minioadmin \
+		minio/minio:latest server /data --console-address ":9001"
+	@echo "Waiting for MinIO to be ready..."
+	@sleep 2
+	@until curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; do \
 		echo "  ...waiting"; sleep 2; \
 	done
-	@echo "LocalStack ready."
+	@echo "Creating test bucket..."
+	AWS_ACCESS_KEY_ID=minioadmin \
+	AWS_SECRET_ACCESS_KEY=minioadmin \
+	AWS_DEFAULT_REGION=us-east-1 \
+	EDGESTORE_S3_ENDPOINT_URL=http://localhost:9000 \
+	bash scripts/minio-init.sh
+	@echo "MinIO ready."
 
-s3-down: ## Stop and remove LocalStack container
-	@echo "Stopping LocalStack..."
-	docker stop edgestore-localstack >/dev/null 2>&1 || true
-	docker rm edgestore-localstack >/dev/null 2>&1 || true
+s3-down: ## Stop and remove MinIO container
+	@echo "Stopping MinIO..."
+	docker stop edgestore-minio >/dev/null 2>&1 || true
+	docker rm edgestore-minio >/dev/null 2>&1 || true
 
-s3-test: s3-up ## Run S3 integration tests against LocalStack
+s3-test: s3-up ## Run S3 integration tests against MinIO
 	@echo "Running S3 integration tests..."
-	EDGESTORE_S3_ENDPOINT_URL=http://localhost:4566 \
+	EDGESTORE_S3_ENDPOINT_URL=http://localhost:9000 \
 	EDGESTORE_S3_BUCKET=edgestore-test \
-	AWS_ACCESS_KEY_ID=test \
-	AWS_SECRET_ACCESS_KEY=test \
+	AWS_ACCESS_KEY_ID=minioadmin \
+	AWS_SECRET_ACCESS_KEY=minioadmin \
 	AWS_DEFAULT_REGION=us-east-1 \
 	cargo test --package edgestore-repl --features s3 -- --nocapture
+	@echo "Running tiered S3 integration tests..."
+	EDGESTORE_S3_ENDPOINT_URL=http://localhost:9000 \
+	EDGESTORE_S3_BUCKET=edgestore-test \
+	AWS_ACCESS_KEY_ID=minioadmin \
+	AWS_SECRET_ACCESS_KEY=minioadmin \
+	AWS_DEFAULT_REGION=us-east-1 \
+	cargo test --package edgestore-tier --test integration_s3 -- --nocapture
 	$(MAKE) s3-down
 
 # ── Version bump helpers ──────────────────────────────────────────────────

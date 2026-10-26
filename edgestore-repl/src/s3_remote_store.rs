@@ -22,11 +22,11 @@
 //! `prefix` is optional and defaults to `""`. If provided it should end with `/`
 //! (e.g. `"mydb/"`).
 //!
-//! ## LocalStack
+//! ## Local testing
 //!
-//! Set `EDGESTORE_S3_ENDPOINT_URL=http://localhost:4566` for testing against
-//! a LocalStack container. Credentials and region are resolved via the
-//! standard `aws-config` chain (env vars, `~/.aws/credentials`, IAM roles, etc.).
+//! Set `EDGESTORE_S3_ENDPOINT_URL=http://localhost:9000` for testing against
+//! a MinIO container (`make s3-up`). Credentials and region are resolved via
+//! the standard `aws-config` chain (env vars, `~/.aws/credentials`, IAM roles).
 
 use std::sync::Arc;
 
@@ -37,6 +37,11 @@ use edgestore::error::EdgestoreError;
 use edgestore::RemoteStore;
 
 use crate::wire::hash_to_hex;
+
+/// Maximum S3 list pages per `list()` call. S3 returns at most 1000 objects
+/// per page; 10_000 pages covers 10 million segments — far beyond any
+/// practical deployment.
+const MAX_LIST_PAGES: usize = 10_000;
 
 /// S3-backed implementation of `RemoteStore`.
 ///
@@ -49,7 +54,7 @@ use crate::wire::hash_to_hex;
 /// let store = S3RemoteStore::new(
 ///     "my-bucket",
 ///     Some("mydb/"),
-///     Some("http://localhost:4566"),
+///     Some("http://localhost:9000"),
 /// ).expect("S3RemoteStore::new");
 ///
 /// let hash = [0x42u8; 32];
@@ -74,8 +79,8 @@ impl S3RemoteStore {
     /// * `prefix` — Optional key prefix. Should end with `/` if non-empty
     ///   (e.g. `"mydb/"`). Pass `None` for a flat layout.
     /// * `endpoint_url` — Optional custom endpoint URL. Use
-    ///   `Some("http://localhost:4566")` for LocalStack. Pass `None` to use
-    ///   the standard AWS endpoint for the resolved region.
+    ///   `Some("http://localhost:9000")` for MinIO. Pass `None` to use the
+    ///   standard AWS endpoint for the resolved region.
     ///
     /// # Async context safety
     ///
@@ -87,10 +92,6 @@ impl S3RemoteStore {
         prefix: Option<&str>,
         endpoint_url: Option<&str>,
     ) -> Result<Self, EdgestoreError> {
-        // Build the AWS client. If we are inside an existing Tokio runtime we
-        // borrow it via `block_in_place` and do not create our own — this
-        // prevents the "cannot start a runtime from within a runtime" panic
-        // and the "drop runtime from async context" panic.
         let (client, owned_runtime) = match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 let client = tokio::task::block_in_place(|| {
@@ -133,7 +134,7 @@ impl S3RemoteStore {
         let sdk_config = config_loader.load().await;
         let mut s3_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
         if endpoint_url.is_some() {
-            // LocalStack and MinIO need path-style addressing.
+            // MinIO requires path-style addressing.
             s3_builder = s3_builder.force_path_style(true);
         }
         aws_sdk_s3::Client::from_conf(s3_builder.build())
@@ -148,7 +149,8 @@ impl S3RemoteStore {
     }
 
     fn validate_ext(ext: &str) -> Result<(), EdgestoreError> {
-        if ext.is_empty() || !ext.bytes().all(|b| b.is_ascii_lowercase()) {
+        assert!(!ext.is_empty(), "ext must not be empty");
+        if !ext.bytes().all(|b| b.is_ascii_lowercase()) {
             return Err(EdgestoreError::InvalidOperation(format!(
                 "invalid sidecar ext {:?}: only lowercase ASCII letters allowed",
                 ext
@@ -157,10 +159,8 @@ impl S3RemoteStore {
         Ok(())
     }
 
-    /// Run an async future to completion.
-    ///
-    /// If the caller is already inside a Tokio runtime this uses
-    /// `block_in_place` to avoid nested-runtime panics.
+    /// Run an async future to completion, bridging to the caller's runtime
+    /// or to our own runtime if none is active.
     fn block_on<F, R>(&self, future: F) -> R
     where
         F: std::future::Future<Output = R> + Send,
@@ -168,21 +168,18 @@ impl S3RemoteStore {
     {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-            Err(_) => {
-                // We are not inside a runtime, so we must own one.
-                self.owned_runtime
-                    .as_ref()
-                    .expect("S3RemoteStore created without a runtime and called outside a runtime")
-                    .block_on(future)
-            }
+            Err(_) => self
+                .owned_runtime
+                .as_ref()
+                .expect("S3RemoteStore created without a runtime and called outside a runtime")
+                .block_on(future),
         }
     }
-}
 
-impl RemoteStore for S3RemoteStore {
-    fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
-        let key = self.seg_key(hash);
-
+    /// PUT bytes at `key`. Used by both `upload` and `upload_aux`.
+    fn put_bytes(&self, key: String, data: &[u8]) -> Result<(), EdgestoreError> {
+        assert!(!key.is_empty(), "S3 key must not be empty");
+        assert!(!data.is_empty(), "upload data must not be empty");
         self.block_on(async {
             self.client
                 .put_object()
@@ -191,21 +188,51 @@ impl RemoteStore for S3RemoteStore {
                 .body(ByteStream::from(data.to_vec()))
                 .send()
                 .await
+                .map(|_| ())
                 .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!("S3 upload failed for {key}: {e}"))
+                    EdgestoreError::ReplicationError(format!("S3 put failed for {key}: {e}"))
                 })
-        })?;
+        })
+    }
 
-        Ok(())
+    /// GET bytes from `key`. Used by both `download` and `download_aux`.
+    fn get_bytes(&self, key: String) -> Result<Vec<u8>, EdgestoreError> {
+        assert!(!key.is_empty(), "S3 key must not be empty");
+        self.block_on(async {
+            let output = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| {
+                    EdgestoreError::ReplicationError(format!("S3 get failed for {key}: {e}"))
+                })?;
+            output
+                .body
+                .collect()
+                .await
+                .map(|d| d.into_bytes().to_vec())
+                .map_err(|e| {
+                    EdgestoreError::ReplicationError(format!("S3 body stream error for {key}: {e}"))
+                })
+        })
+    }
+}
+
+impl RemoteStore for S3RemoteStore {
+    fn upload(&self, hash: &[u8; 32], data: &[u8]) -> Result<(), EdgestoreError> {
+        self.put_bytes(self.seg_key(hash), data)
     }
 
     /// Idempotent PUT using `If-None-Match: *` (BtrLog §5.1, arXiv:2606.27051).
     ///
-    /// S3 returns HTTP 412 when the key already exists; the SDK surfaces this as a
-    /// `ServiceError` with status 412, which we translate to `Ok(false)`.  Any other
-    /// error is a real failure and propagates as `Err(_)`.
+    /// S3 returns HTTP 412 when the key already exists; we translate that to
+    /// `Ok(false)`. Any other error propagates as `Err(_)`.
     fn upload_if_absent(&self, hash: &[u8; 32], data: &[u8]) -> Result<bool, EdgestoreError> {
         let key = self.seg_key(hash);
+        assert!(!key.is_empty(), "S3 key must not be empty");
         let result = self.block_on(async {
             self.client
                 .put_object()
@@ -230,38 +257,22 @@ impl RemoteStore for S3RemoteStore {
     }
 
     fn download(&self, hash: &[u8; 32]) -> Result<Vec<u8>, EdgestoreError> {
-        let key = self.seg_key(hash);
-
-        self.block_on(async {
-            let output = self
-                .client
-                .get_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .send()
-                .await
-                .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!("S3 download failed for {key}: {e}"))
-                })?;
-
-            output
-                .body
-                .collect()
-                .await
-                .map(|d| d.into_bytes().to_vec())
-                .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!("S3 body stream error for {key}: {e}"))
-                })
-        })
+        self.get_bytes(self.seg_key(hash))
     }
 
     fn list(&self) -> Result<Vec<[u8; 32]>, EdgestoreError> {
         let prefix = format!("{}segments/", self.prefix);
-
         let mut hashes = Vec::new();
         let mut continuation_token: Option<String> = None;
+        let mut pages = 0usize;
 
         loop {
+            assert!(
+                pages < MAX_LIST_PAGES,
+                "S3 list exceeded MAX_LIST_PAGES={MAX_LIST_PAGES}"
+            );
+            pages += 1;
+
             let mut req = self
                 .client
                 .list_objects_v2()
@@ -284,14 +295,12 @@ impl RemoteStore for S3RemoteStore {
                         let stem = key
                             .strip_prefix(&prefix)
                             .and_then(|s| s.strip_suffix(".dat"));
-
                         if let Some(stem) = stem {
                             if stem.len() == 64 {
                                 let parsed: Option<[u8; 32]> = (0..32)
                                     .map(|i| u8::from_str_radix(&stem[i * 2..i * 2 + 2], 16).ok())
                                     .collect::<Option<Vec<u8>>>()
                                     .and_then(|v| v.try_into().ok());
-
                                 if let Some(hash) = parsed {
                                     hashes.push(hash);
                                 }
@@ -308,12 +317,12 @@ impl RemoteStore for S3RemoteStore {
             }
         }
 
+        assert!(pages <= MAX_LIST_PAGES, "pages must not exceed MAX_LIST_PAGES");
         Ok(hashes)
     }
 
     fn delete(&self, hash: &[u8; 32]) -> Result<(), EdgestoreError> {
         let key = self.seg_key(hash);
-
         self.block_on(async {
             self.client
                 .delete_object()
@@ -321,57 +330,21 @@ impl RemoteStore for S3RemoteStore {
                 .key(&key)
                 .send()
                 .await
+                .map(|_| ())
                 .map_err(|e| {
                     EdgestoreError::ReplicationError(format!("S3 delete failed for {key}: {e}"))
                 })
-        })?;
-
-        Ok(())
+        })
     }
 
     fn upload_aux(&self, hash: &[u8; 32], ext: &str, data: &[u8]) -> Result<(), EdgestoreError> {
         Self::validate_ext(ext)?;
-        let key = self.aux_key(hash, ext);
-        self.block_on(async {
-            self.client
-                .put_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .body(ByteStream::from(data.to_vec()))
-                .send()
-                .await
-                .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!("S3 upload_aux failed for {key}: {e}"))
-                })
-        })?;
-        Ok(())
+        self.put_bytes(self.aux_key(hash, ext), data)
     }
 
     fn download_aux(&self, hash: &[u8; 32], ext: &str) -> Result<Vec<u8>, EdgestoreError> {
         Self::validate_ext(ext)?;
-        let key = self.aux_key(hash, ext);
-        self.block_on(async {
-            let output = self
-                .client
-                .get_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .send()
-                .await
-                .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!(
-                        "S3 download_aux failed for {key}: {e}"
-                    ))
-                })?;
-            output
-                .body
-                .collect()
-                .await
-                .map(|d| d.into_bytes().to_vec())
-                .map_err(|e| {
-                    EdgestoreError::ReplicationError(format!("S3 body stream error for {key}: {e}"))
-                })
-        })
+        self.get_bytes(self.aux_key(hash, ext))
     }
 }
 
@@ -409,10 +382,6 @@ mod tests {
         };
 
         let hash = [0xBBu8; 32];
-
-        // Two uploads with the same hash must not error.
-        // In a content-addressed system the hash is derived from the data,
-        // so identical hashes imply identical content.
         store.upload(&hash, b"data").expect("first");
         store.upload(&hash, b"data").expect("second");
     }
@@ -451,10 +420,8 @@ mod tests {
         };
 
         let hash = [0xCCu8; 32];
-
         store.upload(&hash, b"segment data").expect("up");
         store.delete(&hash).expect("del");
-
         assert!(store.download(&hash).is_err());
     }
 
@@ -471,7 +438,6 @@ mod tests {
 
     /// Regression: S3RemoteStore::new() must not panic when called from
     /// inside an existing Tokio runtime (e.g. #[tokio::main]).
-    /// Previously it called Runtime::block_on() directly, which panics.
     #[test]
     fn test_new_from_async_context() {
         let endpoint = match std::env::var("EDGESTORE_S3_ENDPOINT_URL") {
@@ -486,8 +452,6 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            // This used to panic with:
-            // "Cannot start a runtime from within a runtime"
             let _store = S3RemoteStore::new(&bucket, Some("async_test/"), Some(&endpoint))
                 .expect("S3RemoteStore::new must succeed from async context");
         });

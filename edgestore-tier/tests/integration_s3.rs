@@ -1,10 +1,16 @@
-//! TieredEngine + S3RemoteStore integration test (LocalStack).
+//! TieredEngine + S3RemoteStore integration test (MinIO).
 //!
 //! Run with:
 //! ```text
-//! docker compose up -d localstack
-//! EDGESTORE_S3_ENDPOINT_URL=http://localhost:4566 cargo test --package edgestore-tier --test integration_s3
+//! make s3-up
+//! EDGESTORE_S3_ENDPOINT_URL=http://localhost:9000 \
+//! EDGESTORE_S3_BUCKET=edgestore-test \
+//! AWS_ACCESS_KEY_ID=minioadmin \
+//! AWS_SECRET_ACCESS_KEY=minioadmin \
+//! cargo test --package edgestore-tier --test integration_s3
 //! ```
+//!
+//! Or simply: `make s3-test`
 
 use edgestore::{EdgestoreConfig, Engine};
 use edgestore_repl::S3RemoteStore;

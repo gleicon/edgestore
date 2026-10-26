@@ -1,22 +1,18 @@
 services:
-  localstack:
-    image: localstack/localstack:latest
+  minio:
+    image: minio/minio:latest
     ports:
-      - "4566:4566"
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      - SERVICES=s3
-      - DEBUG=1
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_DEFAULT_REGION=us-east-1
-    volumes:
-      - "./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh:ro"
-      - "localstack-data:/var/lib/localstack"
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 3s
       retries: 5
 
 volumes:
-  localstack-data:
+  minio-data:

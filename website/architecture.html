@@ -346,7 +346,7 @@
           </div>
         </div>
         <div class="mt-4 text-center text-sm text-slate-600">
-          No MVCC in v1. WAL <code>txid</code> field reserved for future layering.
+          <code>txid</code> is used for atomic batch transactions — all WAL records in a <code>Transaction</code> share one <code>txid</code>. No snapshot isolation or MVCC: reads see the latest committed write only.
         </div>
       </div>
     </section>

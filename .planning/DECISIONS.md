@@ -471,3 +471,24 @@ Uses three separate `spawn_blocking` calls (one per phase) rather than a single 
 - The old `SegmentStore::flush_memtable` wrapper is removed; callers use `prepare_flush` + `execute` + `finalize_segment` directly.
 
 **Rationale:** The grill-me session resolved that BBTree has two variants with different implications. `unsync` = drop-in (5× faster, zero arch change). `sync` = concurrent (can't return `&V`, needs owned-return trait). The 3-phase flush is required to release the write lock during I/O; correctness requires that the snapshot remain readable during Phase 2 (hence no memtable swap — use `flushed_max_lsn` filtering instead of immutable memtable to keep the change scope small).
+
+---
+
+## D40 — AsyncEngine API surface aligned with Engine (v2.2.0)
+
+**Decision:** `AsyncEngine` must expose every public method that `Engine` exposes. All algorithm and correctness logic stays in `Engine`; `AsyncEngine` is a mechanical `run_read`/`run_write` wrapper with no duplicate logic.
+
+**Rationale:** Before this change, `AsyncEngine` was missing `open_readonly`, `confirmed_lsn`, `current_lsn`, `wal_segment_count`, `pending_wal_bytes`, `write_token`, `set_write_token`, `range`, `range_with_stats`, `range_budgeted`, `prefix_with_stats`, `prefix_budgeted`, and `compact_once`. Users on the async path had an inferior API with no workaround. The `vector_search` method was also duplicating the HNSW check + flat-scan loop already in `Engine::vector_search`, replaced by a single `run_read` delegation.
+
+**Rule:** Any new method added to `Engine` must be accompanied by a corresponding async wrapper in `AsyncEngine` in the same PR.
+
+---
+
+## D41 — MVCC: not implemented, not reserved, explicit backlog
+
+**Decision:** No MVCC. The WAL `txid` field is **not** reserved for future MVCC layering — it is already used by `Transaction` (atomic batch grouping). Snapshot isolation and per-reader version chains are not implemented and are not a stated goal for the current architecture.
+
+**If MVCC is wanted:** It would require: (1) per-read timestamp from a monotonic clock or logical counter; (2) memtable and segment reads filtered by snapshot timestamp; (3) GC of old versions. This changes the on-disk format and MemTable trait. Scope it as a separate milestone before starting.
+
+**Why this matters:** The architecture.html note "WAL txid field reserved for future layering" was removed because it was misleading — `txid` is live code, not a placeholder — and it created a false expectation of planned MVCC.
+

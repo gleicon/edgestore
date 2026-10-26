@@ -7,13 +7,12 @@ mod tiered;
 pub use tiered::AsyncTieredEngine;
 
 use edgestore::{
-    total_cmp_f32,
     types::SegmentMeta,
-    vector::distance::{distance, Metric},
+    vector::distance::Metric,
     vector::search::VectorSearchResult,
     vector::types::{Dtype, VectorRecord},
-    EdgestoreConfig, EdgestoreError, Engine, ImportResult, MetricsSnapshot,
-    SegmentRef, VectorEngine,
+    BudgetedScan, CompactionStats, EdgestoreConfig, EdgestoreError, Engine,
+    ImportResult, MetricsSnapshot, QueryStats, ScanBudget, SegmentRef, VectorEngine,
 };
 
 pub use edgestore::RangePage;
@@ -227,16 +226,7 @@ impl AsyncEngine {
         self.run_write(move |e| e.vector_delete(&ns, &key)).await
     }
 
-    /// Vector search — HNSW fast path or cooperative chunked flat scan.
-    ///
-    /// When an HNSW index is in memory (`vector_count` returns `Some`), a single
-    /// `spawn_blocking` call handles the search; HNSW completes in <5 ms so a
-    /// long blocking period is not a concern.
-    ///
-    /// When no HNSW index is loaded the flat scan is paged through
-    /// `Engine::vector_page` (read lock only, `&self`). The engine lock is
-    /// released between pages and `yield_now()` gives other async tasks
-    /// scheduling opportunities. No extra dependencies required.
+    /// Vector search — HNSW fast path or flat scan. All algorithm lives in `Engine`.
     pub async fn vector_search(
         &self,
         ns: &[u8],
@@ -247,80 +237,9 @@ impl AsyncEngine {
         if k == 0 {
             return Ok(vec![]);
         }
-
-        let ns_owned = ns.to_vec();
-        let query_owned = query.clone();
-        let inner = self.inner.clone();
-
-        // Try HNSW path under a read lock.
-        // get_vector_index uses an interior RwLock for lazy sidecar loading, so
-        // the outer engine lock can stay shared here — no write lock needed.
-        {
-            let ns2 = ns_owned.clone();
-            let q2 = query_owned.clone();
-            let inner2 = inner.clone();
-            let hnsw_result = tokio::task::spawn_blocking(move || {
-                let engine = inner2.blocking_read();
-                engine.try_hnsw_search(&ns2, &q2, k)
-            })
-            .await
-            .map_err(|e| EdgestoreError::Io(std::io::Error::other(e.to_string())))?;
-
-            if let Some(results) = hnsw_result? {
-                return Ok(results);
-            }
-        }
-
-        // Flat scan: paged with cooperative yield between pages.
-        // Each page acquires a read lock (not write), fetches PAGE_SIZE records,
-        // releases the lock, then computes distances on the async thread.
-        const PAGE_SIZE: usize = 512;
-
-        let mut pairs: Vec<(f32, Vec<u8>)> = Vec::new();
-        let mut cursor: Option<Vec<u8>> = None;
-
-        loop {
-            let inner2 = inner.clone();
-            let ns2 = ns_owned.clone();
-            let cur = cursor.clone();
-
-            let page = tokio::task::spawn_blocking(move || {
-                let engine = inner2.blocking_read();
-                engine.vector_page(&ns2, cur.as_deref(), PAGE_SIZE)
-            })
-            .await
-            .map_err(|e| EdgestoreError::Io(std::io::Error::other(e.to_string())))??;
-
-            let has_more = page.next_key.is_some();
-
-            // Distance computation — pure f32 math, no lock held, fast per page
-            for (key, record) in page.records {
-                if record.dims != query_owned.dims || record.dtype != query_owned.dtype {
-                    continue;
-                }
-                let dist = distance(
-                    &query_owned.data,
-                    &record.data,
-                    query_owned.dtype,
-                    metric,
-                )?;
-                pairs.push((dist, key));
-            }
-
-            cursor = page.next_key;
-            if !has_more {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-
-        pairs.sort_unstable_by(|(a, _), (b, _)| total_cmp_f32(*a, *b));
-        pairs.truncate(k);
-
-        Ok(pairs
-            .into_iter()
-            .map(|(d, key)| VectorSearchResult { key, distance: d })
-            .collect())
+        let ns = ns.to_vec();
+        let query = query.clone();
+        self.run_read(move |e| e.vector_search(&ns, &query, k, metric)).await
     }
 
     /// Build vector index — heavy operation, runs on spawn_blocking.
@@ -404,6 +323,112 @@ impl AsyncEngine {
         let data = data.to_vec();
         let expected_hash = *expected_hash;
         self.run_write(move |e| e.import_segment(&data, &expected_hash)).await
+    }
+
+    /// Open an engine in read-only mode.
+    pub async fn open_readonly(config: EdgestoreConfig) -> Result<Self, EdgestoreError> {
+        let engine = tokio::task::spawn_blocking(move || Engine::open_readonly(config))
+            .await
+            .map_err(|e| EdgestoreError::Io(std::io::Error::other(format!("spawn_blocking failed: {}", e))))??;
+        Ok(AsyncEngine { inner: Arc::new(RwLock::new(engine)) })
+    }
+
+    /// Highest LSN durably flushed to a segment.
+    pub async fn confirmed_lsn(&self) -> u64 {
+        self.run_read(|e| Ok(e.confirmed_lsn())).await.unwrap_or(0)
+    }
+
+    /// Current LSN counter — the LSN that will be assigned to the next write.
+    pub async fn current_lsn(&self) -> u64 {
+        self.run_read(|e| Ok(e.current_lsn())).await.unwrap_or(0)
+    }
+
+    /// Number of WAL segment files on disk.
+    pub async fn wal_segment_count(&self) -> usize {
+        self.run_read(|e| Ok(e.wal_segment_count())).await.unwrap_or(0)
+    }
+
+    /// Bytes written to the current active WAL file.
+    pub async fn pending_wal_bytes(&self) -> u64 {
+        self.run_read(|e| Ok(e.pending_wal_bytes())).await.unwrap_or(0)
+    }
+
+    /// Current write token (fencing value for replication).
+    pub async fn write_token(&self) -> u64 {
+        self.run_read(|e| Ok(e.write_token())).await.unwrap_or(0)
+    }
+
+    /// Persist a new write token.
+    pub async fn set_write_token(&self, token: u64) -> Result<(), EdgestoreError> {
+        self.run_write(move |e| e.set_write_token(token)).await
+    }
+
+    /// Full range scan `[start, end)`.
+    pub async fn range(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+        let ns = ns.to_vec();
+        let start = start.to_vec();
+        let end = end.to_vec();
+        self.run_read(move |e| e.range(&ns, &start, &end)).await
+    }
+
+    /// Range scan with cost accounting.
+    pub async fn range_with_stats(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, QueryStats), EdgestoreError> {
+        let ns = ns.to_vec();
+        let start = start.to_vec();
+        let end = end.to_vec();
+        self.run_read(move |e| e.range_with_stats(&ns, &start, &end)).await
+    }
+
+    /// Range scan bounded by a [`ScanBudget`].
+    pub async fn range_budgeted(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        budget: ScanBudget,
+    ) -> Result<BudgetedScan<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+        let ns = ns.to_vec();
+        let start = start.to_vec();
+        let end = end.to_vec();
+        self.run_read(move |e| e.range_budgeted(&ns, &start, &end, &budget)).await
+    }
+
+    /// Prefix scan with cost accounting.
+    pub async fn prefix_with_stats(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+    ) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, QueryStats), EdgestoreError> {
+        let ns = ns.to_vec();
+        let prefix = prefix.to_vec();
+        self.run_read(move |e| e.prefix_with_stats(&ns, &prefix)).await
+    }
+
+    /// Prefix scan bounded by a [`ScanBudget`].
+    pub async fn prefix_budgeted(
+        &self,
+        ns: &[u8],
+        prefix: &[u8],
+        budget: ScanBudget,
+    ) -> Result<BudgetedScan<(Vec<u8>, Vec<u8>)>, EdgestoreError> {
+        let ns = ns.to_vec();
+        let prefix = prefix.to_vec();
+        self.run_read(move |e| e.prefix_budgeted(&ns, &prefix, &budget)).await
+    }
+
+    /// Run one compaction pass.
+    pub async fn compact_once(&self) -> Result<CompactionStats, EdgestoreError> {
+        self.run_write(|e| e.compact_once()).await
     }
 }
 

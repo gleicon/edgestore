@@ -1,7 +1,13 @@
 //! EdgeStore — local-first embedded KV + vector database.
 //!
-//! This crate provides the core synchronous engine. Async wrappers live in
-//! `edgestore-tokio`. HTTP transport lives in `edgestore-repl`.
+//! [`Engine`] is the primary API. It is synchronous and has no runtime dependency.
+//! Use it directly in CLI tools, tests, and embedded contexts.
+//!
+//! For async runtimes, wrap [`Engine`] in `Arc<RwLock<Engine>>` and call your
+//! runtime's `spawn_blocking` equivalent. The convenience crate `edgestore-tokio`
+//! does exactly this for tokio — it adds no logic beyond that wrapper.
+//!
+//! HTTP transport lives in `edgestore-repl`.
 //!
 //! # Public API Surface
 //!

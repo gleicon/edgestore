@@ -9,6 +9,10 @@ use crate::types::MemEntry;
 /// because the underlying node memory may be reclaimed and reused.
 pub trait MemTable: Send + Sync {
     /// Insert or overwrite an entry.
+    ///
+    /// # Panics
+    /// Implementations backed by a fallible allocator (e.g. `BBTreeConcurrentMemTable`)
+    /// panic on allocation failure. This is a known constraint of the current trait design.
     fn insert(&mut self, key: Vec<u8>, entry: MemEntry);
     /// Retrieve an entry by key (owned clone).
     fn get(&self, key: &[u8]) -> Option<MemEntry>;
@@ -48,46 +52,46 @@ impl Default for BTreeMemTable {
     }
 }
 
-impl MemTable for BTreeMemTable {
-    fn insert(&mut self, key: Vec<u8>, entry: MemEntry) {
-        self.inner.insert(key, entry);
-    }
-
-    fn get(&self, key: &[u8]) -> Option<MemEntry> {
-        self.inner.get(key).cloned()
-    }
-
-    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
-        use std::ops::Bound;
-        self.inner
-            .range((
-                Bound::Included(start.to_vec()),
-                Bound::Excluded(end.to_vec()),
-            ))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    }
-
-    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
-        self.inner
-            .range(prefix.to_vec()..)
-            .take_while(|(k, _)| k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    }
-
-    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> {
-        self.inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    }
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn clear(&mut self) {
-        self.inner.clear();
-    }
+// Generates MemTable for any backing map that exposes the std BTreeMap interface:
+// .insert(k, v), .get(k).cloned(), .range(bounds), .iter(), .len(), .clear().
+// Used for BTreeMemTable and BBTreeMemTable (bbtree::unsync), which share identical bodies.
+macro_rules! impl_simple_memtable {
+    ($name:ident) => {
+        impl MemTable for $name {
+            fn insert(&mut self, key: Vec<u8>, entry: MemEntry) {
+                self.inner.insert(key, entry);
+            }
+            fn get(&self, key: &[u8]) -> Option<MemEntry> {
+                self.inner.get(key).cloned()
+            }
+            fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
+                use std::ops::Bound;
+                self.inner
+                    .range((Bound::Included(start.to_vec()), Bound::Excluded(end.to_vec())))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            }
+            fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
+                self.inner
+                    .range(prefix.to_vec()..)
+                    .take_while(|(k, _)| k.starts_with(prefix))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            }
+            fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> {
+                self.inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            }
+            fn len(&self) -> usize {
+                self.inner.len()
+            }
+            fn clear(&mut self) {
+                self.inner.clear();
+            }
+        }
+    };
 }
+
+impl_simple_memtable!(BTreeMemTable);
 
 /// Memtable backed by `bbtree::unsync::BBTreeMap`.
 ///
@@ -113,46 +117,7 @@ impl Default for BBTreeMemTable {
     }
 }
 
-impl MemTable for BBTreeMemTable {
-    fn insert(&mut self, key: Vec<u8>, entry: MemEntry) {
-        self.inner.insert(key, entry);
-    }
-
-    fn get(&self, key: &[u8]) -> Option<MemEntry> {
-        self.inner.get(key).cloned()
-    }
-
-    fn range(&self, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
-        use std::ops::Bound;
-        self.inner
-            .range((
-                Bound::Included(start.to_vec()),
-                Bound::Excluded(end.to_vec()),
-            ))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    }
-
-    fn prefix(&self, prefix: &[u8]) -> Vec<(Vec<u8>, MemEntry)> {
-        self.inner
-            .range(prefix.to_vec()..)
-            .take_while(|(k, _)| k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    }
-
-    fn iter(&self) -> Vec<(Vec<u8>, MemEntry)> {
-        self.inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    }
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn clear(&mut self) {
-        self.inner.clear();
-    }
-}
+impl_simple_memtable!(BBTreeMemTable);
 
 /// Memtable backed by `bbtree::BBTreeMap` — the concurrent B-tree variant.
 ///
@@ -186,6 +151,7 @@ impl Default for BBTreeConcurrentMemTable {
 }
 
 impl MemTable for BBTreeConcurrentMemTable {
+    /// Panics on allocator exhaustion — OOM kills the process.
     fn insert(&mut self, key: Vec<u8>, entry: MemEntry) {
         match self.inner.insert(key, entry) {
             Ok(None) => self.count += 1,

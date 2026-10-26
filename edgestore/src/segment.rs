@@ -469,15 +469,20 @@ impl SegmentReader {
     /// PERFORMANCE: uses the cached sparse index (`self.index`) loaded at open() time.
     /// Previously re-read the .idx file on every call. Regression: test_reader_caches_index_at_open.
     pub fn get(&self, key: &[u8]) -> Result<Option<MemEntry>, EdgestoreError> {
+        debug_assert!(!key.is_empty(), "SegmentReader::get: key must not be empty");
         if !filter_contains(&self.filter, key) {
             return Ok(None);
         }
         let start_offset = find_block_offset(&self.index, key);
         let mut dat = std::fs::File::open(self.dat_path())?;
         let dat_len = dat.metadata()?.len();
+        debug_assert!(start_offset <= dat_len, "SegmentReader::get: start_offset must not exceed file length");
         let mut current_offset = start_offset;
-
+        // Each iteration advances by at least SEGMENT_BLOCK_SIZE; bound by file length.
+        let blocks_max = (dat_len / SEGMENT_BLOCK_SIZE as u64) + 1;
+        let mut blocks_visited = 0u64;
         loop {
+            debug_assert!(blocks_visited <= blocks_max, "SegmentReader::get: exceeded block iteration bound");
             if current_offset >= dat_len {
                 break;
             }
@@ -494,6 +499,7 @@ impl SegmentReader {
                 }
             }
             current_offset += aligned_size as u64;
+            blocks_visited += 1;
         }
         Ok(None)
     }
@@ -768,7 +774,6 @@ impl SegmentStore {
     /// the same ID. On restart the manifest is authoritative for used IDs.
     pub(crate) fn prepare_flush(&mut self, memtable: &dyn MemTable) -> Option<FlushWork> {
         let entries = memtable.iter();
-        debug_assert!(!entries.is_empty() || memtable.is_empty(), "iter vs is_empty mismatch");
         if entries.is_empty() {
             return None;
         }
@@ -786,7 +791,7 @@ impl SegmentStore {
     }
 
     /// Phase 3: register a completed segment in manifest and reader list.
-    pub(crate) fn finalize_segment(&mut self, meta: SegmentMeta) -> Result<(), EdgestoreError> {
+    pub(crate) fn finalize_segment(&mut self, meta: &SegmentMeta) -> Result<(), EdgestoreError> {
         debug_assert!(meta.segment_id < self.next_segment_id, "meta must use a reserved ID");
         self.manifest.add_segment(meta.clone())?;
         let reader = SegmentReader::open(self.base_path.clone(), meta.segment_id)?;

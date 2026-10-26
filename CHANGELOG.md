@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-26
+
+### Fixed
+
+- **Silent flush error discard** — `put_inner` previously discarded auto-flush errors with `let _ = ...`; errors now propagate so a failed flush causes `put` to return an error.
+- **Loop bound assertion** — `SegmentReader::get` now asserts `blocks_visited ≤ (dat_len / SEGMENT_BLOCK_SIZE) + 1` to enforce an explicit upper bound per Tiger Style rules.
+
+### Changed
+
+- **`impl_simple_memtable!` macro** — `BTreeMemTable` and `BBTreeMemTable` now share a single generated `MemTable` impl body, eliminating 65 lines of duplicate code.
+- **Engine helpers extracted** — `write_entry`, `merge_sorted_scans`, and `dedup_filter_scan` extracted from `put_inner`/`range_core`/`prefix_core` to satisfy Tiger Style 70-line function limit and one-purpose rule. No behavior change.
+- **`debug_assert!` coverage** — assertions added at argument entry and return-value invariant sites across `write_entry`, `SegmentReader::get`, and flush path functions.
+- **`BBTreeConcurrentMemTable::insert` OOM behavior documented** — `MemTable::insert` trait now documents that implementations backed by fallible allocators may panic on allocation failure.
+
+### Added
+
+- **`test_put_lsn_monotone_and_positive`** — verifies `lsn > 0` for every write and strict monotone ordering.
+- **`test_put_with_ttl_stores_ttl_field`** — verifies `write_entry` stores `ttl_secs` in the memtable entry.
+- **`docs/internals.md`** — contributor reference covering key types, 3-phase flush protocol, read/write paths, segment constants, MemTable implementations, helper functions, Tiger Style rules, and invariant→test mapping.
+- **`website/internals.html`** — developer-oriented internals page on the project website, linked from all existing nav bars.
+
 ## [2.2.0] - 2026-10-24
 
 ### Breaking

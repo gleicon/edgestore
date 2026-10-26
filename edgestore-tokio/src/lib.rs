@@ -240,9 +240,9 @@ impl AsyncEngine {
     /// Flush the current memtable to a new immutable segment file.
     ///
     /// Uses a 3-phase protocol to release the write lock during disk I/O:
-    /// - Phase 1 (write lock): snapshot entries, swap in fresh memtable.
+    /// - Phase 1 (write lock): snapshot entries into `FlushWork`; memtable is NOT cleared.
     /// - Phase 2 (no lock): write segment files to disk.
-    /// - Phase 3 (write lock): register segment, retire old WAL files.
+    /// - Phase 3 (write lock): register segment, rebuild memtable, retire old WAL files.
     pub async fn flush_to_segments(&self) -> Result<SegmentMeta, EdgestoreError> {
         // Phase 1: snapshot memtable entries under write lock.
         // The active memtable is NOT cleared — reads remain fully served during Phase 2.
@@ -269,7 +269,7 @@ impl AsyncEngine {
         tokio::task::spawn_blocking(move || {
             inner
                 .blocking_write()
-                .finalize_flush(meta.clone(), flushed_max_lsn)
+                .finalize_flush(&meta, flushed_max_lsn)
                 .map(|()| meta)
         })
         .await
@@ -303,7 +303,9 @@ impl AsyncEngine {
         self.run_write(move |e| e.import_segment(&data, &expected_hash)).await
     }
 
-    /// Open an engine in read-only mode.
+    /// Open an engine in read-only mode. All write methods return
+    /// `Err(EdgestoreError::ReadOnly)`. Use for replica instances to prevent
+    /// accidental writes that would cause divergence from the primary.
     pub async fn open_readonly(config: EdgestoreConfig) -> Result<Self, EdgestoreError> {
         let engine = tokio::task::spawn_blocking(move || Engine::open_readonly(config))
             .await

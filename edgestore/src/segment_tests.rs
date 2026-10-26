@@ -291,7 +291,7 @@ fn test_remove_segment_manifest_updated_before_files_gone() {
     mt.insert(k.clone(), make_entry(1, &k, b"val"));
     let work = store.prepare_flush(&mt).unwrap();
     let meta = work.execute().unwrap();
-    store.finalize_segment(meta.clone()).unwrap();
+    store.finalize_segment(&meta).unwrap();
     let id = meta.segment_id;
 
     assert!(dir.path().join(format!("segment-{:08}.dat", id)).exists());

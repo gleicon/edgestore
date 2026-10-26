@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Internals — EdgeStore</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          colors: {
+            edge: {
+              50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
+              400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
+              800: '#075985', 900: '#0c4a6e'
+            },
+            rust: { 500: '#dea584', 600: '#c56c3a' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .code-block { background: #1e293b; border-radius: 0.5rem; overflow-x: auto; }
+    .code-block code { color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 0.825rem; line-height: 1.65; white-space: pre; display: block; }
+    .diagram { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; }
+    .diagram-box { background: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; }
+    .diagram-box-header { background: #f1f5f9; border-bottom: 1px solid #e2e8f0; padding: 0.5rem 1rem; font-weight: 600; }
+
+    /* Keyword highlight colors inside code blocks */
+    .kw   { color: #93c5fd; }   /* blue-300 — keywords, types */
+    .fn   { color: #86efac; }   /* green-300 — function names */
+    .str  { color: #fca5a5; }   /* red-300 — string/value literals */
+    .cmt  { color: #64748b; }   /* slate-500 — comments */
+    .num  { color: #fdba74; }   /* orange-300 — numbers */
+
+    /* Sticky section nav */
+    .section-nav a { display: block; padding: 0.25rem 0.75rem; border-left: 2px solid transparent; font-size: 0.8rem; color: #64748b; text-decoration: none; transition: color 0.15s, border-color 0.15s; }
+    .section-nav a:hover, .section-nav a.active { color: #0284c7; border-left-color: #0284c7; }
+
+    /* Phase diagram steps */
+    .phase-step { position: relative; padding-left: 2.5rem; }
+    .phase-step::before { content: attr(data-phase); position: absolute; left: 0; top: 0; width: 1.75rem; height: 1.75rem; background: #0284c7; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .phase-step.phase-nolock::before { background: #64748b; }
+
+    /* Tag badges */
+    .tag { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; }
+
+    /* Data table */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    .data-table th { background: #f1f5f9; text-align: left; padding: 0.5rem 0.75rem; font-weight: 600; color: #475569; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid #e2e8f0; }
+    .data-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table code { background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 0.2rem; font-size: 0.8rem; color: #0369a1; }
+
+    /* Invariant table */
+    .inv-table td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #0369a1; }
+    .inv-table td:last-child  { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #059669; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+
+  <!-- Navigation -->
+  <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16 items-center">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-edge-600 rounded-lg flex items-center justify-center">
+            <span class="text-white font-bold text-sm">E</span>
+          </div>
+          <a href="index.html" class="font-bold text-xl text-slate-800">EdgeStore</a>
+        </div>
+        <div class="hidden md:flex space-x-8">
+          <a href="index.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Home</a>
+          <a href="features.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Features</a>
+          <a href="architecture.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Architecture</a>
+          <a href="examples.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Examples</a>
+          <a href="papers.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Papers</a>
+          <a href="api.html" class="text-slate-600 hover:text-edge-600 font-medium transition">API</a>
+          <a href="internals.html" class="text-edge-600 font-medium">Internals</a>
+        </div>
+        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+
+    <!-- Page header -->
+    <div class="mb-10">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="tag bg-edge-100 text-edge-700">CONTRIBUTOR REFERENCE</span>
+        <span class="tag bg-slate-100 text-slate-600">edgestore v2.2.x</span>
+      </div>
+      <h1 class="text-4xl font-bold text-slate-900 mb-3">Internals</h1>
+      <p class="text-lg text-slate-600 max-w-3xl">
+        A working guide to the <code class="text-edge-700 text-base">edgestore</code> crate for contributors.
+        Covers key types, the 3-phase flush protocol, read/write paths, segment format,
+        helper functions, macros, and the Tiger Style constraints applied across the codebase.
+      </p>
+    </div>
+
+    <div class="flex gap-10 items-start">
+
+      <!-- Sticky section nav (desktop sidebar) -->
+      <aside class="hidden lg:block w-48 shrink-0 sticky top-24 section-nav">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3 px-3">On this page</div>
+        <a href="#architecture">Architecture</a>
+        <a href="#key-types">Key Types</a>
+        <a href="#flush-protocol">3-Phase Flush</a>
+        <a href="#write-path">Write Path</a>
+        <a href="#read-path">Read Path</a>
+        <a href="#segment-format">Segment Format</a>
+        <a href="#memtable">MemTable Impls</a>
+        <a href="#helpers">Helper Functions</a>
+        <a href="#tiger-style">Tiger Style</a>
+        <a href="#invariants">Invariants</a>
+      </aside>
+
+      <!-- Main content -->
+      <main class="min-w-0 flex-1 space-y-16">
+
+        <!-- 1. Architecture -->
+        <section id="architecture">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Architecture</h2>
+          <p class="text-slate-600 mb-5 max-w-2xl">
+            The codebase has a strict layering rule: the async wrapper holds no storage logic.
+            Every write goes through WAL → MemTable → flush → SegmentStore in that order.
+          </p>
+          <div class="diagram p-6">
+            <div class="flex flex-col gap-0">
+              <div class="bg-slate-900 text-white rounded-t-lg px-5 py-3 flex items-center justify-between">
+                <span class="font-semibold">Application</span>
+              </div>
+              <div class="border-l border-r border-slate-200 bg-slate-50 px-5 py-2 text-slate-500 text-xs font-mono text-center">↓  put / get / range / prefix</div>
+              <div class="bg-edge-600 text-white px-5 py-3">
+                <div class="font-semibold">Engine <span class="text-blue-200 font-normal text-sm ml-2">— edgestore/src/engine/mod.rs</span></div>
+                <div class="text-blue-100 text-sm mt-1">All writes are &amp;mut self. Reads are &amp;self. LSN counter increments on every put/delete.</div>
+              </div>
+              <div class="grid grid-cols-2 gap-px bg-slate-200 border-l border-r border-slate-200">
+                <div class="bg-rust-500 text-white px-4 py-3">
+                  <div class="font-semibold text-sm">MemTable</div>
+                  <div class="text-xs text-orange-100 mt-0.5">In-memory write buffer — memtable.rs</div>
+                </div>
+                <div class="bg-rust-500 text-white px-4 py-3">
+                  <div class="font-semibold text-sm">WAL</div>
+                  <div class="text-xs text-orange-100 mt-0.5">Append-only durability log — wal.rs</div>
+                </div>
+              </div>
+              <div class="border-l border-r border-slate-200 bg-slate-50 px-5 py-2 text-slate-500 text-xs font-mono text-center">↓  flush (3-phase protocol)</div>
+              <div class="bg-rust-600 text-white px-5 py-3">
+                <div class="font-semibold">SegmentStore <span class="text-orange-200 font-normal text-sm ml-2">— segment.rs</span></div>
+                <div class="text-orange-100 text-sm mt-1">Immutable on-disk sorted runs. Never modified after write.</div>
+              </div>
+              <div class="border-l border-r border-slate-200 bg-slate-50 px-5 py-2 text-slate-500 text-xs font-mono text-center">startup</div>
+              <div class="bg-slate-700 text-white px-5 py-3 rounded-b-lg">
+                <div class="font-semibold">Recovery <span class="text-slate-300 font-normal text-sm ml-2">— recovery.rs</span></div>
+                <div class="text-slate-300 text-sm mt-1">WAL replay at open(). Replays all wal-*.log files in ascending order.</div>
+              </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-slate-200 text-sm text-slate-500">
+              <strong class="text-slate-700">edgestore-tokio</strong> is <code>Arc&lt;RwLock&lt;Engine&gt;&gt;</code> + <code>spawn_blocking</code>. Zero storage logic.
+              <a href="https://docs.rs/edgestore-tokio" class="text-edge-600 hover:underline ml-2">docs.rs →</a>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. Key Types -->
+        <section id="key-types">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Key Types</h2>
+          <div class="grid md:grid-cols-2 gap-4">
+
+            <div class="diagram-box">
+              <div class="diagram-box-header text-slate-900 flex items-center justify-between">
+                <span>Engine</span>
+                <a href="https://docs.rs/edgestore/latest/edgestore/engine/struct.Engine.html" class="text-xs text-edge-600 hover:underline font-normal">docs.rs →</a>
+              </div>
+              <div class="p-4 text-sm space-y-2">
+                <div class="font-mono text-xs text-slate-500 mb-3">engine/mod.rs:103</div>
+                <div class="flex items-start gap-2">
+                  <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700 shrink-0">memtable</code>
+                  <span class="text-slate-600">in-memory write buffer, <code>Box&lt;dyn MemTable&gt;</code></span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700 shrink-0">segment_store</code>
+                  <span class="text-slate-600">ordered set of immutable on-disk segments</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700 shrink-0">wal</code>
+                  <span class="text-slate-600">append-only durability log, rotated at 64 MiB / 60s</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700 shrink-0">lsn_counter</code>
+                  <span class="text-slate-600">monotone sequence number, increments on every write</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="diagram-box">
+              <div class="diagram-box-header text-slate-900 flex items-center justify-between">
+                <span>MemEntry</span>
+                <a href="https://docs.rs/edgestore/latest/edgestore/types/struct.MemEntry.html" class="text-xs text-edge-600 hover:underline font-normal">docs.rs →</a>
+              </div>
+              <div class="p-4 text-sm space-y-2">
+                <div class="font-mono text-xs text-slate-500 mb-3">types.rs — single record in memtable or segment</div>
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="bg-slate-50 rounded p-2"><code class="text-xs text-edge-700">key</code><div class="text-xs text-slate-500 mt-0.5">Vec&lt;u8&gt;</div></div>
+                  <div class="bg-slate-50 rounded p-2"><code class="text-xs text-edge-700">value</code><div class="text-xs text-slate-500 mt-0.5">Option&lt;Vec&lt;u8&gt;&gt;</div></div>
+                  <div class="bg-slate-50 rounded p-2"><code class="text-xs text-edge-700">op</code><div class="text-xs text-slate-500 mt-0.5">Put | Delete</div></div>
+                  <div class="bg-slate-50 rounded p-2"><code class="text-xs text-edge-700">lsn</code><div class="text-xs text-slate-500 mt-0.5">u64</div></div>
+                  <div class="bg-slate-50 rounded p-2"><code class="text-xs text-edge-700">timestamp</code><div class="text-xs text-slate-500 mt-0.5">i64</div></div>
+                  <div class="bg-slate-50 rounded p-2"><code class="text-xs text-edge-700">ttl</code><div class="text-xs text-slate-500 mt-0.5">u32 secs</div></div>
+                </div>
+                <div class="text-xs text-slate-500 mt-1">A <code>Delete</code> entry is a tombstone. <code>value: None</code> for tombstones.</div>
+              </div>
+            </div>
+
+            <div class="diagram-box">
+              <div class="diagram-box-header text-slate-900">FlushWork</div>
+              <div class="p-4 text-sm">
+                <div class="font-mono text-xs text-slate-500 mb-3">segment.rs:389 — self-contained flush work package</div>
+                <p class="text-slate-600">Carries a snapshot of memtable entries and a reserved segment ID. Phase 2 (<code>execute()</code>) holds no engine lock — it writes to disk independently. Callers pass <code>flushed_max_lsn</code> to <code>finalize_flush</code> for correct memtable rebuild.</p>
+              </div>
+            </div>
+
+            <div class="diagram-box">
+              <div class="diagram-box-header text-slate-900">BudgetedScan</div>
+              <div class="p-4 text-sm">
+                <div class="font-mono text-xs text-slate-500 mb-3">engine/mod.rs:60 — range/prefix scan result</div>
+                <div class="space-y-1">
+                  <div class="flex items-center gap-2"><code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700">items</code><span class="text-slate-600 text-xs">Vec of decoded key/value pairs</span></div>
+                  <div class="flex items-center gap-2"><code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700">truncated</code><span class="text-slate-600 text-xs">true if budget was hit</span></div>
+                  <div class="flex items-center gap-2"><code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-edge-700">stats</code><span class="text-slate-600 text-xs">QueryStats (segments, items, bytes scanned)</span></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- 3. 3-Phase Flush Protocol -->
+        <section id="flush-protocol">
+          <h2 class="text-2xl font-bold text-slate-900 mb-1">3-Phase Flush Protocol</h2>
+          <p class="text-slate-600 mb-5 max-w-2xl">
+            Flush converts the current memtable into an immutable on-disk segment without blocking writes during I/O.
+            The engine stays writable throughout Phases 1 and 2.
+          </p>
+
+          <div class="diagram p-6 space-y-4">
+
+            <div class="phase-step" data-phase="1">
+              <div class="font-semibold text-slate-900 mb-1">
+                <code class="text-edge-700">Engine::begin_flush()</code>
+                <span class="tag bg-amber-100 text-amber-700 ml-2">write lock</span>
+              </div>
+              <p class="text-sm text-slate-600 mb-2">Snapshot memtable entries into a <code>FlushWork</code>. Reserve the next segment ID. The memtable is <strong>not cleared</strong> — writes continue while the snapshot is on disk.</p>
+              <div class="code-block p-4">
+<code><span class="cmt">// records max LSN across all snapshot entries</span>
+<span class="kw">let</span> flushed_max_lsn = entries.iter().<span class="fn">map</span>(|(_, e)| e.lsn).<span class="fn">max</span>().<span class="fn">unwrap_or</span>(<span class="num">0</span>);</code>
+              </div>
+            </div>
+
+            <div class="flex justify-center"><div class="w-px h-6 bg-slate-300"></div></div>
+
+            <div class="phase-step phase-nolock" data-phase="2">
+              <div class="font-semibold text-slate-900 mb-1">
+                <code class="text-edge-700">FlushWork::execute()</code>
+                <span class="tag bg-slate-100 text-slate-600 ml-2">no lock held</span>
+              </div>
+              <p class="text-sm text-slate-600 mb-2">Writes all four segment files to disk. No engine state required. In <code>AsyncEngine</code>, this phase runs in <code>spawn_blocking</code>.</p>
+              <div class="code-block p-4">
+<code><span class="cmt">// all disk I/O happens here — engine is unlocked</span>
+segment-NNNNNNNN.dat   <span class="cmt">// LZ4 compressed data blocks</span>
+segment-NNNNNNNN.idx   <span class="cmt">// sparse key index</span>
+segment-NNNNNNNN.xf    <span class="cmt">// Xor8 probabilistic filter</span>
+segment-NNNNNNNN.meta  <span class="cmt">// JSON metadata</span></code>
+              </div>
+            </div>
+
+            <div class="flex justify-center"><div class="w-px h-6 bg-slate-300"></div></div>
+
+            <div class="phase-step" data-phase="3">
+              <div class="font-semibold text-slate-900 mb-1">
+                <code class="text-edge-700">Engine::finalize_flush(&amp;meta, flushed_max_lsn)</code>
+                <span class="tag bg-amber-100 text-amber-700 ml-2">write lock</span>
+              </div>
+              <p class="text-sm text-slate-600 mb-2">Register the segment in the manifest. Open a <code>SegmentReader</code>. Rebuild the memtable, keeping only entries whose <code>lsn &gt; flushed_max_lsn</code>.</p>
+              <div class="code-block p-4">
+<code><span class="cmt">// entries written during Phase 2 survive the flush</span>
+<span class="kw">let</span> rebuilt: Vec&lt;_&gt; = self.memtable.<span class="fn">iter</span>()
+    .<span class="fn">filter</span>(|(_, e)| e.lsn &gt; flushed_max_lsn)
+    .<span class="fn">collect</span>();</code>
+              </div>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-slate-200 bg-edge-50 rounded-lg p-4 text-sm">
+              <strong class="text-edge-800">Invariant:</strong>
+              <span class="text-slate-700 ml-1">
+                Entries at <code>lsn ≤ flushed_max_lsn</code> are durably in the segment after Phase 3.
+                Entries at <code>lsn &gt; flushed_max_lsn</code> arrived during Phase 2 and are retained.
+              </span>
+              <div class="mt-2 text-slate-500">
+                Covered by test: <code class="text-green-700">test_finalize_flush_retains_writes_after_snapshot</code>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. Write Path -->
+        <section id="write-path">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Write Path</h2>
+          <div class="diagram p-6">
+            <div class="flex flex-col items-center gap-2 text-sm">
+              <div class="bg-slate-800 text-white rounded-lg px-6 py-2 font-mono">put(ns, key, value)</div>
+              <div class="text-slate-400">↓ readonly guard + ns length ≤ u16::MAX</div>
+              <div class="bg-edge-600 text-white rounded-lg px-6 py-2 font-mono w-full max-w-xl text-center">write_entry(ns, key, val, ttl=0)</div>
+              <div class="grid grid-cols-3 gap-2 w-full max-w-xl text-center text-xs">
+                <div class="bg-slate-100 rounded p-2 text-slate-700"><span class="font-semibold">1.</span> lsn_counter += 1</div>
+                <div class="bg-slate-100 rounded p-2 text-slate-700"><span class="font-semibold">2.</span> WAL record + BLAKE3 value hash</div>
+                <div class="bg-slate-100 rounded p-2 text-slate-700"><span class="font-semibold">3.</span> memtable.insert(encode_key(ns, key), entry)</div>
+              </div>
+              <div class="text-slate-400">↓ if memtable.len() × 256 ≥ memtable_max_bytes</div>
+              <div class="bg-rust-600 text-white rounded-lg px-6 py-2 font-mono">flush_to_segments_inner() — error propagates</div>
+            </div>
+            <div class="mt-4 text-xs text-slate-500 text-center">
+              <code>put_with_ttl</code> is identical but skips auto-flush and passes <code>ttl_secs</code> to <code>write_entry</code>.
+              Auto-flush failure is not silent: <code>put</code> returns the error.
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. Read Path -->
+        <section id="read-path">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Read Path</h2>
+          <div class="grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="font-semibold text-slate-800 mb-3">Point Lookup</h3>
+              <div class="diagram p-4 text-sm space-y-2">
+                <div class="font-mono bg-slate-800 text-white rounded px-3 py-2">get(ns, key)</div>
+                <div class="text-slate-400 text-xs text-center">encode_key(ns, key)</div>
+                <div class="bg-edge-100 text-edge-800 rounded px-3 py-2">1. Check memtable</div>
+                <div class="flex gap-4 text-xs text-center">
+                  <div class="flex-1 bg-green-100 text-green-800 rounded px-2 py-1">hit → return</div>
+                  <div class="flex-1 bg-slate-100 text-slate-600 rounded px-2 py-1">miss → segments</div>
+                </div>
+                <div class="bg-rust-500 text-white rounded px-3 py-2">
+                  <div>2. SegmentStore (newest → oldest)</div>
+                  <div class="text-xs text-orange-100 mt-1">Xor8 filter → sparse index → block decode</div>
+                </div>
+                <div class="bg-slate-100 text-slate-600 rounded px-3 py-1 text-xs text-center">not found → None</div>
+              </div>
+            </div>
+            <div>
+              <h3 class="font-semibold text-slate-800 mb-3">Range / Prefix Scan</h3>
+              <div class="diagram p-4 text-sm space-y-2">
+                <div class="font-mono bg-slate-800 text-white rounded px-3 py-2">range(ns, start, end)</div>
+                <div class="bg-rust-500 text-white rounded px-3 py-2">1. seg_results from SegmentStore (sorted)</div>
+                <div class="bg-edge-600 text-white rounded px-3 py-2">2. mem_results from MemTable (sorted)</div>
+                <div class="bg-slate-700 text-white rounded px-3 py-2">
+                  <div>3. merge_sorted_scans(seg, mem)</div>
+                  <div class="text-xs text-slate-300 mt-1">O(n), 2 allocations</div>
+                </div>
+                <div class="bg-slate-600 text-white rounded px-3 py-2">
+                  <div>4. dedup_filter_scan(merged, …)</div>
+                  <div class="text-xs text-slate-300 mt-1">highest LSN wins · filter tombstones · apply budget</div>
+                </div>
+              </div>
+              <div class="text-xs text-slate-500 mt-2">HashMap approach: O(n log n), 4 allocations. The 2-pointer merge is preferred.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 6. Segment File Format -->
+        <section id="segment-format">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Segment File Format</h2>
+          <p class="text-slate-600 mb-4">Four files per segment. ID is zero-padded 8-digit decimal: <code>segment-00000001.dat</code>.</p>
+          <div class="grid md:grid-cols-2 gap-4 mb-6">
+            <div class="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+              <div class="w-12 h-10 bg-rust-500 rounded flex items-center justify-center text-white text-xs font-bold font-mono shrink-0">.dat</div>
+              <div class="text-sm"><p class="font-medium text-slate-800">Data blocks</p><p class="text-slate-500 text-xs">4096-byte aligned, LZ4-compressed. Magic: <code>0x45445347</code> (EDSG)</p></div>
+            </div>
+            <div class="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+              <div class="w-12 h-10 bg-edge-500 rounded flex items-center justify-center text-white text-xs font-bold font-mono shrink-0">.idx</div>
+              <div class="text-sm"><p class="font-medium text-slate-800">Sparse index</p><p class="text-slate-500 text-xs">First key of every 64th entry + byte offset in .dat</p></div>
+            </div>
+            <div class="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+              <div class="w-12 h-10 bg-purple-500 rounded flex items-center justify-center text-white text-xs font-bold font-mono shrink-0">.xf</div>
+              <div class="text-sm"><p class="font-medium text-slate-800">Xor8 filter</p><p class="text-slate-500 text-xs">Probabilistic filter — eliminates unnecessary .dat reads. No false negatives.</p></div>
+            </div>
+            <div class="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+              <div class="w-12 h-10 bg-slate-600 rounded flex items-center justify-center text-white text-xs font-bold font-mono shrink-0">.meta</div>
+              <div class="text-sm"><p class="font-medium text-slate-800">Metadata</p><p class="text-slate-500 text-xs">JSON — segment_id, record_count, min/max_key, BLAKE3 hash, cohort</p></div>
+            </div>
+          </div>
+
+          <h3 class="font-semibold text-slate-800 mb-3">Constants <span class="text-slate-400 font-normal text-sm ml-2">segment.rs</span></h3>
+          <div class="overflow-x-auto">
+            <table class="data-table">
+              <thead><tr><th>Constant</th><th>Value</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>SEGMENT_BLOCK_SIZE</code></td><td class="font-mono text-slate-700">4096</td><td class="text-slate-600">Aligned block size in bytes</td></tr>
+                <tr><td><code>BLOCK_TARGET_BYTES</code></td><td class="font-mono text-slate-700">3900</td><td class="text-slate-600">Target payload before a block boundary is forced</td></tr>
+                <tr><td><code>SEGMENT_FILE_MAGIC</code></td><td class="font-mono text-slate-700">0x45445347</td><td class="text-slate-600">.dat header magic ("EDSG" in ASCII)</td></tr>
+                <tr><td><code>SEGMENT_FORMAT_VERSION</code></td><td class="font-mono text-slate-700">1</td><td class="text-slate-600">.dat format version byte</td></tr>
+                <tr><td><code>SEGMENT_HEADER_LEN</code></td><td class="font-mono text-slate-700">8</td><td class="text-slate-600">Bytes before first block (magic + version + padding)</td></tr>
+                <tr><td><code>MAX_BLOCK_DECOMPRESSED</code></td><td class="font-mono text-slate-700">2 MiB</td><td class="text-slate-600">Upper bound on decompressed block size</td></tr>
+                <tr><td><code>AVG_ENTRY_SIZE_ESTIMATE</code></td><td class="font-mono text-slate-700">256</td><td class="text-slate-600">Heuristic for auto-flush threshold only (engine/mod.rs:28)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 7. MemTable Implementations -->
+        <section id="memtable">
+          <h2 class="text-2xl font-bold text-slate-900 mb-2">MemTable Implementations</h2>
+          <p class="text-slate-600 mb-4 max-w-2xl">Three implementations in <code>memtable.rs</code>. Default is <code>BBTreeConcurrentMemTable</code>, set in <code>EdgestoreConfig::default()</code>.</p>
+          <div class="overflow-x-auto mb-6">
+            <table class="data-table">
+              <thead><tr><th>Type</th><th>Backend</th><th>Concurrency</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>BTreeMemTable</code></td>
+                  <td class="text-slate-600"><code>std::collections::BTreeMap</code></td>
+                  <td><span class="tag bg-slate-100 text-slate-600">&amp;mut self writes</span></td>
+                  <td class="text-slate-600">Reference implementation</td>
+                </tr>
+                <tr>
+                  <td><code>BBTreeMemTable</code></td>
+                  <td class="text-slate-600"><code>bbtree::unsync::BBTreeMap</code></td>
+                  <td><span class="tag bg-slate-100 text-slate-600">&amp;mut self writes</span></td>
+                  <td class="text-slate-600">~5× faster point lookups via SIMD node search</td>
+                </tr>
+                <tr>
+                  <td><code>BBTreeConcurrentMemTable</code></td>
+                  <td class="text-slate-600"><code>bbtree::BBTreeMap</code></td>
+                  <td><span class="tag bg-edge-100 text-edge-700">concurrent reads</span></td>
+                  <td class="text-slate-600"><strong>Default.</strong> Readers never write cache lines during read. Uses <code>scan()</code> not <code>range()</code>. Manual <code>count</code> field (no <code>.len()</code>). OOM panics.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 class="font-semibold text-slate-800 mb-3"><code>impl_simple_memtable!</code> macro <span class="text-slate-400 font-normal text-sm ml-2">memtable.rs:58</span></h3>
+          <p class="text-slate-600 text-sm mb-3 max-w-2xl">
+            <code>BTreeMemTable</code> and <code>BBTreeMemTable</code> share identical <code>MemTable</code> impl bodies — both backing types expose the same interface.
+            The macro generates the impl from a single body to prevent silent divergence. <code>BBTreeConcurrentMemTable</code> is not covered: it uses <code>scan()</code> instead of <code>range()</code>/<code>iter()</code> and has different allocation semantics.
+          </p>
+          <div class="code-block p-4">
+<code><span class="kw">macro_rules!</span> impl_simple_memtable {
+    ($<span class="fn">name</span>:<span class="kw">ident</span>) =&gt; {
+        <span class="kw">impl</span> MemTable <span class="kw">for</span> $name {
+            <span class="kw">fn</span> <span class="fn">insert</span>(&amp;<span class="kw">mut</span> self, key: <span class="kw">Vec</span>&lt;u8&gt;, entry: MemEntry) { self.inner.<span class="fn">insert</span>(key, entry); }
+            <span class="kw">fn</span> <span class="fn">get</span>(&amp;self, key: &amp;[u8]) -&gt; Option&lt;MemEntry&gt; { self.inner.<span class="fn">get</span>(key).<span class="fn">cloned</span>() }
+            <span class="cmt">// range(), prefix(), iter(), len(), clear() follow the same pattern</span>
+        }
+    };
+}
+<span class="fn">impl_simple_memtable!</span>(BTreeMemTable);
+<span class="fn">impl_simple_memtable!</span>(BBTreeMemTable);</code>
+          </div>
+          <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+            <strong>OOM behavior:</strong> <code>BBTreeConcurrentMemTable::insert</code> panics on allocator exhaustion. This is documented on the <code>MemTable::insert</code> trait and on the impl. The other two implementations do not panic.
+          </div>
+        </section>
+
+        <!-- 8. Helper Functions -->
+        <section id="helpers">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Helper Functions</h2>
+
+          <h3 class="font-semibold text-slate-700 mb-2 mt-4">engine/mod.rs</h3>
+          <div class="overflow-x-auto mb-6">
+            <table class="data-table">
+              <thead><tr><th>Function</th><th>Signature sketch</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>write_entry</code></td>
+                  <td class="font-mono text-xs text-slate-500">(ns, key, val, ttl) → Result&lt;Lsn&gt;</td>
+                  <td class="text-slate-600">Shared WAL write + memtable insert for all put operations. One WAL record per call.</td>
+                </tr>
+                <tr>
+                  <td><code>merge_sorted_scans</code></td>
+                  <td class="font-mono text-xs text-slate-500">(seg, mem) → Vec&lt;…&gt;</td>
+                  <td class="text-slate-600">O(n) 2-pointer merge of two already-sorted entry slices. Ascending order, may contain duplicates per key.</td>
+                </tr>
+                <tr>
+                  <td><code>dedup_filter_scan</code></td>
+                  <td class="font-mono text-xs text-slate-500">(merged, has_seg, budget, truncated) → Result&lt;BudgetedKvScan&gt;</td>
+                  <td class="text-slate-600">Dedup by key (highest LSN wins), filter tombstones, decode keys, apply byte/item budget.</td>
+                </tr>
+                <tr>
+                  <td><code>range_core</code></td>
+                  <td class="font-mono text-xs text-slate-500">(ns, start, end, budget) → …</td>
+                  <td class="text-slate-600">Full range scan pipeline using the two helpers above. ~15 lines.</td>
+                </tr>
+                <tr>
+                  <td><code>prefix_core</code></td>
+                  <td class="font-mono text-xs text-slate-500">(ns, prefix, budget) → …</td>
+                  <td class="text-slate-600">Prefix scan pipeline. Converts prefix to <code>[prefix, upper_bound)</code> range.</td>
+                </tr>
+                <tr>
+                  <td><code>flush_to_segments_inner</code></td>
+                  <td class="font-mono text-xs text-slate-500">(&amp;mut self) → Result&lt;…&gt;</td>
+                  <td class="text-slate-600">Synchronous orchestration of all three flush phases.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 class="font-semibold text-slate-700 mb-2">segment.rs</h3>
+          <div class="overflow-x-auto mb-6">
+            <table class="data-table">
+              <thead><tr><th>Function</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><code>find_block_offset(index, key)</code></td><td class="text-slate-600">Binary search on sparse index → byte offset in .dat</td></tr>
+                <tr><td><code>build_xor_filter(keys)</code></td><td class="text-slate-600">Build Xor8 filter from key slice</td></tr>
+                <tr><td><code>filter_contains(filter, key)</code></td><td class="text-slate-600">Xor8 membership test (no false negatives)</td></tr>
+                <tr><td><code>read_block_at_offset(file, offset)</code></td><td class="text-slate-600">Read and decompress one 4096-byte block</td></tr>
+                <tr><td><code>serialize_entry / deserialize_entry</code></td><td class="text-slate-600">Entry wire format encode/decode</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 class="font-semibold text-slate-700 mb-2">recovery.rs</h3>
+          <div class="overflow-x-auto">
+            <table class="data-table">
+              <thead><tr><th>Function</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><code>list_wal_files(db_path)</code></td><td class="text-slate-600">Enumerate WAL files matching <code>wal-[16 hex].log</code>, sorted ascending</td></tr>
+                <tr><td><code>recover_from_wal(db_path, memtable)</code></td><td class="text-slate-600">Replay WAL files into memtable; returns <code>RecoveryResult</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 9. Tiger Style -->
+        <section id="tiger-style">
+          <h2 class="text-2xl font-bold text-slate-900 mb-2">Tiger Style Rules in Force</h2>
+          <p class="text-slate-600 mb-5 max-w-2xl">
+            This codebase applies <a href="https://tigerstyle.dev/" class="text-edge-600 hover:underline">Tiger Style</a> constraints.
+            The rules below are actively enforced — each one has at least one code site where it was applied or repaired.
+          </p>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="diagram-box p-4">
+              <div class="font-semibold text-slate-800 mb-2">Assertions</div>
+              <p class="text-sm text-slate-600 mb-2">Minimum 2 <code>debug_assert!</code> per non-trivial function: entry condition + return-value invariant. Assert at every external call boundary.</p>
+              <div class="code-block p-3 text-xs">
+<code><span class="fn">debug_assert!</span>(!ns.<span class="fn">is_empty</span>(), <span class="str">"ns must not be empty"</span>);
+<span class="cmt">// ... body ...</span>
+<span class="fn">debug_assert!</span>(lsn &gt; <span class="num">0</span>, <span class="str">"lsn must be positive"</span>);</code>
+              </div>
+            </div>
+            <div class="diagram-box p-4">
+              <div class="font-semibold text-slate-800 mb-2">No Silent Error Discard</div>
+              <p class="text-sm text-slate-600 mb-2">Every <code>Result</code> is handled explicitly. <code>let _ = expr</code> is banned on fallible paths that affect correctness.</p>
+              <div class="code-block p-3 text-xs">
+<code><span class="cmt">// before (silent discard):</span>
+<span class="kw">let</span> _ = self.<span class="fn">flush_to_segments_inner</span>();
+<span class="cmt">// after (error propagates):</span>
+self.<span class="fn">flush_to_segments_inner</span>()?;</code>
+              </div>
+            </div>
+            <div class="diagram-box p-4">
+              <div class="font-semibold text-slate-800 mb-2">Loop Bounds</div>
+              <p class="text-sm text-slate-600 mb-2">Every non-trivial loop has an explicit upper bound with an assertion.</p>
+              <div class="code-block p-3 text-xs">
+<code><span class="kw">let</span> blocks_max = (dat_len / SEGMENT_BLOCK_SIZE <span class="kw">as</span> u64) + <span class="num">1</span>;
+<span class="kw">let mut</span> blocks_visited = <span class="num">0u64</span>;
+<span class="kw">loop</span> {
+    <span class="fn">debug_assert!</span>(blocks_visited &lt;= blocks_max, <span class="str">"exceeded block bound"</span>);
+    blocks_visited += <span class="num">1</span>;
+}</code>
+              </div>
+            </div>
+            <div class="diagram-box p-4">
+              <div class="font-semibold text-slate-800 mb-2">Function Size &amp; Purpose</div>
+              <p class="text-sm text-slate-600">Max 70 lines per function. One purpose per function — must be nameable as a verb-noun pair. <code>merge_sorted_scans</code> only merges. <code>dedup_filter_scan</code> only deduplicates. <code>write_entry</code> only writes one WAL record.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 10. Key Invariants -->
+        <section id="invariants">
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">Key Invariants (tested)</h2>
+          <div class="overflow-x-auto">
+            <table class="data-table inv-table">
+              <thead><tr><th>Invariant</th><th>Test</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>lsn &gt; 0</code> for every write; LSN strictly monotone</td>
+                  <td><code>test_put_lsn_monotone_and_positive</code></td>
+                </tr>
+                <tr>
+                  <td>Writes after <code>begin_flush</code> survive <code>finalize_flush</code></td>
+                  <td><code>test_finalize_flush_retains_writes_after_snapshot</code></td>
+                </tr>
+                <tr>
+                  <td>Tombstone in memtable shadows segment value</td>
+                  <td><code>test_delete_from_segment_via_memtable_tombstone</code></td>
+                </tr>
+                <tr>
+                  <td>Range merge deduplicates same key across segments</td>
+                  <td><code>test_range_merge_dedups_same_key</code></td>
+                </tr>
+                <tr>
+                  <td><code>put_with_ttl</code> stores the TTL field in the memtable entry</td>
+                  <td><code>test_put_with_ttl_stores_ttl_field</code></td>
+                </tr>
+                <tr>
+                  <td>Segment sparse index is cached at <code>open()</code></td>
+                  <td><code>test_reader_caches_index_at_open</code></td>
+                </tr>
+                <tr>
+                  <td><code>remove_segment</code> updates manifest before deleting files</td>
+                  <td><code>test_remove_segment_manifest_updated_before_files_gone</code></td>
+                </tr>
+                <tr>
+                  <td><code>flushed_max_lsn</code> = max LSN across all snapshot entries</td>
+                  <td class="text-slate-400">enforced in <code>prepare_flush</code> (no dedicated test)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-lg text-sm">
+            <div class="font-semibold text-slate-800 mb-2">Run the full test suite</div>
+            <div class="code-block p-3">
+<code><span class="cmt"># all crates, including edgestore-tokio</span>
+<span class="fn">cargo</span> test --workspace
+
+<span class="cmt"># engine suite only (215 tests)</span>
+<span class="fn">cargo</span> test -p edgestore engine</code>
+            </div>
+          </div>
+        </section>
+
+        <!-- References -->
+        <section>
+          <h2 class="text-2xl font-bold text-slate-900 mb-4">References</h2>
+          <div class="grid md:grid-cols-3 gap-4">
+            <a href="architecture.html" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+              <div class="font-semibold text-slate-900">Architecture</div>
+              <div class="text-sm text-slate-600 mt-1">High-level crate diagram, read/write/compaction paths, concurrency model</div>
+            </a>
+            <a href="api.html" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+              <div class="font-semibold text-slate-900">API Reference</div>
+              <div class="text-sm text-slate-600 mt-1">Public surface: Engine, AsyncEngine, types, config</div>
+            </a>
+            <a href="https://docs.rs/edgestore" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+              <div class="font-semibold text-slate-900">docs.rs</div>
+              <div class="text-sm text-slate-600 mt-1">Generated API documentation with source links</div>
+            </a>
+            <a href="https://github.com/gleicon/edgestore/blob/main/edgestore/src/engine/mod.rs" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+              <div class="font-semibold text-slate-900">engine/mod.rs</div>
+              <div class="text-sm text-slate-600 mt-1">Engine implementation: write_entry, range_core, flush orchestration</div>
+            </a>
+            <a href="https://github.com/gleicon/edgestore/blob/main/edgestore/src/segment.rs" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+              <div class="font-semibold text-slate-900">segment.rs</div>
+              <div class="text-sm text-slate-600 mt-1">SegmentReader, FlushWork, constants, file format</div>
+            </a>
+            <a href="https://github.com/gleicon/edgestore/blob/main/edgestore/src/memtable.rs" class="block p-4 bg-white border border-slate-200 rounded-lg hover:border-edge-300 transition">
+              <div class="font-semibold text-slate-900">memtable.rs</div>
+              <div class="text-sm text-slate-600 mt-1">MemTable trait, three implementations, impl_simple_memtable! macro</div>
+            </a>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+  </div>
+
+  <footer class="bg-slate-900 text-slate-400 py-8 mt-12">
+    <div class="max-w-7xl mx-auto px-4 text-center text-sm">
+      <p><a href="index.html" class="hover:text-white transition">EdgeStore</a> — Local-first embedded database</p>
+    </div>
+  </footer>
+
+  <script>
+    // Highlight active section in sidebar on scroll
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('.section-nav a');
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          navLinks.forEach(a => a.classList.remove('active'));
+          const link = document.querySelector('.section-nav a[href="#' + entry.target.id + '"]');
+          if (link) link.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(s => observer.observe(s));
+  </script>
+
+</body>
+</html>

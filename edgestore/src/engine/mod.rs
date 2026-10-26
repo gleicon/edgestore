@@ -960,26 +960,27 @@ impl Engine {
 
     // ── Private implementations ───────────────────────────────────────────────
 
-    fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
-        if self.config.readonly {
-            return Err(EdgestoreError::ReadOnly);
-        }
-        if ns.len() > u16::MAX as usize {
-            return Err(EdgestoreError::NamespaceTooLong {
-                len: ns.len(),
-                max: u16::MAX as usize,
-            });
-        }
-
+    // Shared WAL write + memtable insert for put operations.
+    // Auto-flush (triggered by memtable size) is caller's responsibility: put_inner enables it,
+    // put_with_ttl_inner does not (TTL path avoids the double-flush complexity).
+    fn write_entry(
+        &mut self,
+        ns: &[u8],
+        key: &[u8],
+        val: &[u8],
+        ttl_secs: u32,
+    ) -> Result<Lsn, EdgestoreError> {
+        debug_assert!(!ns.is_empty(), "write_entry: namespace must not be empty");
+        debug_assert!(ns.len() <= u16::MAX as usize, "write_entry: caller must validate ns length");
         self.lsn_counter += 1;
         let lsn = self.lsn_counter;
+        debug_assert!(lsn > 0, "write_entry: lsn must be positive after increment");
         let timestamp = Self::now_nanos();
-
         let record = WalRecord {
             txid: 0,
             lsn,
             timestamp,
-            ttl: 0,
+            ttl: ttl_secs,
             ns_len: ns.len() as u16,
             ns_bytes: ns.to_vec(),
             key_bytes: key.to_vec(),
@@ -989,7 +990,6 @@ impl Engine {
         };
         self.wal.append(&record)?;
         self.rotate_wal_if_needed()?;
-
         let encoded_key = encode_key(ns, key);
         let entry = MemEntry {
             key: encoded_key.clone(),
@@ -997,15 +997,25 @@ impl Engine {
             op: Operation::Put,
             lsn,
             timestamp,
-            ttl: 0,
+            ttl: ttl_secs,
         };
         self.memtable.insert(encoded_key, entry);
+        debug_assert!(lsn == self.lsn_counter, "write_entry: lsn_counter must not change during insert");
+        Ok(lsn)
+    }
 
+    fn put_inner(&mut self, ns: &[u8], key: &[u8], val: &[u8]) -> Result<Lsn, EdgestoreError> {
+        if self.config.readonly {
+            return Err(EdgestoreError::ReadOnly);
+        }
+        if ns.len() > u16::MAX as usize {
+            return Err(EdgestoreError::NamespaceTooLong { len: ns.len(), max: u16::MAX as usize });
+        }
+        let lsn = self.write_entry(ns, key, val, 0)?;
         if (self.memtable.len() as u64) * AVG_ENTRY_SIZE_ESTIMATE >= self.config.memtable_max_bytes
         {
-            let _ = self.flush_to_segments_inner();
+            self.flush_to_segments_inner()?;
         }
-
         Ok(lsn)
     }
 
@@ -1020,43 +1030,9 @@ impl Engine {
             return Err(EdgestoreError::ReadOnly);
         }
         if ns.len() > u16::MAX as usize {
-            return Err(EdgestoreError::NamespaceTooLong {
-                len: ns.len(),
-                max: u16::MAX as usize,
-            });
+            return Err(EdgestoreError::NamespaceTooLong { len: ns.len(), max: u16::MAX as usize });
         }
-
-        self.lsn_counter += 1;
-        let lsn = self.lsn_counter;
-        let timestamp = Self::now_nanos();
-
-        let record = WalRecord {
-            txid: 0,
-            lsn,
-            timestamp,
-            ttl: ttl_secs,
-            ns_len: ns.len() as u16,
-            ns_bytes: ns.to_vec(),
-            key_bytes: key.to_vec(),
-            op: Operation::Put,
-            value_hash: blake3::hash(val).into(),
-            value_bytes: val.to_vec(),
-        };
-        self.wal.append(&record)?;
-        self.rotate_wal_if_needed()?;
-
-        let encoded_key = encode_key(ns, key);
-        let entry = MemEntry {
-            key: encoded_key.clone(),
-            value: Some(val.to_vec()),
-            op: Operation::Put,
-            lsn,
-            timestamp,
-            ttl: ttl_secs,
-        };
-        self.memtable.insert(encoded_key, entry);
-
-        Ok(lsn)
+        self.write_entry(ns, key, val, ttl_secs)
     }
 
     fn get_inner(&self, ns: &[u8], key: &[u8]) -> Result<Option<Vec<u8>>, EdgestoreError> {
@@ -1120,82 +1096,66 @@ impl Engine {
         self.prefix_core(ns, prefix, None).map(|b| b.items)
     }
 
-    // Core scan implementation shared by range / range_with_stats / range_budgeted.
-    // PERFORMANCE: merge two sorted lists (segment + memtable), then dedup by key keeping
-    // highest LSN. DO NOT use HashMap — both inputs are already sorted; merge+dedup is O(n)
-    // with 2 allocations vs HashMap's O(n log n) with 4.
+    // Merge two independently sorted ascending entry slices into one sorted vec.
+    // PERFORMANCE: both inputs are sorted; O(n) with 2 allocations vs HashMap O(n log n) with 4.
     // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
-    fn range_core(
-        &self,
-        ns: &[u8],
-        start: &[u8],
-        end: &[u8],
-        budget: Option<&ScanBudget>,
-    ) -> Result<BudgetedKvScan, EdgestoreError> {
-        let enc_start = encode_key(ns, start);
-        let enc_end = encode_key(ns, end);
-
-        let max_items = budget.and_then(|b| b.max_items);
-        let (seg_results, seg_truncated) =
-            self.segment_store.range_scan_budgeted(&enc_start, &enc_end, max_items)?;
-        let mem_results = self.memtable.range(&enc_start, &enc_end);
-        let has_seg = !seg_results.is_empty();
-
-        let mut merged: Vec<(Vec<u8>, MemEntry)> =
-            Vec::with_capacity(seg_results.len() + mem_results.len());
+    fn merge_sorted_scans(
+        seg: Vec<(Vec<u8>, MemEntry)>,
+        mem: Vec<(Vec<u8>, MemEntry)>,
+    ) -> Vec<(Vec<u8>, MemEntry)> {
+        let mut out = Vec::with_capacity(seg.len() + mem.len());
         let mut si = 0usize;
         let mut mi = 0usize;
-        while si < seg_results.len() || mi < mem_results.len() {
-            let (k, e) = if si < seg_results.len()
-                && (mi >= mem_results.len()
-                    || seg_results[si].0.as_slice() <= mem_results[mi].0.as_slice())
-            {
-                let (k, e) = &seg_results[si];
+        while si < seg.len() || mi < mem.len() {
+            let pick_seg = si < seg.len()
+                && (mi >= mem.len() || seg[si].0.as_slice() <= mem[mi].0.as_slice());
+            if pick_seg {
+                out.push(seg[si].clone());
                 si += 1;
-                (k.clone(), e.clone())
             } else {
-                let (k, e) = mem_results[mi].clone();
+                out.push(mem[mi].clone());
                 mi += 1;
-                (k, e)
-            };
-            merged.push((k, e));
+            }
         }
+        debug_assert_eq!(out.len(), seg.len() + mem.len(), "merge must include every input entry");
+        out
+    }
 
+    // Dedup merged entries by encoded key (keep highest LSN), filter tombstones, decode keys,
+    // apply budget. Used by range_core and prefix_core.
+    fn dedup_filter_scan(
+        merged: Vec<(Vec<u8>, MemEntry)>,
+        has_seg: bool,
+        budget: Option<&ScanBudget>,
+        seg_truncated: bool,
+    ) -> Result<BudgetedKvScan, EdgestoreError> {
         let mut out = Vec::new();
         let mut stats = QueryStats {
             segments_scanned: if has_seg { 1 } else { 0 },
             ..Default::default()
         };
-        // If the segment scan was truncated by budget, the final result is also truncated
-        // even if the merged slice happens to be fully consumed.
+        // If the segment scan was truncated, the final result is too, even if we consume all merged entries.
         let mut truncated = seg_truncated;
         let mut i = 0usize;
         while i < merged.len() {
             let (k, e) = &merged[i];
-            let mut best_entry = e.clone();
-            let entry_key_len = k.len() as u64;
-            let entry_val_len = e.value.as_ref().map(|v| v.len() as u64).unwrap_or(0);
-            stats.bytes_scanned += entry_key_len + entry_val_len;
+            let mut best = e.clone();
+            stats.bytes_scanned += k.len() as u64 + e.value.as_ref().map_or(0, |v| v.len() as u64);
             stats.items_examined += 1;
             i += 1;
             while i < merged.len() && &merged[i].0 == k {
-                let v_len = merged[i]
-                    .1
-                    .value
-                    .as_ref()
-                    .map(|v| v.len() as u64)
-                    .unwrap_or(0);
-                stats.bytes_scanned += merged[i].0.len() as u64 + v_len;
+                stats.bytes_scanned += merged[i].0.len() as u64
+                    + merged[i].1.value.as_ref().map_or(0, |v| v.len() as u64);
                 stats.items_examined += 1;
-                if merged[i].1.lsn > best_entry.lsn {
-                    best_entry = merged[i].1.clone();
+                if merged[i].1.lsn > best.lsn {
+                    best = merged[i].1.clone();
                 }
                 i += 1;
             }
-            if best_entry.op == Operation::Delete {
+            if best.op == Operation::Delete {
                 continue;
             }
-            if let Some(val) = &best_entry.value {
+            if let Some(val) = &best.value {
                 let (_, raw_key) = decode_key(k)?;
                 out.push((raw_key, val.clone()));
                 if let Some(b) = budget {
@@ -1208,11 +1168,26 @@ impl Engine {
                 }
             }
         }
-        Ok(BudgetedScan {
-            items: out,
-            truncated,
-            stats,
-        })
+        Ok(BudgetedScan { items: out, truncated, stats })
+    }
+
+    // Core scan: fetch, merge, dedup, filter, decode — shared by range / range_with_stats / range_budgeted.
+    fn range_core(
+        &self,
+        ns: &[u8],
+        start: &[u8],
+        end: &[u8],
+        budget: Option<&ScanBudget>,
+    ) -> Result<BudgetedKvScan, EdgestoreError> {
+        let enc_start = encode_key(ns, start);
+        let enc_end = encode_key(ns, end);
+        let max_items = budget.and_then(|b| b.max_items);
+        let (seg_results, seg_truncated) =
+            self.segment_store.range_scan_budgeted(&enc_start, &enc_end, max_items)?;
+        let mem_results = self.memtable.range(&enc_start, &enc_end);
+        let has_seg = !seg_results.is_empty();
+        let merged = Self::merge_sorted_scans(seg_results, mem_results);
+        Self::dedup_filter_scan(merged, has_seg, budget, seg_truncated)
     }
 
     fn prefix_core(
@@ -1222,9 +1197,6 @@ impl Engine {
         budget: Option<&ScanBudget>,
     ) -> Result<BudgetedKvScan, EdgestoreError> {
         let enc_prefix = encode_key(ns, prefix);
-
-        // PERFORMANCE: same merge+dedup algorithm as range_core.
-        // Regression test: test_range_scan_dedups_by_lsn_across_segments (segment.rs).
         let max_items = budget.and_then(|b| b.max_items);
         let (seg_results, seg_truncated) = if let Some(enc_end) = prefix_upper_bound(&enc_prefix) {
             let (raw, trunc) =
@@ -1239,77 +1211,8 @@ impl Engine {
         };
         let mem_results = self.memtable.prefix(&enc_prefix);
         let has_seg = !seg_results.is_empty();
-
-        let mut merged: Vec<(Vec<u8>, MemEntry)> =
-            Vec::with_capacity(seg_results.len() + mem_results.len());
-        let mut si = 0usize;
-        let mut mi = 0usize;
-        while si < seg_results.len() || mi < mem_results.len() {
-            let (k, e) = if si < seg_results.len()
-                && (mi >= mem_results.len()
-                    || seg_results[si].0.as_slice() <= mem_results[mi].0.as_slice())
-            {
-                let (k, e) = &seg_results[si];
-                si += 1;
-                (k.clone(), e.clone())
-            } else {
-                let (k, e) = mem_results[mi].clone();
-                mi += 1;
-                (k, e)
-            };
-            merged.push((k, e));
-        }
-
-        let mut out = Vec::new();
-        let mut stats = QueryStats {
-            segments_scanned: if has_seg { 1 } else { 0 },
-            ..Default::default()
-        };
-        let mut truncated = seg_truncated;
-        let mut i = 0usize;
-        while i < merged.len() {
-            let (k, e) = &merged[i];
-            let mut best_entry = e.clone();
-            let entry_key_len = k.len() as u64;
-            let entry_val_len = e.value.as_ref().map(|v| v.len() as u64).unwrap_or(0);
-            stats.bytes_scanned += entry_key_len + entry_val_len;
-            stats.items_examined += 1;
-            i += 1;
-            while i < merged.len() && &merged[i].0 == k {
-                let v_len = merged[i]
-                    .1
-                    .value
-                    .as_ref()
-                    .map(|v| v.len() as u64)
-                    .unwrap_or(0);
-                stats.bytes_scanned += merged[i].0.len() as u64 + v_len;
-                stats.items_examined += 1;
-                if merged[i].1.lsn > best_entry.lsn {
-                    best_entry = merged[i].1.clone();
-                }
-                i += 1;
-            }
-            if best_entry.op == Operation::Delete {
-                continue;
-            }
-            if let Some(val) = &best_entry.value {
-                let (_, raw_key) = decode_key(k)?;
-                out.push((raw_key, val.clone()));
-                if let Some(b) = budget {
-                    let over_items = b.max_items.is_some_and(|m| out.len() >= m);
-                    let over_bytes = b.max_bytes.is_some_and(|m| stats.bytes_scanned >= m);
-                    if over_items || over_bytes {
-                        truncated = truncated || i < merged.len();
-                        break;
-                    }
-                }
-            }
-        }
-        Ok(BudgetedScan {
-            items: out,
-            truncated,
-            stats,
-        })
+        let merged = Self::merge_sorted_scans(seg_results, mem_results);
+        Self::dedup_filter_scan(merged, has_seg, budget, seg_truncated)
     }
 
     /// Phase 1 of the 3-phase flush: snapshot the memtable entries and reserve a
@@ -1323,7 +1226,6 @@ impl Engine {
         if self.memtable.is_empty() {
             return None;
         }
-        debug_assert!(!self.memtable.is_empty(), "begin_flush: memtable must be non-empty");
         self.segment_store.prepare_flush(self.memtable.as_ref())
     }
 
@@ -1336,14 +1238,14 @@ impl Engine {
     /// Entries above it were written during Phase 2 and are retained.
     pub fn finalize_flush(
         &mut self,
-        meta: crate::types::SegmentMeta,
+        meta: &crate::types::SegmentMeta,
         flushed_max_lsn: u64,
     ) -> Result<(), EdgestoreError> {
         debug_assert!(
             meta.segment_id < self.segment_store.next_segment_id(),
             "meta must reference a reserved segment ID"
         );
-        self.segment_store.finalize_segment(meta.clone())?;
+        self.segment_store.finalize_segment(meta)?;
         // Rebuild memtable: keep only entries written AFTER the snapshot LSN.
         // These are writes that arrived during Phase 2 and are not yet in any segment.
         let remaining: Vec<(Vec<u8>, crate::types::MemEntry)> = self
@@ -1363,7 +1265,7 @@ impl Engine {
             "memtable len must match re-inserted entry count"
         );
         if let Some(cb) = &self.on_segment_flushed {
-            cb(&meta);
+            cb(meta);
         }
         let current_wal_name = self.wal.path().file_name().map(|n| n.to_os_string());
         if let Ok(wal_files) = crate::recovery::list_wal_files(&self.config.path) {
@@ -1382,7 +1284,7 @@ impl Engine {
         })?;
         let flushed_max_lsn = work.flushed_max_lsn;
         let meta = work.execute()?;
-        self.finalize_flush(meta.clone(), flushed_max_lsn)?;
+        self.finalize_flush(&meta, flushed_max_lsn)?;
         Ok(meta)
     }
 

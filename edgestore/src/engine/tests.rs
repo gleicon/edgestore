@@ -869,3 +869,68 @@ fn test_set_write_token_wtoken_file_contents() {
     assert_eq!(bytes.len(), 8);
     assert_eq!(u64::from_le_bytes(bytes.try_into().unwrap()), 42u64);
 }
+
+#[test]
+fn test_finalize_flush_retains_writes_after_snapshot() {
+    // Verifies the flushed_max_lsn invariant: writes that arrive after
+    // begin_flush must survive finalize_flush and remain readable.
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+
+    // Phase 1 seed: two keys written before the snapshot.
+    engine.put(b"ns", b"before1", b"v1").unwrap();
+    engine.put(b"ns", b"before2", b"v2").unwrap();
+
+    // Phase 1: snapshot without clearing memtable.
+    let work = engine.begin_flush().expect("begin_flush must return work for non-empty memtable");
+    let flushed_max_lsn = work.flushed_max_lsn;
+    assert!(flushed_max_lsn > 0, "flushed_max_lsn must be non-zero after writes");
+
+    // Simulate Phase 2 concurrent write: arrives after the snapshot.
+    engine.put(b"ns", b"after1", b"va").unwrap();
+
+    // Phase 2: write segment to disk (using captured work, not engine).
+    let meta = work.execute().expect("execute must succeed");
+
+    // Phase 3: register segment, rebuild memtable.
+    engine.finalize_flush(&meta, flushed_max_lsn).expect("finalize_flush must succeed");
+
+    // Pre-snapshot keys are now in the segment.
+    assert_eq!(engine.get(b"ns", b"before1").unwrap(), Some(b"v1".to_vec()));
+    assert_eq!(engine.get(b"ns", b"before2").unwrap(), Some(b"v2".to_vec()));
+
+    // Post-snapshot key must have been retained in the memtable.
+    assert_eq!(
+        engine.get(b"ns", b"after1").unwrap(),
+        Some(b"va".to_vec()),
+        "write after begin_flush must survive finalize_flush"
+    );
+}
+
+#[test]
+fn test_put_lsn_monotone_and_positive() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+    let lsn1 = engine.put(b"ns", b"k1", b"v1").unwrap();
+    let lsn2 = engine.put(b"ns", b"k2", b"v2").unwrap();
+    let lsn3 = engine.put(b"ns", b"k3", b"v3").unwrap();
+    assert!(lsn1 > 0, "first put lsn must be positive");
+    assert!(lsn2 > lsn1, "lsn must increase per put");
+    assert!(lsn3 > lsn2, "lsn must increase per put");
+    let lsn4 = engine.delete(b"ns", b"k1").unwrap();
+    assert!(lsn4 > lsn3, "delete lsn must be greater than last put lsn");
+}
+
+#[test]
+fn test_put_with_ttl_stores_ttl_field() {
+    use crate::memtable::MemTable;
+    use crate::types::encode_key;
+    let dir = TempDir::new().unwrap();
+    let mut engine = open_engine(&dir);
+    engine.put_with_ttl(b"ns", b"key", b"val", 3600).unwrap();
+    // Read TTL back directly from the memtable before any flush.
+    let encoded = encode_key(b"ns", b"key");
+    let entry = engine.memtable.get(&encoded).expect("entry must be in memtable");
+    assert_eq!(entry.ttl, 3600, "put_with_ttl must store the ttl_secs value");
+    assert_eq!(entry.value, Some(b"val".to_vec()));
+}

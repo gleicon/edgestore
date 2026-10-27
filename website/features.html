@@ -22,7 +22,40 @@
     .code-block code { color: #e2e8f0; }
     .keyword { color: #c678dd; } .string { color: #98c379; } .function { color: #61afef; }
     .comment { color: #5c6370; font-style: italic; } .type { color: #e5c07b; } .number { color: #d19a66; }
+  
+  /* ── Dark / light theme overrides ─────────────── */
+  html[data-theme="dark"] body { background-color: #0f172a !important; color: #f1f5f9 !important; }
+  html[data-theme="dark"] .bg-white,
+  html[data-theme="dark"] .bg-white\/80 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .bg-slate-50 { background-color: #0f172a !important; }
+  html[data-theme="dark"] .bg-slate-100 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .bg-edge-50 { background-color: #082f49 !important; }
+  html[data-theme="dark"] .bg-edge-100 { background-color: #082f49 !important; }
+  html[data-theme="dark"] .bg-slate-800 { background-color: #0c1120 !important; }
+  html[data-theme="dark"] .bg-slate-900 { background-color: #020617 !important; }
+  html[data-theme="dark"] .bg-slate-700 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .text-slate-900 { color: #f1f5f9 !important; }
+  html[data-theme="dark"] .text-slate-800 { color: #e2e8f0 !important; }
+  html[data-theme="dark"] .text-slate-700 { color: #cbd5e1 !important; }
+  html[data-theme="dark"] .text-slate-600 { color: #94a3b8 !important; }
+  html[data-theme="dark"] .text-slate-500 { color: #64748b !important; }
+  html[data-theme="dark"] .text-slate-400 { color: #64748b !important; }
+  html[data-theme="dark"] .text-edge-700 { color: #7dd3fc !important; }
+  html[data-theme="dark"] .text-edge-600 { color: #38bdf8 !important; }
+  html[data-theme="dark"] .text-edge-800 { color: #bae6fd !important; }
+  html[data-theme="dark"] .border-slate-200 { border-color: #334155 !important; }
+  html[data-theme="dark"] .border-slate-100 { border-color: #1e293b !important; }
+  html[data-theme="dark"] .border-edge-300 { border-color: #0369a1 !important; }
+  html[data-theme="dark"] .hover\:border-edge-300:hover { border-color: #0369a1 !important; }
+  html[data-theme="dark"] .hover\:text-edge-600:hover { color: #38bdf8 !important; }
+  html[data-theme="dark"] .hover\:bg-edge-700:hover { background-color: #0369a1 !important; }
+  html[data-theme="dark"] .divide-slate-200 > * + * { border-color: #334155 !important; }
   </style>
+  <script>
+    (function(){var t=localStorage.getItem('edge-theme');if(t){document.documentElement.setAttribute('data-theme',t);}else if(window.matchMedia('(prefers-color-scheme:dark)').matches){document.documentElement.setAttribute('data-theme','dark');}})();
+    function toggleTheme(){var h=document.documentElement,c=h.getAttribute('data-theme'),n=c==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('edge-theme',n);var b=document.getElementById('theme-toggle');if(b)b.textContent=n==='dark'?'\u2600':'\u263D';}
+    document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='dark'?'\u2600':'\u263D';});
+  </script>
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans antialiased">
 
@@ -43,7 +76,7 @@
           <a href="internals.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Internals</a>
           <a href="tiering.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Tiering</a>
         </div>
-        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+        <div class="flex items-center gap-2"><a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a><button id="theme-toggle" onclick="toggleTheme()" class="ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-base text-slate-500 hover:text-edge-600 hover:bg-slate-100 transition" aria-label="Toggle dark mode">&#9789;</button></div>
       </div>
     </div>
   </nav>
@@ -566,7 +599,7 @@ drop(snap);</code></pre>
 
     <section class="mb-16">
       <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-8">
-        <h2 class="text-2xl font-bold text-slate-900">Concurrent Memtable <span class="text-sm font-normal text-slate-500 ml-2">v2.2.0</span></h2>
+        <h2 class="text-2xl font-bold text-slate-900">Concurrent Memtable <span class="text-sm font-normal text-slate-500 ml-2">v2.2.1</span></h2>
         <p class="text-slate-600 mt-4">The default write buffer is now backed by <code>bbtree::BBTreeMap</code>, a concurrent B-tree with interior mutability. Multiple readers never write to shared cache lines — the version lock reuses freed nodes internally, keeping reads cache-coherent at scale: <strong>180 M ops/s at 96 threads, 83-90% linear scaling</strong>.</p>
         <p class="text-slate-600 mt-3">Two additional implementations are available via <code>EdgestoreConfig::memtable_factory</code>:</p>
         <ul class="list-disc ml-6 text-slate-600 mt-2 space-y-1">
@@ -585,7 +618,7 @@ let config = EdgestoreConfig {
 
     <section class="mb-16">
       <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-8">
-        <h2 class="text-2xl font-bold text-slate-900">Lock-Free Flush <span class="text-sm font-normal text-slate-500 ml-2">v2.2.0</span></h2>
+        <h2 class="text-2xl font-bold text-slate-900">Lock-Free Flush <span class="text-sm font-normal text-slate-500 ml-2">v2.2.1</span></h2>
         <p class="text-slate-600 mt-4"><code>AsyncEngine::flush_to_segments</code> uses a 3-phase protocol that releases the write lock during disk I/O. Reads that previously blocked for the full flush duration (typically 20–200 ms) now complete without waiting.</p>
         <div class="grid grid-cols-3 gap-4 mt-4">
           <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
@@ -602,7 +635,7 @@ let config = EdgestoreConfig {
           </div>
         </div>
         <p class="text-slate-600 mt-4 text-sm"><strong>Correctness:</strong> The memtable is not cleared during Phase 1 — reads always find their data. After Phase 3, entries already in the new segment are dropped from the memtable; writes that arrived during Phase 2 are retained.</p>
-        <pre class="bg-slate-50 rounded-lg p-4 mt-4 text-sm overflow-x-auto"><code><span class="comment">// v2.2.0: reads are not blocked during flush</span>
+        <pre class="bg-slate-50 rounded-lg p-4 mt-4 text-sm overflow-x-auto"><code><span class="comment">// v2.2.1: reads are not blocked during flush</span>
 let engine = AsyncEngine::open(config).await?;
 engine.put(b"ns", b"key", b"val").await?;
 

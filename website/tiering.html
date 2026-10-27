@@ -94,7 +94,7 @@
           <a href="internals.html" class="font-medium transition" style="color:var(--muted)">Internals</a>
           <a href="tiering.html" class="font-medium" style="color:var(--accent)">Tiering</a>
         </div>
-        <a href="https://docs.rs/edgestore-tier" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+        <div class="flex items-center gap-2"><a href="https://docs.rs/edgestore-tier" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a><button id="theme-toggle" onclick="toggleTheme()" class="ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-base text-slate-500 hover:text-edge-600 hover:bg-slate-100 transition" aria-label="Toggle dark mode">&#9789;</button></div>
       </div>
     </div>
   </nav>
@@ -605,6 +605,10 @@ cargo test --package edgestore-tier --test integration_s3 -- --nocapture</code>
   </div>
 
   <script>
+    // Theme toggle + localStorage persistence
+    (function(){var t=localStorage.getItem('edge-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();
+    function toggleTheme(){var h=document.documentElement,c=h.getAttribute('data-theme'),n=c==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('edge-theme',n);var b=document.getElementById('theme-toggle');if(b)b.textContent=n==='dark'?'☀':'☽';}
+    document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='dark'?'☀':'☽';});
     // Highlight active TOC link as user scrolls
     const sections = document.querySelectorAll('section[id]');
     const tocLinks = document.querySelectorAll('.toc-link');

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EdgeStore — Local-First Embedded KV + Vector Database</title>
+  <title>EdgeStore — High-Performance Embedded Storage for Rust</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -55,7 +55,40 @@
     .comment { color: #5c6370; font-style: italic; }
     .type { color: #e5c07b; }
     .number { color: #d19a66; }
+  
+  /* ── Dark / light theme overrides ─────────────── */
+  html[data-theme="dark"] body { background-color: #0f172a !important; color: #f1f5f9 !important; }
+  html[data-theme="dark"] .bg-white,
+  html[data-theme="dark"] .bg-white\/80 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .bg-slate-50 { background-color: #0f172a !important; }
+  html[data-theme="dark"] .bg-slate-100 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .bg-edge-50 { background-color: #082f49 !important; }
+  html[data-theme="dark"] .bg-edge-100 { background-color: #082f49 !important; }
+  html[data-theme="dark"] .bg-slate-800 { background-color: #0c1120 !important; }
+  html[data-theme="dark"] .bg-slate-900 { background-color: #020617 !important; }
+  html[data-theme="dark"] .bg-slate-700 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .text-slate-900 { color: #f1f5f9 !important; }
+  html[data-theme="dark"] .text-slate-800 { color: #e2e8f0 !important; }
+  html[data-theme="dark"] .text-slate-700 { color: #cbd5e1 !important; }
+  html[data-theme="dark"] .text-slate-600 { color: #94a3b8 !important; }
+  html[data-theme="dark"] .text-slate-500 { color: #64748b !important; }
+  html[data-theme="dark"] .text-slate-400 { color: #64748b !important; }
+  html[data-theme="dark"] .text-edge-700 { color: #7dd3fc !important; }
+  html[data-theme="dark"] .text-edge-600 { color: #38bdf8 !important; }
+  html[data-theme="dark"] .text-edge-800 { color: #bae6fd !important; }
+  html[data-theme="dark"] .border-slate-200 { border-color: #334155 !important; }
+  html[data-theme="dark"] .border-slate-100 { border-color: #1e293b !important; }
+  html[data-theme="dark"] .border-edge-300 { border-color: #0369a1 !important; }
+  html[data-theme="dark"] .hover\:border-edge-300:hover { border-color: #0369a1 !important; }
+  html[data-theme="dark"] .hover\:text-edge-600:hover { color: #38bdf8 !important; }
+  html[data-theme="dark"] .hover\:bg-edge-700:hover { background-color: #0369a1 !important; }
+  html[data-theme="dark"] .divide-slate-200 > * + * { border-color: #334155 !important; }
   </style>
+  <script>
+    (function(){var t=localStorage.getItem('edge-theme');if(t){document.documentElement.setAttribute('data-theme',t);}else if(window.matchMedia('(prefers-color-scheme:dark)').matches){document.documentElement.setAttribute('data-theme','dark');}})();
+    function toggleTheme(){var h=document.documentElement,c=h.getAttribute('data-theme'),n=c==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('edge-theme',n);var b=document.getElementById('theme-toggle');if(b)b.textContent=n==='dark'?'\u2600':'\u263D';}
+    document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='dark'?'\u2600':'\u263D';});
+  </script>
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans antialiased">
 
@@ -83,7 +116,7 @@
           <a href="https://github.com/gleicon/edgestore" class="text-slate-500 hover:text-slate-800 transition">
             <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
           </a>
-          <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition">docs.rs</a>
+          <div class="flex items-center gap-2"><a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition">docs.rs</a><button id="theme-toggle" onclick="toggleTheme()" class="ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-base text-slate-500 hover:text-edge-600 hover:bg-slate-100 transition" aria-label="Toggle dark mode">&#9789;</button></div>
         </div>
       </div>
     </div>
@@ -96,15 +129,16 @@
         <div>
           <div class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 text-sm font-medium mb-6 border border-white/20">
             <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
-            v2.2.0 Released
+            v2.2.1 Released
           </div>
           <h1 class="text-4xl lg:text-6xl font-bold leading-tight mb-6">
-            Local-First Embedded<br>
-            <span class="text-edge-200">KV + Vector Database</span>
+            High-Performance Embedded<br>
+            <span class="text-edge-200">Storage for Rust</span>
           </h1>
           <p class="text-lg text-blue-100 mb-8 max-w-xl leading-relaxed">
-            SSD-aware, append-only storage with deathtime-cohort compaction.
-            Built in Rust. Ships as a library. No server required.
+            KV, vector search, full-text, and S3 tiering — unified.
+            Lock-free writes, SSD-aware compaction, content-addressed segments.
+            Ships as a library. No server required.
           </p>
           <div class="flex flex-wrap gap-4">
             <a href="examples.html" class="px-6 py-3 bg-white text-edge-700 rounded-lg font-semibold hover:bg-blue-50 transition">Get Started</a>
@@ -140,7 +174,7 @@ text.index_document(&<span class="keyword">mut</span> db, <span class="string">b
       <div class="bg-edge-50 rounded-xl border border-edge-200 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center space-x-2 mb-2">
-            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v2.2.0</span>
+            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v2.2.1</span>
             <span class="text-sm text-slate-600 font-medium">2026-09-26</span>
           </div>
           <h3 class="font-semibold text-slate-900">Breaking: full-text search extracted to <code>edgestore-text</code>, TLA+ formal spec, paged vector scans</h3>
@@ -304,7 +338,7 @@ text.index_document(&<span class="keyword">mut</span> db, <span class="string">b
       <div class="grid sm:grid-cols-2 gap-6 text-left">
         <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
           <h3 class="font-semibold text-slate-900 mb-1">Core Library</h3>
-          <p class="text-xs text-slate-500 mb-3">KV + vector + text. Sync. No server.</p>
+          <p class="text-xs text-slate-500 mb-3">KV · vector · full-text · S3 tiering. No server.</p>
           <pre class="code-block p-3 text-sm"><code>cargo add edgestore</code></pre>
         </div>
         <div class="p-6 rounded-xl bg-slate-50 border border-slate-200">
@@ -342,7 +376,7 @@ text.index_document(&<span class="keyword">mut</span> db, <span class="string">b
             </div>
             <span class="text-white font-semibold">EdgeStore</span>
           </div>
-          <p class="text-sm">Local-first embedded database for edge deployments.</p>
+          <p class="text-sm">High-performance embedded storage for Rust — KV, vector, full-text, S3.</p>
         </div>
         <div>
           <h4 class="text-white font-semibold mb-3">Docs</h4>

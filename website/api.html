@@ -24,7 +24,40 @@
     .comment { color: #5c6370; font-style: italic; } .type { color: #e5c07b; } .number { color: #d19a66; }
     .api-item { transition: all 0.15s; }
     .api-item:hover { background: #f8fafc; }
+  
+  /* ── Dark / light theme overrides ─────────────── */
+  html[data-theme="dark"] body { background-color: #0f172a !important; color: #f1f5f9 !important; }
+  html[data-theme="dark"] .bg-white,
+  html[data-theme="dark"] .bg-white\/80 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .bg-slate-50 { background-color: #0f172a !important; }
+  html[data-theme="dark"] .bg-slate-100 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .bg-edge-50 { background-color: #082f49 !important; }
+  html[data-theme="dark"] .bg-edge-100 { background-color: #082f49 !important; }
+  html[data-theme="dark"] .bg-slate-800 { background-color: #0c1120 !important; }
+  html[data-theme="dark"] .bg-slate-900 { background-color: #020617 !important; }
+  html[data-theme="dark"] .bg-slate-700 { background-color: #1e293b !important; }
+  html[data-theme="dark"] .text-slate-900 { color: #f1f5f9 !important; }
+  html[data-theme="dark"] .text-slate-800 { color: #e2e8f0 !important; }
+  html[data-theme="dark"] .text-slate-700 { color: #cbd5e1 !important; }
+  html[data-theme="dark"] .text-slate-600 { color: #94a3b8 !important; }
+  html[data-theme="dark"] .text-slate-500 { color: #64748b !important; }
+  html[data-theme="dark"] .text-slate-400 { color: #64748b !important; }
+  html[data-theme="dark"] .text-edge-700 { color: #7dd3fc !important; }
+  html[data-theme="dark"] .text-edge-600 { color: #38bdf8 !important; }
+  html[data-theme="dark"] .text-edge-800 { color: #bae6fd !important; }
+  html[data-theme="dark"] .border-slate-200 { border-color: #334155 !important; }
+  html[data-theme="dark"] .border-slate-100 { border-color: #1e293b !important; }
+  html[data-theme="dark"] .border-edge-300 { border-color: #0369a1 !important; }
+  html[data-theme="dark"] .hover\:border-edge-300:hover { border-color: #0369a1 !important; }
+  html[data-theme="dark"] .hover\:text-edge-600:hover { color: #38bdf8 !important; }
+  html[data-theme="dark"] .hover\:bg-edge-700:hover { background-color: #0369a1 !important; }
+  html[data-theme="dark"] .divide-slate-200 > * + * { border-color: #334155 !important; }
   </style>
+  <script>
+    (function(){var t=localStorage.getItem('edge-theme');if(t){document.documentElement.setAttribute('data-theme',t);}else if(window.matchMedia('(prefers-color-scheme:dark)').matches){document.documentElement.setAttribute('data-theme','dark');}})();
+    function toggleTheme(){var h=document.documentElement,c=h.getAttribute('data-theme'),n=c==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('edge-theme',n);var b=document.getElementById('theme-toggle');if(b)b.textContent=n==='dark'?'\u2600':'\u263D';}
+    document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='dark'?'\u2600':'\u263D';});
+  </script>
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans antialiased">
 
@@ -45,7 +78,7 @@
           <a href="internals.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Internals</a>
           <a href="tiering.html" class="text-slate-600 hover:text-edge-600 font-medium transition">Tiering</a>
         </div>
-        <a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a>
+        <div class="flex items-center gap-2"><a href="https://docs.rs/edgestore" class="px-4 py-2 bg-edge-600 text-white rounded-lg font-medium hover:bg-edge-700 transition text-sm">docs.rs</a><button id="theme-toggle" onclick="toggleTheme()" class="ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-base text-slate-500 hover:text-edge-600 hover:bg-slate-100 transition" aria-label="Toggle dark mode">&#9789;</button></div>
       </div>
     </div>
   </nav>
@@ -117,11 +150,11 @@
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.begin_flush() -> Option&lt;FlushWork&gt;</code>
-          <p class="text-slate-600 text-sm mt-1"><span class="text-xs bg-blue-100 text-blue-700 rounded px-1 py-0.5 mr-1">v2.2.0</span> Phase 1 of the 3-phase flush. Snapshots memtable entries without clearing them. Returns <code>None</code> if empty. The caller must call <code>finalize_flush</code> with the returned <code>FlushWork::flushed_max_lsn</code>.</p>
+          <p class="text-slate-600 text-sm mt-1"><span class="text-xs bg-blue-100 text-blue-700 rounded px-1 py-0.5 mr-1">v2.2.1</span> Phase 1 of the 3-phase flush. Snapshots memtable entries without clearing them. Returns <code>None</code> if empty. The caller must call <code>finalize_flush</code> with the returned <code>FlushWork::flushed_max_lsn</code>.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.finalize_flush(meta, flushed_max_lsn) -> Result&lt;(), EdgestoreError&gt;</code>
-          <p class="text-slate-600 text-sm mt-1"><span class="text-xs bg-blue-100 text-blue-700 rounded px-1 py-0.5 mr-1">v2.2.0</span> Phase 3 of the 3-phase flush. Registers the completed segment, rebuilds the memtable (retaining only entries written after the snapshot), and retires old WAL files.</p>
+          <p class="text-slate-600 text-sm mt-1"><span class="text-xs bg-blue-100 text-blue-700 rounded px-1 py-0.5 mr-1">v2.2.1</span> Phase 3 of the 3-phase flush. Registers the completed segment, rebuilds the memtable (retaining only entries written after the snapshot), and retires old WAL files.</p>
         </div>
         <div class="api-item border-b border-slate-100 p-4">
           <code class="font-mono text-sm text-edge-700 font-semibold">engine.compact_once() -> Result&lt;CompactionStats, EdgestoreError&gt;</code>

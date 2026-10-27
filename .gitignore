@@ -1,9 +1,18 @@
+# Rust build output
+/target/
+
+# Local databases created by examples and tests (e.g. edgestore/examples/demo.rs)
 edgestore_demo.db/
+*.db
 *.db/
-Cargo.lock
-target/
-target/debug/
-edgestore-go
-edgestore-zig
+
+# Local source checkouts of the Go and Zig ports
+/edgestore-go/
+/edgestore-zig/
+
+# Downloaded / packaged artifacts
 edgestore-website.tar.gz
 tla2tools.jar
+
+# macOS
+.DS_Store

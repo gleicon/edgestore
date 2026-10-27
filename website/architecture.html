@@ -32,7 +32,13 @@
     .diagram-box-header { background: #f1f5f9; border-bottom: 1px solid #e2e8f0; padding: 0.5rem 1rem; font-weight: 600; }
     .arrow { display: flex; align-items: center; justify-content: center; color: #94a3b8; }
     .arrow-line { width: 2px; height: 1.5rem; background: #cbd5e1; }
-  
+
+    html[data-theme="dark"] .diagram { background: #1e293b !important; border-color: #334155 !important; }
+    html[data-theme="dark"] .diagram-box { background: #0f172a !important; border-color: #334155 !important; }
+    html[data-theme="dark"] .diagram-box-header { background: #1e293b !important; border-color: #334155 !important; }
+    html[data-theme="dark"] .arrow-line { background: #334155 !important; }
+    html[data-theme="dark"] .arrow { color: #475569 !important; }
+
   /* ── Dark / light theme overrides ─────────────── */
   html[data-theme="dark"] body { background-color: #0f172a !important; color: #f1f5f9 !important; }
   html[data-theme="dark"] .bg-white,

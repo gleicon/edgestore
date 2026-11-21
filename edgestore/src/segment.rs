@@ -18,6 +18,8 @@ pub mod in_memory;
 pub(crate) const SEGMENT_BLOCK_MAGIC: u32 = 0x45445347; // "EDSG"
 pub(crate) const SEGMENT_FILE_MAGIC: u32 = 0x45445347;
 pub(crate) const SEGMENT_FORMAT_VERSION: u8 = 1;
+
+pub(crate) type BudgetedRangeResult = Result<(Vec<(Vec<u8>, MemEntry)>, bool), EdgestoreError>;
 /// 4-byte file magic + 1-byte version + 3-byte padding.
 pub(crate) const SEGMENT_HEADER_LEN: usize = 8;
 /// Target size for an uncompressed block before flushing.
@@ -928,7 +930,7 @@ impl SegmentStore {
         start: &[u8],
         end: &[u8],
         max_items: Option<usize>,
-    ) -> Result<(Vec<(Vec<u8>, MemEntry)>, bool), EdgestoreError> {
+    ) -> BudgetedRangeResult {
         // P1: create cursors only for segments that overlap [start, end)
         let mut cursors: Vec<SegmentCursor> = Vec::with_capacity(self.readers.len());
         for reader in &self.readers {

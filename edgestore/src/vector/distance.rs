@@ -46,8 +46,8 @@ fn decode_to_f32(bytes: &[u8], dtype: Dtype) -> Result<Vec<f32>, EdgestoreError>
                 ));
             }
             let mut out = Vec::with_capacity(bytes.len() / 4);
-            for chunk in bytes.chunks_exact(4) {
-                out.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            for chunk in bytes.as_chunks::<4>().0 {
+                out.push(f32::from_le_bytes(*chunk));
             }
             Ok(out)
         }
@@ -58,8 +58,8 @@ fn decode_to_f32(bytes: &[u8], dtype: Dtype) -> Result<Vec<f32>, EdgestoreError>
                 ));
             }
             let mut out = Vec::with_capacity(bytes.len() / 2);
-            for chunk in bytes.chunks_exact(2) {
-                let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
+            for chunk in bytes.as_chunks::<2>().0 {
+                let bits = u16::from_le_bytes(*chunk);
                 // Manual f16 to f32 conversion using standard library
                 out.push(f16_to_f32(bits));
             }

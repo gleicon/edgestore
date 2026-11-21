@@ -88,6 +88,12 @@ pub struct ArchivedSegment {
 /// Default maximum bytes for the ephemeral segment byte cache (32 MB).
 const DEFAULT_SEGMENT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
+/// Item cap for the LRU segment cache. High enough that byte-based eviction
+/// always fires first, preventing a silent second eviction path.
+const SEGMENT_CACHE_MAX_ENTRIES: NonZeroUsize =
+    // SAFETY: 65536 is non-zero.
+    unsafe { NonZeroUsize::new_unchecked(65536) };
+
 /// Maximum retry attempts for transient remote errors (throttle, timeout, 503).
 const MAX_RETRIES: u32 = 3;
 
@@ -132,7 +138,7 @@ impl TieredEngine {
             strip_vector_after_archive: false,
             // Item cap is high enough that byte-based eviction always fires first.
             // Prevents a silent second eviction path from drifting segment_cache_bytes.
-            segment_cache: LruCache::new(NonZeroUsize::new(65536).unwrap()),
+            segment_cache: LruCache::new(SEGMENT_CACHE_MAX_ENTRIES),
             segment_cache_bytes: 0,
             segment_cache_max_bytes: DEFAULT_SEGMENT_CACHE_MAX_BYTES,
         }

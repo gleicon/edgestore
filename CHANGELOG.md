@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-20
+
+### Security
+
+- Patched `rustls` 0.23.45 → 0.23.46: TLS session secrets exposed via `Debug` impls, unauthenticated ServerHello downgrade (RUSTSEC-2026-0346, RUSTSEC-2026-0349).
+- Patched `tokio` 1.53.1 → 1.54.1: `AsyncFd::new` I/O safety violation.
+- Patched `crypto-bigint` 0.5.5 → 0.7.10 and `aws-sdk-s3` 1.150.0 → 1.157.0 via `cargo update`.
+- Note: `rustls` 0.21.12 (transitive via `aws-smithy-http-client` → `hyper-rustls` 0.24`) cannot be updated until the AWS SDK drops `hyper-rustls` 0.24.
+
+### Fixed
+
+- Clippy `-D warnings` now passes on the full workspace (was failing with 3 errors):
+  - `edgestore/src/vector/distance.rs`: `chunks_exact(4/2)` replaced with `as_chunks::<4>().0` / `as_chunks::<2>().0`.
+  - `edgestore/src/segment.rs`: complex return type extracted to `BudgetedRangeResult` type alias.
+  - `edgestore-text/src/text/index.rs`: manual range check replaced with `(0.0..=1.0).contains(&b)`.
+- `edgestore-tier/src/lib.rs`: LRU cache capacity magic number `65536` replaced with named `SEGMENT_CACHE_MAX_ENTRIES: NonZeroUsize` constant.
+- `edgestore/src/wal.rs`: 9 infallible `try_into().unwrap()` calls replaced with `.expect("need! guarantees N bytes")` to document the invariant.
+- S3 integration tests no longer require the `aws` CLI. `S3RemoteStore::ensure_bucket()` creates the test bucket from Rust on first run. `scripts/minio-init.sh` removed.
+- Makefile: `minio/minio:latest` and `quay.io/minio/minio:latest` replaced with `pgsty/minio:latest` (MinIO removed its images from Docker Hub and quay.io in Oct 2025).
+
+### Added
+
+- `S3RemoteStore::ensure_bucket()` — idempotent bucket creation; ignores `BucketAlreadyOwnedByYou` and `BucketAlreadyExists`.
+- S3 integration tests: `test_data_integrity_blake3_hash_matches`, `test_upload_if_absent_idempotent`, `test_large_segment_roundtrip` (1 MiB + latency bound), `test_aux_sidecar_roundtrip`, `test_concurrent_upload_same_hash_no_corruption` (8 threads).
+
 ## [2.2.1] - 2026-10-26
 
 ### Fixed

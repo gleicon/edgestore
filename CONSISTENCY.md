@@ -62,10 +62,6 @@ cargo bench --package edgestore-tier --bench tiered_get
 | 9 | Multi-segment K-way merge | `test_immutable_lww_higher_lsn_wins` | ✅ | |
 | 10 | Lazy fetch on first access | — | ⚠️ MISSING | Requires RemoteStore integration |
 | 11 | Eager fetch all at init | — | ⚠️ MISSING | Requires RemoteStore integration |
-| 12 | Cache eviction (LRU) | — | ⚠️ MISSING | Planned for Phase 9 Wave 3 |
-| 13 | Manifest integrity (Merkle) | — | ⚠️ MISSING | Planned for Phase 9 Wave 3 |
-| 14 | Sidecar upload/download | — | ⚠️ MISSING | Planned for Phase 9 Wave 3 |
-| 15 | Serverless cold start <100ms | — | ⚠️ MISSING | Requires real deployment (D22: platform owners measure) |
 
 ### Reevaluation Trigger
 
@@ -106,12 +102,11 @@ cargo test --package edgestore --lib segment::in_memory
 | Crate | Unit Tests | Integration Tests | Doc Tests | Total |
 |-------|-----------|--------------------|-----------|-------|
 | `edgestore` | 191 + 12 (immutable/in_memory) | 14 | 0 | 217 |
-| `edgestore-repl` | 11 | 3 | 1 | 15 |
+| `edgestore-repl` | 16 | 3 | 1 | 20 |
 | `edgestore-tier` | 20 | 2 | 1 | 23 |
 | `edgestore-tokio` | 8 + 3 (tiered) | 0 | 0 | 11 |
-| `edgestore-wasm` | 1 | 0 | 0 | 1 |
 | `edgestore-cli` | 0 | 0 | 0 | 0 |
-| **Workspace** | **246** | **19** | **2** | **267** |
+| **Workspace** | **250** | **19** | **2** | **271** |
 
 ---
 
@@ -132,11 +127,9 @@ cargo test --package edgestore --lib segment::in_memory
 
 | Gap | Rationale | Planned Resolution |
 |-----|-----------|-------------------|
-| Device-level WAF measurement | Requires `nvme smart-log` or hardware counters | Phase 6 (SSD optimization) |
-| S3 integration tests in CI | Requires LocalStack container; currently manual | Add to CI with `docker compose` |
-| Network timeout / retry tests | Requires async fault injection framework | Phase 9 Wave 3 |
-| WASM bundle size optimization | Requires `wasm-pack` toolchain | Phase 9 Wave 4 |
-| Serverless cold-start benchmark | Requires real deployment (Cloudflare, Vercel) | Phase 9 Wave 5 |
+| Device-level WAF measurement | Requires `nvme smart-log` or hardware counters | No plan |
+| S3 integration tests in CI | Requires container; currently manual (`make s3-test`) | Add to CI with Docker |
+| Network timeout / retry tests | Requires async fault injection | No plan |
 
 ---
 

@@ -4,9 +4,9 @@
 
 Local-first embedded KV + vector database in Rust. SSD-aware, append-oriented, deathtime-cohort compaction. Library-first — no mandatory server. See `prod.md` for full spec and `.planning/PROJECT.md` for project context.
 
-**Status:** v1.1.1 (bugfix release — text search write amplification fix + incremental index + HNSW staleness detection + Rust 1.95.0 MSRV + FDP compilation fix).
+**Status:** v2.2.2 (security patch release — rustls/tokio/crypto-bigint CVEs, clippy -D warnings clean, S3 test hardening, pgsty/minio replaces removed minio/minio image).
 
-**Next:** Phase 9 (Read-Only Edge Engine) planned for v1.2 — `ImmutableEngine` for serverless deployments via Rust. WASM bindings are out of scope (D22). See `.planning/phases/09-readonly-edge/09-00-PLAN.md` and `SCALING.md`.
+**Next:** No active phase. Focus is production hardening — security patch cadence, test coverage, and documentation accuracy.
 
 ## Architecture Constraints (non-negotiable)
 

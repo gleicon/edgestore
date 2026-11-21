@@ -129,7 +129,7 @@
         <div>
           <div class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 text-sm font-medium mb-6 border border-white/20">
             <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
-            v2.2.1 Released
+            v2.2.2 Released
           </div>
           <h1 class="text-4xl lg:text-6xl font-bold leading-tight mb-6">
             High-Performance Embedded<br>
@@ -174,15 +174,16 @@ text.index_document(&<span class="keyword">mut</span> db, <span class="string">b
       <div class="bg-edge-50 rounded-xl border border-edge-200 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center space-x-2 mb-2">
-            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v2.2.1</span>
-            <span class="text-sm text-slate-600 font-medium">2026-10-26</span>
+            <span class="px-2 py-1 bg-edge-600 text-white text-xs font-semibold rounded">v2.2.2</span>
+            <span class="text-sm text-slate-600 font-medium">2026-11-20</span>
           </div>
-          <h3 class="font-semibold text-slate-900">Tiger Style refactor, MinIO local testing, silent-flush fix, tiering docs</h3>
+          <h3 class="font-semibold text-slate-900">Security patches, clippy fixes, S3 test hardening, no more aws CLI dependency</h3>
           <p class="text-sm text-slate-600 mt-1">
-            <code>edgestore-tier/src/lib.rs</code> reduced from 2099 → 725 lines: retry logic unified in <code>retry_transient</code>, tests extracted to <code>src/tests.rs</code>.
-            LocalStack replaced by MinIO (<code>make s3-up</code>) for simpler S3 integration tests.
-            Silent-flush bug fixed in <code>flush_to_segments</code>: <code>flushed_max_lsn</code> now correctly tracks the immutable memtable.
-            Internals and tiering documentation added.
+            <code>rustls</code> → 0.23.46, <code>tokio</code> → 1.54.1, <code>crypto-bigint</code> → 0.7.10 (CVE patches).
+            <code>cargo clippy -- -D warnings</code> now passes workspace-wide.
+            <code>S3RemoteStore::ensure_bucket()</code> removes the <code>aws</code> CLI dependency from S3 tests.
+            5 new S3 tests: BLAKE3 integrity, idempotent upload, 1 MiB roundtrip with latency bound, sidecar roundtrip, concurrent upload safety.
+            <code>pgsty/minio</code> replaces <code>minio/minio</code> (removed from registries Oct 2025).
           </p>
         </div>
         <a href="https://github.com/gleicon/edgestore/blob/main/CHANGELOG.md" class="px-4 py-2 bg-white border border-edge-300 text-edge-700 rounded-lg font-medium hover:bg-edge-50 transition text-sm whitespace-nowrap">Read Changelog</a>

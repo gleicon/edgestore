@@ -176,6 +176,30 @@ impl S3RemoteStore {
         }
     }
 
+    /// Create the bucket if it does not exist. Idempotent: succeeds when the
+    /// bucket already exists and is owned by the current credentials.
+    /// Removes the need for external tooling (aws CLI, mc) in CI and local
+    /// test setups — call this once from your test harness after `new()`.
+    pub fn ensure_bucket(&self) -> Result<(), EdgestoreError> {
+        assert!(!self.bucket.is_empty(), "bucket name must not be empty");
+        self.block_on(async {
+            match self.client.create_bucket().bucket(&self.bucket).send().await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let svc = e.into_service_error();
+                    if svc.is_bucket_already_owned_by_you() || svc.is_bucket_already_exists() {
+                        Ok(())
+                    } else {
+                        Err(EdgestoreError::ReplicationError(format!(
+                            "ensure_bucket failed for {}: {svc}",
+                            self.bucket
+                        )))
+                    }
+                }
+            }
+        })
+    }
+
     /// PUT bytes at `key`. Used by both `upload` and `upload_aux`.
     fn put_bytes(&self, key: String, data: &[u8]) -> Result<(), EdgestoreError> {
         assert!(!key.is_empty(), "S3 key must not be empty");
@@ -356,7 +380,9 @@ mod tests {
         let endpoint = std::env::var("EDGESTORE_S3_ENDPOINT_URL").ok()?;
         let bucket =
             std::env::var("EDGESTORE_S3_BUCKET").unwrap_or_else(|_| "edgestore-test".to_string());
-        S3RemoteStore::new(&bucket, Some("test/"), Some(&endpoint)).ok()
+        let store = S3RemoteStore::new(&bucket, Some("test/"), Some(&endpoint)).ok()?;
+        store.ensure_bucket().ok()?;
+        Some(store)
     }
 
     #[test]
@@ -455,5 +481,133 @@ mod tests {
             let _store = S3RemoteStore::new(&bucket, Some("async_test/"), Some(&endpoint))
                 .expect("S3RemoteStore::new must succeed from async context");
         });
+    }
+
+    /// Content-addressing invariant: blake3(downloaded) == stored hash.
+    /// Detects silent corruption in upload or download path.
+    #[test]
+    fn test_data_integrity_blake3_hash_matches() {
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
+            return;
+        };
+
+        let data = b"content-addressed segment data for integrity check";
+        let hash: [u8; 32] = *blake3::hash(data).as_bytes();
+
+        store.upload(&hash, data).expect("upload");
+        let got = store.download(&hash).expect("download");
+
+        assert_eq!(got, data, "downloaded bytes must equal uploaded bytes");
+        let got_hash: [u8; 32] = *blake3::hash(&got).as_bytes();
+        assert_eq!(
+            got_hash, hash,
+            "blake3(downloaded) must equal the stored key — data is corrupted"
+        );
+    }
+
+    /// upload_if_absent must return false (not error) on a second call for
+    /// the same hash, and must not overwrite the existing data.
+    #[test]
+    fn test_upload_if_absent_idempotent() {
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
+            return;
+        };
+
+        let data_first = b"first write - must survive";
+        let data_second = b"second write - must be rejected";
+        let hash: [u8; 32] = *blake3::hash(data_first).as_bytes();
+
+        let inserted = store.upload_if_absent(&hash, data_first).expect("first upload_if_absent");
+        assert!(inserted, "first call must return true");
+
+        let replaced = store.upload_if_absent(&hash, data_second).expect("second upload_if_absent");
+        assert!(!replaced, "second call must return false — object already exists");
+
+        let got = store.download(&hash).expect("download after double write");
+        assert_eq!(got, data_first, "data must not be overwritten by second upload_if_absent");
+    }
+
+    /// Large segment roundtrip: 1 MiB payload. Guards against body-size bugs
+    /// or truncation in the streaming upload/download path.
+    #[test]
+    fn test_large_segment_roundtrip() {
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
+            return;
+        };
+
+        let data: Vec<u8> = (0u32..262_144).map(|i| (i.wrapping_mul(1664525).wrapping_add(1013904223) as u8)).collect();
+        assert_eq!(data.len(), 262_144, "1 MiB test payload");
+        let hash: [u8; 32] = *blake3::hash(&data).as_bytes();
+
+        let t0 = std::time::Instant::now();
+        store.upload(&hash, &data).expect("large upload");
+        let upload_ms = t0.elapsed().as_millis();
+
+        let t1 = std::time::Instant::now();
+        let got = store.download(&hash).expect("large download");
+        let download_ms = t1.elapsed().as_millis();
+
+        let got_hash: [u8; 32] = *blake3::hash(&got).as_bytes();
+        assert_eq!(got_hash, hash, "blake3 mismatch on large segment — data corrupted");
+        assert_eq!(got.len(), data.len(), "length mismatch after large download");
+        assert!(upload_ms < 5_000, "upload took {upload_ms}ms — expected <5s on localhost");
+        assert!(download_ms < 5_000, "download took {download_ms}ms — expected <5s on localhost");
+    }
+
+    /// Sidecar (aux) roundtrip: upload_aux / download_aux must preserve bytes.
+    #[test]
+    fn test_aux_sidecar_roundtrip() {
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
+            return;
+        };
+
+        let seg_data = b"segment body";
+        let hash: [u8; 32] = *blake3::hash(seg_data).as_bytes();
+        let sidecar = b"sidecar index payload";
+
+        store.upload(&hash, seg_data).expect("segment upload");
+        store.upload_aux(&hash, "idx", sidecar).expect("aux upload");
+
+        let got = store.download_aux(&hash, "idx").expect("aux download");
+        assert_eq!(got, sidecar, "sidecar bytes must round-trip unchanged");
+    }
+
+    /// Concurrent uploads of the same hash from multiple threads must not
+    /// panic, corrupt data, or leave the object missing.
+    #[test]
+    fn test_concurrent_upload_same_hash_no_corruption() {
+        let Some(store) = make_store() else {
+            eprintln!("skip: EDGESTORE_S3_ENDPOINT_URL not set");
+            return;
+        };
+
+        let data = b"concurrent upload payload - all threads write the same bytes";
+        let hash: [u8; 32] = *blake3::hash(data).as_bytes();
+
+        let store = std::sync::Arc::new(store);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let s = std::sync::Arc::clone(&store);
+            let d = data;
+            let h = hash;
+            handles.push(std::thread::spawn(move || {
+                s.upload(&h, d).expect("concurrent upload must not fail")
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("thread must not panic");
+        }
+
+        let got = store.download(&hash).expect("download after concurrent uploads");
+        let got_hash: [u8; 32] = *blake3::hash(&got).as_bytes();
+        assert_eq!(
+            got_hash, hash,
+            "data corrupted after concurrent uploads — blake3 mismatch"
+        );
+        assert_eq!(got, data, "byte content must be unchanged after concurrent uploads");
     }
 }

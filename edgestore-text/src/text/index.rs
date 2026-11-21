@@ -351,7 +351,7 @@ pub fn bm25_score(
     b: f32,
 ) -> f32 {
     debug_assert!(k1 > 0.0, "k1 must be positive for BM25 to be well-defined");
-    debug_assert!(b >= 0.0 && b <= 1.0, "b must be in [0, 1] per BM25 definition");
+    debug_assert!((0.0..=1.0).contains(&b), "b must be in [0, 1] per BM25 definition");
     if total_docs == 0 || avg_doc_len == 0.0 {
         return 0.0;
     }

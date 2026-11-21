@@ -79,10 +79,10 @@ pub(crate) fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError
         }};
     }
 
-    let txid = u64::from_le_bytes(need!(8, "txid").try_into().unwrap());
-    let lsn = u64::from_le_bytes(need!(8, "lsn").try_into().unwrap()) as Lsn;
-    let timestamp = i64::from_le_bytes(need!(8, "timestamp").try_into().unwrap());
-    let ttl = u32::from_le_bytes(need!(4, "ttl").try_into().unwrap());
+    let txid = u64::from_le_bytes(need!(8, "txid").try_into().expect("need! guarantees 8 bytes"));
+    let lsn = u64::from_le_bytes(need!(8, "lsn").try_into().expect("need! guarantees 8 bytes")) as Lsn;
+    let timestamp = i64::from_le_bytes(need!(8, "timestamp").try_into().expect("need! guarantees 8 bytes"));
+    let ttl = u32::from_le_bytes(need!(4, "ttl").try_into().expect("need! guarantees 4 bytes"));
 
     let op_byte = need!(1, "op")[0];
     let op = match op_byte {
@@ -96,17 +96,17 @@ pub(crate) fn deserialize_record(buf: &[u8]) -> Result<WalRecord, EdgestoreError
         }
     };
 
-    let ns_len = u16::from_be_bytes(need!(2, "ns_len").try_into().unwrap());
+    let ns_len = u16::from_be_bytes(need!(2, "ns_len").try_into().expect("need! guarantees 2 bytes"));
     let ns_bytes = need!(ns_len as usize, "ns_bytes").to_vec();
 
-    let key_len = u32::from_le_bytes(need!(4, "key_len").try_into().unwrap()) as usize;
+    let key_len = u32::from_le_bytes(need!(4, "key_len").try_into().expect("need! guarantees 4 bytes")) as usize;
     let key_bytes = need!(key_len, "key_bytes").to_vec();
 
     let hash_bytes = need!(32, "value_hash");
     let mut value_hash = [0u8; 32];
     value_hash.copy_from_slice(hash_bytes);
 
-    let val_len = u32::from_le_bytes(need!(4, "val_len").try_into().unwrap()) as usize;
+    let val_len = u32::from_le_bytes(need!(4, "val_len").try_into().expect("need! guarantees 4 bytes")) as usize;
     let value_bytes = need!(val_len, "val_bytes").to_vec();
 
     Ok(WalRecord {
@@ -297,8 +297,8 @@ impl WalReader {
             }
 
             // 2. Parse fields
-            let crc_stored = u32::from_le_bytes(frame_hdr[..4].try_into().unwrap());
-            let compressed_len = u32::from_le_bytes(frame_hdr[4..8].try_into().unwrap());
+            let crc_stored = u32::from_le_bytes(frame_hdr[..4].try_into().expect("frame_hdr is 8 bytes"));
+            let compressed_len = u32::from_le_bytes(frame_hdr[4..8].try_into().expect("frame_hdr is 8 bytes"));
 
             // 3. DoS guard
             if compressed_len > MAX_COMPRESSED_LEN {
